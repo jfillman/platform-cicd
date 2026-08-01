@@ -43,17 +43,23 @@ the old platform's `exit 0` gates that silently always passed.
 ```
 catalog/          shared Tekton catalog - Pipelines, Tasks, StepActions, bash lib, toolbox image
 platform/broker/   the internal CDEvents relay: EventListener + TokenReview interceptor (Go)
-observability/     OTel Collector, Tempo, Loki, kube-prometheus-stack, Grafana + dashboards
+observability/     dashboards + reference Helm values; observability/kind-observe/ is what's actually applied (see docs/bootstrap.md)
 schemas/           cicd.schema.json - the developer-facing config contract
 onboarding-templates/.tekton/   boilerplate PaC trigger files generated per app repo
-hack/              local kind bootstrap
+hack/              bootstrap against the shared kind-observe dev cluster
 docs/              design docs - read chaining.md and tracing.md first
 ```
 
 ## Getting started
 
+Targets the existing shared `kind-observe` dev cluster - see
+[docs/bootstrap.md](docs/bootstrap.md) for what's already there, what gets installed
+fresh, and a real gap worth reading before you rely on this cluster's security posture
+(no NetworkPolicy enforcement - TokenReview auth on the broker is unaffected, but read
+the doc).
+
 ```
-./hack/bootstrap.sh                      # local kind cluster with everything installed
+./hack/bootstrap.sh
 # then onboard a pilot repo - see docs/onboarding.md
 ```
 

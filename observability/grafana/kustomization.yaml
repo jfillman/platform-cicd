@@ -1,11 +1,14 @@
 # observability/grafana/kustomization.yaml
 #
-# Turns each dashboard JSON into a labeled ConfigMap the Grafana sidecar (see
-# ./values.yaml sidecar.dashboards) auto-discovers and loads - no manual Grafana UI
-# import step, dashboards are versioned as code like everything else in this repo.
+# Turns each dashboard JSON into a labeled ConfigMap the Grafana sidecar auto-discovers
+# and loads - no manual Grafana UI import step, dashboards are versioned as code like
+# everything else in this repo. Targets the `observability` namespace because that's
+# where kind-observe's existing Grafana (and its sidecar) already runs - see
+# ../grafana/values.yaml. On a from-scratch cluster using that values.yaml instead,
+# change this to platform-observability to match.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: platform-observability
+namespace: observability
 
 configMapGenerator:
   - name: dashboard-pipelines-overview

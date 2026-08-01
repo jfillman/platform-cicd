@@ -1,10 +1,17 @@
 # observability/grafana/values.yaml
 #
-# Helm values overlay for the upstream grafana/grafana chart, run standalone (not the
-# kube-prometheus-stack's bundled instance - see ../kube-prometheus-stack/values.yaml).
-# Dashboards under ./dashboards/*.json are loaded via the sidecar's ConfigMap discovery
-# (label grafana_dashboard: "1") - see ./kustomization.yaml for how those JSON files
-# become ConfigMaps.
+# NOT APPLIED on kind-observe - a Grafana instance already runs there (bundled with the
+# existing kube-prometheus-stack release), already using the exact same sidecar
+# ConfigMap-discovery convention (label grafana_dashboard: "1") this file configures,
+# and already has Prometheus/Tempo/Loki datasources provisioned with UIDs (prometheus/
+# tempo/loki) matching what our dashboard JSONs reference - see docs/bootstrap.md.
+# hack/bootstrap.sh does not install this chart on kind-observe; it only applies
+# ./kustomization.yaml (the dashboard ConfigMaps) into the observability namespace,
+# where the existing Grafana's sidecar picks them up automatically.
+#
+# Kept as the reference config for a cluster that doesn't already have Grafana. Helm
+# values overlay for the upstream grafana/grafana chart, run standalone (not bundled
+# with kube-prometheus-stack - see ../kube-prometheus-stack/values.yaml).
 sidecar:
   dashboards:
     enabled: true

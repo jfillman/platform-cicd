@@ -21,7 +21,7 @@ spec:
       description: W3C traceparent of the flow-root span. Thread this through every subsequent Task param and into the CDEvent payload.
   env:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://otel-collector.platform-observability.svc.cluster.local:4318
+      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
   script: |
     #!/usr/bin/env bash
     set -euo pipefail

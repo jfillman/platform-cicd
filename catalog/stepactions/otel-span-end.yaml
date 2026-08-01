@@ -18,7 +18,7 @@ spec:
       description: Tekton's own aggregate status string for the stage - pass $(tasks.status) from the calling Pipeline's finally block directly, no translation needed.
   env:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://otel-collector.platform-observability.svc.cluster.local:4318
+      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
   script: |
     #!/usr/bin/env bash
     set -euo pipefail

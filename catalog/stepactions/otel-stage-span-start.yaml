@@ -27,7 +27,7 @@ spec:
       description: traceparent of this stage's span. Thread through this stage's own Task params for step-level child spans.
   env:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://otel-collector.platform-observability.svc.cluster.local:4318
+      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
   script: |
     #!/usr/bin/env bash
     set -euo pipefail

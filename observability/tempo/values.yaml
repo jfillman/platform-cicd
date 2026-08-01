@@ -1,6 +1,12 @@
 # observability/tempo/values.yaml
 #
-# Helm values overlay for the upstream grafana/tempo chart (single-binary mode - the
+# NOT APPLIED on kind-observe - a Tempo release already runs there (Helm release
+# "tempo" in the observability namespace, using Minio as its S3-compatible backend,
+# which is a nicer setup than the local-disk config below). hack/bootstrap.sh does not
+# install this chart when targeting kind-observe.
+#
+# Kept as the reference config for a cluster that doesn't already have Tempo. Helm
+# values overlay for the upstream grafana/tempo chart (single-binary mode - the
 # distributed chart is overkill until pipeline volume actually demands it). This is
 # where every unified build->test->deploy->release trace lands - see docs/tracing.md.
 tempo:

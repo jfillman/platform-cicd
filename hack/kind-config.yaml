@@ -1,10 +1,13 @@
 # hack/kind-config.yaml
 #
-# Local dev/demo cluster. Disables kind's default CNI (kindnet does NOT enforce
-# NetworkPolicy) so hack/bootstrap.sh can install Calico instead - this is a hard,
-# documented platform prerequisite (see docs/bootstrap.md and platform/broker/), not
-# optional for local dev, because it's the only thing that makes the "verify, don't
-# just isolate by convention" security model testable at all.
+# NOT USED by hack/bootstrap.sh, which targets the existing shared kind-observe cluster
+# instead - see docs/bootstrap.md "Why kind-observe, not a fresh cluster". Kept as the
+# config for standing up a dedicated, isolated cluster if you ever want one instead of
+# sharing kind-observe: disables kind's default CNI (kindnet does NOT enforce
+# NetworkPolicy) so Calico can be installed in its place - a hard prerequisite for a
+# from-scratch cluster if you want this platform's NetworkPolicy defense-in-depth layer
+# to actually do anything (see docs/bootstrap.md's NetworkPolicy gap note for why
+# kind-observe itself doesn't have this).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: platform-cicd

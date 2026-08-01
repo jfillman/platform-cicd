@@ -1,9 +1,16 @@
 # observability/otel-collector/values.yaml
 #
-# Helm values overlay for the upstream opentelemetry-collector chart
+# NOT APPLIED on kind-observe - an otel-collector release already runs there. Rather
+# than install a second collector, that existing one was additively patched with the
+# spanmetrics connector below - see observability/kind-observe/otel-collector-values-patch.yaml,
+# which is the file hack/bootstrap.sh actually applies via `helm upgrade` on kind-observe.
+# Every StepAction that emits spans (catalog/stepactions/otel-*.yaml) points
+# OTEL_EXPORTER_OTLP_ENDPOINT at that existing collector's Service, not this one.
+#
+# Kept as the reference config for a cluster that doesn't already have a collector. Helm
+# values overlay for the upstream opentelemetry-collector chart
 # (open-telemetry/opentelemetry-helm-charts), deployed as the single in-cluster
-# ingestion point every pipeline step's otel-cli invocation talks to
-# (OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.platform-observability.svc.cluster.local:4318).
+# ingestion point every pipeline step's otel-cli invocation talks to.
 #
 # The spanmetrics connector derives RED-style Prometheus metrics (request rate, error
 # rate, duration histogram) directly from incoming spans, bucketed by our own

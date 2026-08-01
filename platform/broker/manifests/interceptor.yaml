@@ -109,4 +109,13 @@ spec:
       namespace: platform-system
       path: /
       port: 443
-    caBundle: "" # populated by cert-manager's ca-injector, see docs/bootstrap.md
+    # caBundle is deliberately left empty here, not "populated by cert-manager's
+    # ca-injector" as an earlier draft of this file claimed - that was wrong. cert-
+    # manager's CA injector only supports MutatingWebhookConfiguration,
+    # ValidatingWebhookConfiguration, CRD conversion webhooks, and APIServices; Tekton
+    # Triggers' ClusterInterceptor.spec.clientConfig.caBundle isn't one of the types it
+    # knows how to inject into. hack/bootstrap.sh patches this field directly after
+    # cert-manager issues platform-ca-secret (see cluster-issuer.yaml) - see the
+    # "patch ClusterInterceptor caBundle" step there. If you apply this file by hand
+    # instead of via bootstrap.sh, you must run that patch yourself or the interceptor
+    # will never be trusted by the Triggers controller.

@@ -28,7 +28,7 @@ spec:
       description: Always "stub" in this phase of the platform - never "passed"/"failed", which would misrepresent a stub as a real enforcement result.
   env:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://otel-collector.platform-observability.svc.cluster.local:4318
+      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
   script: |
     #!/usr/bin/env bash
     set -euo pipefail

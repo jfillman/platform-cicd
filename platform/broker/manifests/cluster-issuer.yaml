@@ -1,0 +1,39 @@
+# platform/broker/manifests/cluster-issuer.yaml
+#
+# Local/dev CA for the broker's TokenReview interceptor TLS cert (see interceptor.yaml).
+# Standard cert-manager two-tier pattern: a selfSigned issuer bootstraps a CA
+# Certificate, which backs a `ca`-type ClusterIssuer that then issues the actual leaf
+# cert. For a real (non-kind-observe) cluster, replace platform-ca-issuer with a real
+# CA/ACME issuer - this one is not meant to be trusted outside this dev cluster.
+#
+# The CA Certificate must live in cert-manager's own cluster-resource-namespace
+# (default: cert-manager) - ClusterIssuers are non-namespaced but the Secret backing
+# them is looked up there, not in platform-system.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: platform-selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: platform-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: platform-cicd-ca
+  secretName: platform-ca-secret
+  duration: 8760h # 1 year - dev CA, not a long-lived production root
+  issuerRef:
+    name: platform-selfsigned-issuer
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: platform-ca-issuer
+spec:
+  ca:
+    secretName: platform-ca-secret

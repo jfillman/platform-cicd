@@ -1,0 +1,113 @@
+# observability/kind-observe/otel-collector-values-patch.yaml
+#
+# ADDITIVE patch to the otel-collector Helm release already running in the `observability`
+# namespace on kind-observe (shared with holmesgpt, order-processing-service, and
+# payment-service - this is NOT a platform-cicd-owned component). Do not apply
+# ../otel-collector/values.yaml against this release - that file assumes a from-scratch
+# install and would clobber the existing config.
+#
+# This file is the exact output of `helm get values otel-collector -n observability`
+# (captured 2026-08-01) with exactly one addition: a spanmetrics connector, added as an
+# extra entry in the traces pipeline's exporters and the metrics pipeline's receivers.
+# Every other key is reproduced verbatim and unchanged - Helm's default merge behavior
+# replaces list values wholesale rather than merging them element-wise, so a sparse
+# override risks silently dropping the existing otlp/tempo trace export or otlphttp/loki
+# log export. Providing the full desired end-state avoids that.
+#
+# Apply with:
+#   helm upgrade otel-collector open-telemetry/opentelemetry-collector \
+#     --version 0.165.0 -n observability -f observability/kind-observe/otel-collector-values-patch.yaml
+#
+# Why: pipelines-overview.json's "Stage duration (p50/p95)" panel queries
+# traces_spanmetrics_latency_bucket, which only exists once this connector is present -
+# see docs/tracing.md and the design review's Q5 note on Tempo's metrics-generator/
+# spanmetrics as a secondary cross-check for stage-duration percentiles.
+
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "namespaces", "nodes"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["replicasets"]
+      verbs: ["get", "list", "watch"]
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc: { endpoint: 0.0.0.0:4317 }
+        http: { endpoint: 0.0.0.0:4318 }
+
+  processors:
+    batch:
+      send_batch_size: 1024
+      timeout: 5s
+    k8s_attributes:
+      extract:
+        metadata: ["k8s.pod.name", "k8s.namespace.name", "k8s.node.name"]
+      passthrough: false
+    memory_limiter:
+      check_interval: 5s
+      limit_mib: 400
+
+  # NEW: spanmetrics connector. Additive only - every processor/receiver/exporter above
+  # this block is unchanged from the pre-existing release.
+  connectors:
+    spanmetrics:
+      histogram:
+        explicit:
+          buckets: [100ms, 500ms, 1s, 5s, 15s, 30s, 1m, 5m, 15m, 30m, 1h]
+      dimensions:
+        - name: platform.stage
+        - name: platform.chain_id
+        - name: governance.stub
+      metrics_flush_interval: 15s
+
+  exporters:
+    otlp/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls: { insecure: true }
+    otlphttp/loki:
+      endpoint: http://loki-gateway.observability.svc.cluster.local/otlp
+      tls: { insecure: true }
+    prometheus:
+      enable_open_metrics: true
+      endpoint: 0.0.0.0:8889
+      resource_to_telemetry_conversion:
+        enabled: true
+
+  service:
+    pipelines:
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlphttp/loki]
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [otlp/tempo, spanmetrics] # spanmetrics added
+      metrics:
+        receivers: [otlp, spanmetrics] # spanmetrics added
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [prometheus]
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+mode: deployment
+
+ports:
+  otlp: { containerPort: 4317, enabled: true, protocol: TCP, servicePort: 4317 }
+  otlp-http: { containerPort: 4318, enabled: true, protocol: TCP, servicePort: 4318 }
+  prometheus: { containerPort: 8889, enabled: true, protocol: TCP, servicePort: 8889 }
+
+resources:
+  limits: { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 100m, memory: 256Mi }
+
+serviceMonitor:
+  enabled: true
+  metricsEndpoints:
+    - port: prometheus

@@ -1,9 +1,15 @@
 # observability/loki/values.yaml
 #
-# Helm values overlay for the upstream grafana/loki chart (single-binary/monolithic
-# deployment mode), for Task step logs. Correlated to traces in Grafana via the
-# pipeline-run-name / trace-id labels that catalog Tasks already carry as params -
-# see observability/grafana/dashboards/pipeline-detail.json for the trace-to-logs link.
+# NOT APPLIED on kind-observe - a Loki release already runs there (Helm release "loki"
+# in the observability namespace, with a Grafana datasource already provisioned with
+# derivedFields trace-ID correlation pre-wired - see docs/bootstrap.md). hack/bootstrap.sh
+# does not install this chart when targeting kind-observe.
+#
+# Kept as the reference config for a cluster that doesn't already have Loki. Helm values
+# overlay for the upstream grafana/loki chart (single-binary/monolithic deployment
+# mode), for Task step logs. Correlated to traces in Grafana via the pipeline-run-name /
+# trace-id labels that catalog Tasks already carry as params - see
+# observability/grafana/dashboards/pipeline-detail.json for the trace-to-logs link.
 loki:
   auth_enabled: false
   commonConfig:
@@ -17,11 +23,14 @@ singleBinary:
     enabled: true
     size: 20Gi
 
-# KNOWN GAP, not yet wired: observability/otel-collector/values.yaml only has an OTLP
-# receiver, which captures explicit otel-cli span events, not raw container stdout.
-# Getting ordinary Task step stdout into Loki needs either a filelog receiver on a
-# DaemonSet-mode collector (tailing node-local container log files) or a Promtail/Alloy
-# DaemonSet - deliberately deferred past Phase 1, since the platform requirement was
-# OTel tracing specifically, not full log aggregation. Loki is stood up now so the
-# pipeline-detail dashboard's trace-to-logs link has somewhere real to point once this
-# lands, not because log shipping already works.
+# KNOWN GAP, still not fully wired even on kind-observe: the existing shared OTel
+# Collector there DOES have a working logs pipeline (OTLP receiver -> Loki, see
+# docs/bootstrap.md), and its Loki datasource already has derivedFields trace-ID
+# correlation configured (matcherRegex on `trace_id=(\w+)` in log lines) - meaningfully
+# further along than a from-scratch install would be. What's still missing on OUR side:
+# nothing in catalog/lib/otel.sh or any Task step currently emits an OTLP log record or
+# a `trace_id=...` marker into its own stdout, and nothing tails raw container stdout
+# into that pipeline (would need a filelog receiver on a DaemonSet-mode collector, or a
+# Promtail/Alloy DaemonSet). Deliberately deferred past Phase 1, since the platform
+# requirement was OTel tracing specifically, not full log aggregation - but the
+# infrastructure-side gap is smaller than this file previously suggested.
