@@ -1,0 +1,38 @@
+# catalog/stepactions/governance-stub.yaml
+#
+# Deliberate, structural fix for the old platform's "governance theater": that system
+# had gates (QA, gatekeeper, image-scan-check, SAST-check) that were `exit 0` one-liners
+# reported to developers with the same visual confidence as the gates that actually ran.
+#
+# This platform makes stub-ness a first-class, machine-readable fact instead of hiding
+# it in a script body: every stubbed governance gate MUST call this StepAction, which
+# emits a span event carrying governance.stub=true. Grafana's pipeline-detail dashboard
+# renders any span/gate carrying this attribute as visually distinct (grey/hatched) from
+# real results - see observability/grafana/dashboards/pipeline-detail.json. When a real
+# implementation lands for a gate (Phase 3), delete the call to this StepAction from
+# that Task; nothing else about the Pipeline shape needs to change.
+apiVersion: tekton.dev/v1beta1
+kind: StepAction
+metadata:
+  name: governance-stub
+  labels:
+    platform.io/catalog: "true"
+spec:
+  image: ghcr.io/platform-cicd/toolbox:latest
+  params:
+    - name: gate-name
+      type: string
+      description: e.g. sast, image-scan, policy-check, sbom.
+  results:
+    - name: outcome
+      description: Always "stub" in this phase of the platform - never "passed"/"failed", which would misrepresent a stub as a real enforcement result.
+  env:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://otel-collector.platform-observability.svc.cluster.local:4318
+  script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "${PLATFORM_LIB}/otel.sh"
+    echo "[governance-stub] gate=$(params.gate-name) - no real check implemented yet, see docs/governance-stubs.md" >&2
+    otel_mark_governance_stub "$(params.gate-name)"
+    echo -n "stub" | tee "$(step.results.outcome.path)"

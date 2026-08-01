@@ -1,0 +1,51 @@
+# catalog/tasks/notify-slack.yaml
+#
+# Best-effort pipeline-result notification. Reads notifications.slack from cicd.yaml;
+# no-ops cleanly if disabled or unconfigured. The webhook URL is resolved from a
+# per-tenant Secret (populated by External Secrets Operator at onboarding), never
+# hardcoded in catalog YAML - the old platform's hardcoded Testkube API keys in shared
+# Pipeline templates are exactly the mistake this avoids.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: notify-slack
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: config-json
+      type: string
+    - name: stage-name
+      type: string
+    - name: status
+      type: string
+      description: succeeded, failed, or completed - typically $(tasks.status)/$(context.pipelineRun.name) from the calling Pipeline's finally block.
+    - name: pipeline-run-name
+      type: string
+    - name: tenant
+      type: string
+  steps:
+    - name: notify
+      image: ghcr.io/platform-cicd/toolbox:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        CFG='$(params.config-json)'
+        ENABLED="$(jq -r '.notifications.slack.enabled // false' <<< "${CFG}")"
+        if [[ "${ENABLED}" != "true" ]]; then
+          echo "slack notifications disabled in cicd.yaml, skipping"
+          exit 0
+        fi
+        CHANNEL="$(jq -r '.notifications.slack.channel // empty' <<< "${CFG}")"
+        WEBHOOK_URL="$(cat /var/run/secrets/platform/slack-webhook-url 2>/dev/null || true)"
+        if [[ -z "${WEBHOOK_URL}" ]]; then
+          echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this tenant - skipping, not failing the pipeline" >&2
+          exit 0
+        fi
+        curl --fail --silent --show-error --max-time 10 \
+          -X POST "${WEBHOOK_URL}" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n \
+                --arg channel "${CHANNEL}" \
+                --arg text "[$(params.tenant)] $(params.stage-name) $(params.status): $(params.pipeline-run-name)" \
+                '{channel: $channel, text: $text}')"

@@ -1,0 +1,67 @@
+{
+  "title": "CI/CD Platform - Pipeline Run Detail",
+  "uid": "platform-cicd-pipeline-detail",
+  "tags": ["platform-cicd"],
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "traceId",
+        "type": "textbox",
+        "label": "Trace ID",
+        "description": "Paste a trace ID from pipelines-overview.json's recent-flow-runs table, or arrive here via that table's built-in trace link."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Flow waterfall - one row per stage, expand for steps",
+      "type": "traces",
+      "description": "Flat trace shape by design: every stage (build/test/deploy/release) parents directly to the flow root, not to the previous stage, because stages don't overlap in time - nesting them would misrepresent duration. See docs/tracing.md. Spans carrying governance.stub=true (see catalog/stepactions/governance-stub.yaml) render distinctly below - never mistake a stub gate for a real enforcement result here.",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [
+        { "query": "$traceId", "queryType": "traceId" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Governance gates in this run - stub vs real",
+      "type": "table",
+      "description": "Any row with governance.stub=true is not a real check result - see docs/governance-stubs.md. This is the platform's structural, loud fix for the old system's silently-always-passing exit-0 gates.",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ trace:id = \"$traceId\" && name = \"governance.stub\" } | select(governance.gate, governance.stub)"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "governance.stub" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "mappings", "value": [{ "type": "value", "options": { "true": { "color": "#666666", "text": "STUB - not a real check" } } }] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "title": "Step logs for this trace",
+      "type": "logs",
+      "description": "See observability/loki/values.yaml 'KNOWN GAP' note - trace-to-logs correlation is provisioned ahead of raw stdout log shipping actually landing. Until that lands, this panel will be empty for most steps.",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "expr": "{namespace=~\".+\"} | trace_id = `$traceId`" }
+      ]
+    }
+  ]
+}

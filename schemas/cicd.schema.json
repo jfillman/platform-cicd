@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://platform.internal/schemas/cicd.schema.json",
+  "title": "cicd.yaml",
+  "description": "Developer-facing pipeline configuration. This is the only file app teams edit to control their CI/CD pipelines - it never contains Tekton, YAML pipeline steps, or infrastructure details. Validated fail-fast by the validate-cicd-config Task before any other pipeline step runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "build"],
+  "properties": {
+    "apiVersion": { "type": "string", "enum": ["platform/v1"] },
+    "kind": { "type": "string", "enum": ["PipelineConfig"] },
+
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "script"],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["nodejs-18", "nodejs-20", "nodejs-22", "openjdk-17", "openjdk-21", "python-3.11", "go-1.22"],
+          "description": "Named build agent image from the platform catalog. Not a raw image reference - keeps step code portable and centrally patchable."
+        },
+        "script": {
+          "type": "string",
+          "default": "./build.sh",
+          "description": "Build script the platform runs inside the agent image. Must be bash."
+        },
+        "dockerfile": { "type": "string", "default": "./Dockerfile" },
+        "unitTest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "command": { "type": "string", "default": "./test.sh" }
+          }
+        },
+        "sonar": { "type": "boolean", "default": false }
+      }
+    },
+
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "suite": { "type": "string", "description": "Name of the Testkube/test suite to run against the dev deployment." }
+      }
+    },
+
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lowerEnvironments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["dev"]
+        },
+        "upperEnvironments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["deployment", "rollout"],
+          "default": "deployment",
+          "description": "deployment = native k8s Deployment rollout; rollout = Argo Rollouts (canary/blue-green)."
+        }
+      }
+    },
+
+    "ephemeralEnvironments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "patterns": { "type": "array", "items": { "type": "string" }, "default": ["preview/*"] }
+          }
+        },
+        "pullRequest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "labels": { "type": "array", "items": { "type": "string" }, "default": ["preview"] }
+          }
+        },
+        "ttl": {
+          "type": "string",
+          "pattern": "^[0-9]+[hd]$",
+          "default": "5d",
+          "description": "How long an ephemeral environment lives after its last successful deploy before automatic teardown."
+        }
+      }
+    },
+
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Quality/security gates. In this phase of the platform these are STUBS - they always report a stub result and are rendered as such in Grafana. Toggling them on prepares your pipeline shape for when real implementations land; it does not enable real enforcement yet.",
+      "properties": {
+        "sast": { "type": "boolean", "default": false },
+        "imageScan": { "type": "boolean", "default": false },
+        "policyCheck": { "type": "boolean", "default": false },
+        "sbom": { "type": "boolean", "default": false }
+      }
+    },
+
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slack": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "channel": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "pipeline": {
+      "type": "array",
+      "description": "Stage graph. Each entry names a stage from the fixed platform stage set and what it runs after. This does not define arbitrary DAGs - it toggles/orders a known, finite set of stages (build, test, deploy, release).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage"],
+        "properties": {
+          "stage": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
+          "after": { "type": "string", "description": "Name of the stage (optionally suffixed :env, e.g. deploy:staging) this stage runs after. Omit for the first stage." },
+          "env": { "type": "string", "description": "Required for deploy/release stages: which environment from deploy.lowerEnvironments/upperEnvironments this instance targets." },
+          "approvalRequired": { "type": "boolean", "default": false, "description": "Only meaningful on release stages targeting an upper environment." }
+        }
+      }
+    }
+  }
+}

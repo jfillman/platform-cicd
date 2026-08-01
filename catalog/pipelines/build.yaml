@@ -1,0 +1,139 @@
+# catalog/pipelines/build.yaml
+#
+# First stage of every flow. Always a fresh flow root - build is the only stage
+# triggered directly by a git event (via Pipelines-as-Code); every later stage is
+# triggered by a CDEvent this stage's `finally` block emits. See docs/tracing.md and
+# docs/chaining.md. Referenced from each app's onboarding-generated .tekton/*.yaml via
+# Tekton's cluster resolver - app repos never contain a copy of this Pipeline.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: image-repo
+      type: string
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone-repo
+      taskRef:
+        resolver: hub
+        params:
+          - { name: catalog, value: tekton }
+          - { name: kind, value: task }
+          - { name: name, value: git-clone }
+          - { name: version, value: "0.9" }
+      workspaces:
+        - { name: output, workspace: source }
+      params:
+        - { name: url, value: $(params.git-url) }
+        - { name: revision, value: $(params.git-revision) }
+
+    - name: validate-config
+      runAfter: [clone-repo]
+      taskRef: { name: validate-cicd-config }
+      workspaces:
+        - { name: source, workspace: source }
+
+    - name: start-flow
+      runAfter: [validate-config]
+      taskRef: { name: start-flow-root-span }
+      params:
+        - { name: flow-name, value: "$(params.tenant)/$(params.app-name)" }
+
+    - name: start-build-stage-span
+      runAfter: [start-flow]
+      taskRef: { name: start-stage-span }
+      params:
+        - { name: stage-name, value: build }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
+
+    - name: resolve-agent-image
+      runAfter: [validate-config]
+      taskRef: { name: resolve-build-agent-image }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+
+    - name: extract-governance-flags
+      runAfter: [validate-config]
+      taskRef: { name: extract-governance-flags }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+
+    - name: unit-test
+      runAfter: [resolve-agent-image]
+      taskRef: { name: run-tests }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+
+    - name: build-image
+      runAfter: [unit-test, start-build-stage-span]
+      taskRef: { name: build-image }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: image-repo, value: $(params.image-repo) }
+        - { name: git-revision, value: $(params.git-revision) }
+
+    - name: sast-scan
+      runAfter: [build-image]
+      when:
+        - { input: $(tasks.extract-governance-flags.results.sast), operator: in, values: ["true"] }
+      taskRef: { name: governance-gate-stub }
+      params: [{ name: gate-name, value: sast }]
+
+    - name: image-scan
+      runAfter: [build-image]
+      when:
+        - { input: $(tasks.extract-governance-flags.results.image-scan), operator: in, values: ["true"] }
+      taskRef: { name: governance-gate-stub }
+      params: [{ name: gate-name, value: image-scan }]
+
+    - name: generate-sbom
+      runAfter: [build-image]
+      when:
+        - { input: $(tasks.extract-governance-flags.results.sbom), operator: in, values: ["true"] }
+      taskRef: { name: governance-gate-stub }
+      params: [{ name: gate-name, value: sbom }]
+
+  finally:
+    - name: end-build-stage-span
+      taskRef: { name: end-stage-span }
+      params: [{ name: status, value: $(tasks.status) }]
+
+    - name: notify
+      taskRef: { name: notify-slack }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: stage-name, value: build }
+        - { name: status, value: $(tasks.status) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tenant, value: $(params.tenant) }
+
+    - name: send-cdevent
+      when:
+        - { input: $(tasks.status), operator: in, values: ["Succeeded", "Completed"] }
+      taskRef: { name: send-cdevent }
+      params:
+        - { name: event-type, value: "dev.cdevents.artifact.published.0.3.0" }
+        - { name: subject-content-json, value: "{\"image\": \"$(tasks.build-image.results.image-ref)\", \"revision\": \"$(params.git-revision)\", \"env\": \"dev\"}" }
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
+        - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }

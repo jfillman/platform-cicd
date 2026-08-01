@@ -1,0 +1,34 @@
+# catalog/tasks/start-stage-span.yaml
+#
+# Pipeline-level wrapper around the otel-stage-span-start StepAction. Every stage
+# Pipeline (build/test/deploy/release) calls this once near the start, parenting its
+# stage span to the flow-root traceparent (never to the previous stage's span - see
+# docs/tracing.md for why stages are flat siblings, not nested).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: start-stage-span
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: stage-name
+      type: string
+    - name: flow-traceparent
+      type: string
+    - name: chain-id
+      type: string
+  results:
+    - name: stage-traceparent
+      value: $(steps.start-span.results.stage-traceparent)
+  steps:
+    - name: start-span
+      ref:
+        name: otel-stage-span-start
+      params:
+        - name: stage-name
+          value: $(params.stage-name)
+        - name: flow-traceparent
+          value: $(params.flow-traceparent)
+        - name: chain-id
+          value: $(params.chain-id)

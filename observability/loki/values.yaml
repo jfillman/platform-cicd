@@ -1,0 +1,27 @@
+# observability/loki/values.yaml
+#
+# Helm values overlay for the upstream grafana/loki chart (single-binary/monolithic
+# deployment mode), for Task step logs. Correlated to traces in Grafana via the
+# pipeline-run-name / trace-id labels that catalog Tasks already carry as params -
+# see observability/grafana/dashboards/pipeline-detail.json for the trace-to-logs link.
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 20Gi
+
+# KNOWN GAP, not yet wired: observability/otel-collector/values.yaml only has an OTLP
+# receiver, which captures explicit otel-cli span events, not raw container stdout.
+# Getting ordinary Task step stdout into Loki needs either a filelog receiver on a
+# DaemonSet-mode collector (tailing node-local container log files) or a Promtail/Alloy
+# DaemonSet - deliberately deferred past Phase 1, since the platform requirement was
+# OTel tracing specifically, not full log aggregation. Loki is stood up now so the
+# pipeline-detail dashboard's trace-to-logs link has somewhere real to point once this
+# lands, not because log shipping already works.

@@ -1,0 +1,16 @@
+# observability/grafana/kustomization.yaml
+#
+# Turns each dashboard JSON into a labeled ConfigMap the Grafana sidecar (see
+# ./values.yaml sidecar.dashboards) auto-discovers and loads - no manual Grafana UI
+# import step, dashboards are versioned as code like everything else in this repo.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: platform-observability
+
+configMapGenerator:
+  - name: dashboard-pipelines-overview
+    files: [dashboards/pipelines-overview.json]
+    options: { labels: { grafana_dashboard: "1" } }
+  - name: dashboard-pipeline-detail
+    files: [dashboards/pipeline-detail.json]
+    options: { labels: { grafana_dashboard: "1" } }

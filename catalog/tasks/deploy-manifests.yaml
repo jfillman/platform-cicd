@@ -1,0 +1,40 @@
+# catalog/tasks/deploy-manifests.yaml
+#
+# Phase 1 scope: patches the target Deployment's image directly via kubectl and waits
+# for rollout - deliberately simpler than the old system's yq-patch-GitOps-repo+argocd-
+# sync flow. Phase 2/3 replaces this with a real GitOps write (patch a GitOps repo,
+# let ArgoCD reconcile/promote) once upper-environment promotion is in scope - see the
+# plan's Phase 3 item "upper-env PR-gated promotion workflow". Lower/dev environments
+# in Phase 1 are expected to already exist (created at tenant onboarding), not created
+# by this Task.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: deploy-manifests
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: image-ref
+      type: string
+    - name: env
+      type: string
+      description: Target environment name, e.g. dev. Maps to namespace <tenant>-<env>.
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+  steps:
+    - name: apply-and-wait
+      image: ghcr.io/platform-cicd/toolbox:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        NAMESPACE="$(params.tenant)-$(params.env)"
+        kubectl -n "${NAMESPACE}" set image \
+          "deployment/$(params.app-name)" \
+          "$(params.app-name)=$(params.image-ref)" \
+          --record=false
+        kubectl -n "${NAMESPACE}" rollout status \
+          "deployment/$(params.app-name)" \
+          --timeout=5m

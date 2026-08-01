@@ -1,0 +1,25 @@
+# catalog/tasks/end-stage-span.yaml
+#
+# Pipeline-level wrapper around the otel-span-end StepAction. Referenced from every
+# stage Pipeline's `finally` block so the stage span is closed whether the stage
+# succeeded or failed - a Pipeline that starts a stage span without a matching finally
+# call to this Task leaves a dangling span in Tempo.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: end-stage-span
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: status
+      type: string
+      default: "Succeeded"
+      description: Pass $(tasks.status) from the calling Pipeline's finally block.
+  steps:
+    - name: end-span
+      ref:
+        name: otel-span-end
+      params:
+        - name: status
+          value: $(params.status)

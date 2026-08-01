@@ -1,0 +1,101 @@
+# catalog/pipelines/test.yaml
+#
+# Second stage of the flow. NOT git-triggered - fired by the shared broker in response
+# to the build Pipeline's dev.cdevents.artifact.published event (see platform/broker/).
+# Receives the flow's traceparent/chain-id as params rather than generating its own -
+# this stage's span parents directly to the flow root, as a sibling of build's span,
+# not nested under it. See docs/tracing.md and docs/chaining.md.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: image-ref
+      type: string
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+    - name: flow-traceparent
+      type: string
+    - name: chain-id
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone-repo
+      taskRef:
+        resolver: hub
+        params:
+          - { name: catalog, value: tekton }
+          - { name: kind, value: task }
+          - { name: name, value: git-clone }
+          - { name: version, value: "0.9" }
+      workspaces:
+        - { name: output, workspace: source }
+      params:
+        - { name: url, value: $(params.git-url) }
+        - { name: revision, value: $(params.git-revision) }
+
+    - name: validate-config
+      runAfter: [clone-repo]
+      taskRef: { name: validate-cicd-config }
+      workspaces:
+        - { name: source, workspace: source }
+
+    - name: start-test-stage-span
+      runAfter: [validate-config]
+      taskRef: { name: start-stage-span }
+      params:
+        - { name: stage-name, value: test }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: chain-id, value: $(params.chain-id) }
+
+    - name: resolve-agent-image
+      runAfter: [validate-config]
+      taskRef: { name: resolve-build-agent-image }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+
+    - name: integration-test
+      runAfter: [resolve-agent-image, start-test-stage-span]
+      taskRef: { name: run-integration-tests }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: image-ref, value: $(params.image-ref) }
+
+  finally:
+    - name: end-test-stage-span
+      taskRef: { name: end-stage-span }
+      params: [{ name: status, value: $(tasks.status) }]
+
+    - name: notify
+      taskRef: { name: notify-slack }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: stage-name, value: test }
+        - { name: status, value: $(tasks.status) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tenant, value: $(params.tenant) }
+
+    - name: send-cdevent
+      taskRef: { name: send-cdevent }
+      params:
+        - { name: event-type, value: "dev.cdevents.testcaserun.finished.0.3.0" }
+        - name: subject-content-json
+          value: >-
+            {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "env": "dev"}
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }

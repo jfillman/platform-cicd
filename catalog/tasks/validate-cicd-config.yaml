@@ -1,0 +1,49 @@
+# catalog/tasks/validate-cicd-config.yaml
+#
+# Always the FIRST Task in every Pipeline. Reads cicd.yaml fresh from the triggering
+# commit's workspace and validates it against schemas/cicd.schema.json, failing fast
+# with a developer-readable error instead of surfacing a malformed-config problem as a
+# cryptic failure deep inside build/deploy. There is deliberately no separate
+# synced/cached copy of this config anywhere - see docs/cicd-yaml-reference.md.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: validate-cicd-config
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Validates the developer-facing cicd.yaml against the platform schema.
+  workspaces:
+    - name: source
+  params:
+    - name: config-path
+      type: string
+      default: cicd.yaml
+  results:
+    - name: config-json
+      description: cicd.yaml converted to JSON, so downstream Tasks read it with jq instead of re-parsing YAML.
+  steps:
+    - name: validate
+      image: ghcr.io/platform-cicd/toolbox:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        CONFIG_FILE="$(workspaces.source.path)/$(params.config-path)"
+
+        if [[ ! -f "${CONFIG_FILE}" ]]; then
+          echo "error: ${CONFIG_FILE} not found." >&2
+          echo "Every app repo needs a cicd.yaml at its root - see docs/cicd-yaml-reference.md" >&2
+          exit 1
+        fi
+
+        yq -o=json '.' "${CONFIG_FILE}" > /tmp/cicd.json
+
+        if ! yajsv -s /opt/platform/schemas/cicd.schema.json /tmp/cicd.json; then
+          echo "" >&2
+          echo "error: cicd.yaml failed schema validation (see above)." >&2
+          echo "Reference: docs/cicd-yaml-reference.md" >&2
+          exit 1
+        fi
+
+        cp /tmp/cicd.json "$(results.config-json.path)"
+        echo "cicd.yaml is valid."

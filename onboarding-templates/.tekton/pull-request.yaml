@@ -1,0 +1,44 @@
+# onboarding-templates/.tekton/pull-request.yaml
+#
+# BOILERPLATE - see push.yaml for the full explanation of why this file exists and who
+# maintains it (never the app developer).
+#
+# Phase 1 scope: a PR run is validation-only (build + unit-test + build-time governance
+# stubs) - it does NOT chain into test/deploy. PR-based ephemeral environments (spinning
+# up a real preview deploy per PR) are a Phase 2 feature layered on top of this, via
+# ArgoCD ApplicationSet's `pullRequest` generator - see docs/ephemeral-environments.md.
+# This file will grow a second annotation-gated PipelineRun for that once it lands;
+# nothing about this one needs to change when it does.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: pr-validate-
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: build }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: git-url, value: "{{ repo_url }}" }
+    - { name: git-revision, value: "{{ revision }}" }
+    - { name: image-repo, value: "<IMAGE_REPO>-pr" }
+    - { name: tenant, value: "<TENANT>" }
+    - { name: app-name, value: "<APP_NAME>" }
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "1h"

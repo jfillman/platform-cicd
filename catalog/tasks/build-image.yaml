@@ -1,0 +1,69 @@
+# catalog/tasks/build-image.yaml
+#
+# Builds and pushes the app's container image. The actual build runs on kaniko - a
+# deliberate, narrow exception to "pipeline step code is bash": kaniko's image has no
+# shell by design (that's what makes rootless builds work under Pod Security
+# "restricted" - see docs/rootless-builds.md). This mirrors a precedent already in the
+# platform's own lineage: the old system's git-clone Task likewise used a purpose-built
+# compiled binary rather than bash, for the same class of reason. Every OTHER step here,
+# and in every other catalog Task, is bash.
+#
+# Config resolution below is plain bash with no span wrapping - it's sub-second work,
+# and otel-cli's per-invocation overhead isn't worth it for that (see docs/tracing.md).
+# The stage-level span covering this whole Task's duration is started/ended by the
+# Pipeline via otel-stage-span-start/otel-span-end, not per-step here.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build-image
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Resolves build config from cicd.yaml, then builds+pushes the image with kaniko.
+  workspaces:
+    - name: source
+  params:
+    - name: config-json
+      type: string
+      description: Output of validate-cicd-config's config-json result.
+    - name: image-repo
+      type: string
+      description: Destination registry/repo, e.g. registry.internal/<tenant>/<app>.
+    - name: git-revision
+      type: string
+  results:
+    - name: image-digest
+    - name: image-ref
+  steps:
+    - name: resolve-build-config
+      image: ghcr.io/platform-cicd/toolbox:latest
+      results:
+        - name: dockerfile-path
+        - name: image-ref
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        DOCKERFILE_PATH="$(jq -r '.build.dockerfile' <<< '$(params.config-json)')"
+        SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
+        IMAGE_REF="$(params.image-repo):${SHORT_SHA}"
+        echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"
+        echo -n "${IMAGE_REF}" | tee "$(step.results.image-ref.path)"
+
+    - name: build-and-push
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      # No bash here by design - see the exception note at the top of this file.
+      command: ["/kaniko/executor"]
+      args:
+        - --dockerfile=$(workspaces.source.path)/$(steps.resolve-build-config.results.dockerfile-path)
+        - --context=$(workspaces.source.path)
+        - --destination=$(steps.resolve-build-config.results.image-ref)
+        - --digest-file=$(results.image-digest.path)
+        - --cache=true
+        - --cache-ttl=336h
+
+    - name: emit-image-ref-result
+      image: ghcr.io/platform-cicd/toolbox:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo -n "$(steps.resolve-build-config.results.image-ref)" | tee "$(results.image-ref.path)"

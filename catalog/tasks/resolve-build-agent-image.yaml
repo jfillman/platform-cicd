@@ -1,0 +1,31 @@
+# catalog/tasks/resolve-build-agent-image.yaml
+#
+# Translates cicd.yaml's `build.agent` name (a closed enum, see schemas/cicd.schema.json)
+# into a real image reference via catalog/lib/build-agents.env, baked into the toolbox
+# image. Keeps agent image references out of every app's cicd.yaml - developers pick a
+# name, the platform owns what that name resolves to and can repoint/patch it centrally.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: resolve-build-agent-image
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: config-json
+      type: string
+  results:
+    - name: agent-image
+  steps:
+    - name: resolve
+      image: ghcr.io/platform-cicd/toolbox:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        AGENT="$(jq -r '.build.agent' <<< '$(params.config-json)')"
+        IMAGE="$(grep -E "^${AGENT}=" /opt/platform/lib/build-agents.env | cut -d= -f2-)"
+        if [[ -z "${IMAGE}" ]]; then
+          echo "error: build.agent '${AGENT}' has no entry in build-agents.env - this should be impossible if schema validation passed, file a platform bug." >&2
+          exit 1
+        fi
+        echo -n "${IMAGE}" | tee "$(results.agent-image.path)"

@@ -1,0 +1,29 @@
+# catalog/stepactions/otel-flow-root-start.yaml
+#
+# Starts the single root span for an entire build->test->deploy->release flow. Used
+# exactly once, by the first step of the first stage in a flow (a fresh git-triggered
+# build with no incoming traceparent). Every later stage parents to the traceparent
+# this emits - see otel-stage-span-start.yaml and docs/tracing.md.
+apiVersion: tekton.dev/v1beta1
+kind: StepAction
+metadata:
+  name: otel-flow-root-start
+  labels:
+    platform.io/catalog: "true"
+spec:
+  image: ghcr.io/platform-cicd/toolbox:latest
+  params:
+    - name: flow-name
+      type: string
+      description: Human-readable flow name, e.g. "<repo>/build-release".
+  results:
+    - name: traceparent
+      description: W3C traceparent of the flow-root span. Thread this through every subsequent Task param and into the CDEvent payload.
+  env:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://otel-collector.platform-observability.svc.cluster.local:4318
+  script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "${PLATFORM_LIB}/otel.sh"
+    otel_flow_root_start "$(params.flow-name)" | tee "$(step.results.traceparent.path)"

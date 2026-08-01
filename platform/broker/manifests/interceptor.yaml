@@ -1,0 +1,112 @@
+# platform/broker/manifests/interceptor.yaml
+#
+# Deploys the TokenReview-based interceptor (../cmd/token-review-interceptor) and
+# registers it as a Tekton Triggers ClusterInterceptor named "cdevents-broker-auth".
+# RBAC here is deliberately narrow: this ServiceAccount can create TokenReviews
+# (cluster-scoped by necessity - that API has no namespaced form) and nothing else. It
+# cannot read/write PipelineRuns, Secrets, or anything else in any tenant namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cdevents-broker-auth
+  namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cdevents-broker-auth-tokenreview
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cdevents-broker-auth-tokenreview
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cdevents-broker-auth-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: cdevents-broker-auth
+    namespace: platform-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cdevents-broker-auth
+  namespace: platform-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: cdevents-broker-auth }
+  template:
+    metadata:
+      labels: { app: cdevents-broker-auth }
+    spec:
+      serviceAccountName: cdevents-broker-auth
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: interceptor
+          image: ghcr.io/platform-cicd/token-review-interceptor:latest
+          ports: [{ containerPort: 8443, name: https }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tls, mountPath: /etc/interceptor/tls, readOnly: true }
+          livenessProbe:
+            httpGet: { path: /healthz, port: https, scheme: HTTPS }
+      volumes:
+        - name: tls
+          secret:
+            # Provisioned by cert-manager (Phase 0 dependency) - see
+            # ../../../docs/bootstrap.md. A Tekton Triggers ClusterInterceptor requires
+            # HTTPS with a CA the Triggers controller trusts.
+            secretName: cdevents-broker-auth-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cdevents-broker-auth
+  namespace: platform-system
+spec:
+  selector: { app: cdevents-broker-auth }
+  ports: [{ name: https, port: 443, targetPort: https }]
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cdevents-broker-auth-tls
+  namespace: platform-system
+spec:
+  secretName: cdevents-broker-auth-tls
+  dnsNames:
+    - cdevents-broker-auth.platform-system.svc
+    - cdevents-broker-auth.platform-system.svc.cluster.local
+  issuerRef:
+    name: platform-ca-issuer
+    kind: ClusterIssuer
+---
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: ClusterInterceptor
+metadata:
+  name: cdevents-broker-auth
+spec:
+  clientConfig:
+    service:
+      name: cdevents-broker-auth
+      namespace: platform-system
+      path: /
+      port: 443
+    caBundle: "" # populated by cert-manager's ca-injector, see docs/bootstrap.md

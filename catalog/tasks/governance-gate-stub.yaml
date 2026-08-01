@@ -1,0 +1,28 @@
+# catalog/tasks/governance-gate-stub.yaml
+#
+# One reusable stub Task for all four governance gates (sast, image-scan, policy-check,
+# sbom) rather than four near-duplicate files - the Pipeline includes this once per gate
+# enabled in cicd.yaml's `governance` block, parameterized by gate-name. See
+# catalog/stepactions/governance-stub.yaml and docs/governance-stubs.md for why this
+# exists as a loud, explicit stub instead of silently doing nothing or (the old
+# platform's mistake) an unmarked `exit 0`.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: governance-gate-stub
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: gate-name
+      type: string
+  results:
+    - name: outcome
+      value: $(steps.stub.results.outcome)
+  steps:
+    - name: stub
+      ref:
+        name: governance-stub
+      params:
+        - name: gate-name
+          value: $(params.gate-name)

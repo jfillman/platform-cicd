@@ -1,0 +1,47 @@
+# observability/grafana/values.yaml
+#
+# Helm values overlay for the upstream grafana/grafana chart, run standalone (not the
+# kube-prometheus-stack's bundled instance - see ../kube-prometheus-stack/values.yaml).
+# Dashboards under ./dashboards/*.json are loaded via the sidecar's ConfigMap discovery
+# (label grafana_dashboard: "1") - see ./kustomization.yaml for how those JSON files
+# become ConfigMaps.
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    folder: /tmp/dashboards
+  datasources:
+    enabled: true
+    label: grafana_datasource
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-kube-prometheus-prometheus.platform-observability.svc.cluster.local:9090
+        isDefault: true
+      - name: Tempo
+        type: tempo
+        url: http://tempo.platform-observability.svc.cluster.local:3100
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+          tracesToMetrics:
+            datasourceUid: prometheus
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
+      - name: Loki
+        type: loki
+        url: http://loki-gateway.platform-observability.svc.cluster.local
+        # See ../loki/values.yaml "KNOWN GAP" note - trace-to-logs correlation is
+        # provisioned here ahead of the log-shipping mechanism actually landing.
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+adminPassword: "" # supplied via ExternalSecret at deploy time - never committed

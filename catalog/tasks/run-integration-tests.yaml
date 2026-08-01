@@ -1,0 +1,52 @@
+# catalog/tasks/run-integration-tests.yaml
+#
+# Phase 1 scope: runs ./integration-test.sh (repo convention) against the freshly built
+# image if the script exists and cicd.yaml's `test.enabled` isn't false; skips cleanly
+# otherwise. Real Testkube/Testkube-Cloud integration (as the old platform had) is
+# deferred - this Task's contract (take image-ref, produce pass/fail) is what a richer
+# test-runner integration will plug into later without changing the Pipeline shape.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: run-integration-tests
+  labels:
+    platform.io/catalog: "true"
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: config-json
+      type: string
+    - name: agent-image
+      type: string
+    - name: image-ref
+      type: string
+  steps:
+    - name: resolve-suite
+      image: ghcr.io/platform-cicd/toolbox:latest
+      results:
+        - name: enabled
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        jq -r '.test.enabled // true' <<< '$(params.config-json)' | tee "$(step.results.enabled.path)"
+
+    - name: integration-test
+      image: $(params.agent-image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [[ "$(steps.resolve-suite.results.enabled)" != "true" ]]; then
+          echo "test stage disabled in cicd.yaml, skipping"
+          exit 0
+        fi
+        if [[ ! -f ./integration-test.sh ]]; then
+          echo "warn: test.enabled is true but no ./integration-test.sh found at repo root - skipping, not failing" >&2
+          exit 0
+        fi
+        chmod +x ./integration-test.sh
+        ./integration-test.sh

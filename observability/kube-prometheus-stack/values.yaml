@@ -1,0 +1,43 @@
+# observability/kube-prometheus-stack/values.yaml
+#
+# Helm values overlay for the upstream prometheus-community/kube-prometheus-stack
+# chart. Two things this platform specifically needs beyond the chart's defaults:
+# remote-write receive enabled (so the OTel Collector's spanmetrics connector and
+# Tempo's metrics-generator can push into Prometheus instead of being scraped), and the
+# Grafana dependency disabled - we run Grafana with our own dashboards/datasources
+# provisioning instead of the chart's bundled one, so it doesn't fight over ownership.
+prometheus:
+  prometheusSpec:
+    enableRemoteWriteReceiver: true
+    retention: 15d
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { memory: 1Gi }
+
+# Scrapes Tekton Pipelines' own controller metrics (tekton_pipelines_controller_*
+# pipelinerun/taskrun duration and count series) - the source for the "live + historical
+# PipelineRun list" panels in pipelines-overview.json, independent of our own tracing.
+additionalServiceMonitors:
+  - name: tekton-pipelines-controller
+    selector:
+      matchLabels: { app.kubernetes.io/name: tekton-pipelines-controller }
+    namespaceSelector:
+      matchNames: [tekton-pipelines]
+    endpoints:
+      - port: http-metrics
+        interval: 30s
+
+  # Phase 2, not yet built: the CDEvents-subscribing DORA metrics exporter (see the
+  # plan's Phase 2 item and docs/dora-metrics.md). Forward-declared here so wiring it up
+  # later is a one-service change, not a Prometheus-config change too.
+  # - name: platform-dora-exporter
+  #   selector:
+  #     matchLabels: { app: dora-exporter }
+  #   namespaceSelector:
+  #     matchNames: [platform-system]
+  #   endpoints:
+  #     - port: metrics
+  #       interval: 30s
+
+grafana:
+  enabled: false

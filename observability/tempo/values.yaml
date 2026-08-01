@@ -1,0 +1,33 @@
+# observability/tempo/values.yaml
+#
+# Helm values overlay for the upstream grafana/tempo chart (single-binary mode - the
+# distributed chart is overkill until pipeline volume actually demands it). This is
+# where every unified build->test->deploy->release trace lands - see docs/tracing.md.
+tempo:
+  receivers:
+    otlp:
+      protocols:
+        grpc: { endpoint: 0.0.0.0:4317 }
+        http: { endpoint: 0.0.0.0:4318 }
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # Retention deliberately short in Phase 1 - long-lived trace storage (object storage
+  # backend) is a Phase 2+ concern once run volume is real, not a local-disk default.
+  compactor:
+    compaction:
+      block_retention: 72h
+
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://prometheus-kube-prometheus-prometheus.platform-observability.svc.cluster.local:9090/api/v1/write
+
+persistence:
+  enabled: true
+  size: 20Gi

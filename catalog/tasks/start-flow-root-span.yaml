@@ -1,0 +1,37 @@
+# catalog/tasks/start-flow-root-span.yaml
+#
+# Pipeline-level wrapper around the otel-flow-root-start StepAction, used exactly once
+# by the build Pipeline (the only stage that's always a fresh flow start - it's the one
+# stage triggered directly by a git event rather than by an incoming CDEvent). Also
+# mints the CDEvents chainId for the whole flow here, since a fresh flow needs both a
+# fresh trace and a fresh chain id at the same moment.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: start-flow-root-span
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: flow-name
+      type: string
+  results:
+    - name: traceparent
+      value: $(steps.start-span.results.traceparent)
+    - name: chain-id
+      value: $(steps.generate-chain-id.results.chain-id)
+  steps:
+    - name: generate-chain-id
+      image: ghcr.io/platform-cicd/toolbox:latest
+      results:
+        - name: chain-id
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        uuidgen | tee "$(step.results.chain-id.path)"
+    - name: start-span
+      ref:
+        name: otel-flow-root-start
+      params:
+        - name: flow-name
+          value: $(params.flow-name)
