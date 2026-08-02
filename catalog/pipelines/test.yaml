@@ -34,10 +34,10 @@ spec:
       taskRef:
         resolver: hub
         params:
-          - { name: catalog, value: tekton }
+          - { name: catalog, value: git-clone }
           - { name: kind, value: task }
           - { name: name, value: git-clone }
-          - { name: version, value: "0.9" }
+          - { name: version, value: "1.7.0" }
       workspaces:
         - { name: output, workspace: source }
       params:
@@ -46,13 +46,23 @@ spec:
 
     - name: validate-config
       runAfter: [clone-repo]
-      taskRef: { name: validate-cicd-config }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: validate-cicd-config }
+          - { name: namespace, value: platform-catalog }
       workspaces:
         - { name: source, workspace: source }
 
     - name: start-test-stage-span
       runAfter: [validate-config]
-      taskRef: { name: start-stage-span }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: start-stage-span }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: stage-name, value: test }
         - { name: flow-traceparent, value: $(params.flow-traceparent) }
@@ -60,13 +70,23 @@ spec:
 
     - name: resolve-agent-image
       runAfter: [validate-config]
-      taskRef: { name: resolve-build-agent-image }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: resolve-build-agent-image }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
 
     - name: integration-test
       runAfter: [resolve-agent-image, start-test-stage-span]
-      taskRef: { name: run-integration-tests }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: run-integration-tests }
+          - { name: namespace, value: platform-catalog }
       workspaces:
         - { name: source, workspace: source }
       params:
@@ -76,11 +96,21 @@ spec:
 
   finally:
     - name: end-test-stage-span
-      taskRef: { name: end-stage-span }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: end-stage-span }
+          - { name: namespace, value: platform-catalog }
       params: [{ name: status, value: $(tasks.status) }]
 
     - name: notify
-      taskRef: { name: notify-slack }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: notify-slack }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: stage-name, value: test }
@@ -89,7 +119,12 @@ spec:
         - { name: tenant, value: $(params.tenant) }
 
     - name: send-cdevent
-      taskRef: { name: send-cdevent }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: event-type, value: "dev.cdevents.testcaserun.finished.0.3.0" }
         - name: subject-content-json

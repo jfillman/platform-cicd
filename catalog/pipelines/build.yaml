@@ -30,10 +30,10 @@ spec:
       taskRef:
         resolver: hub
         params:
-          - { name: catalog, value: tekton }
+          - { name: catalog, value: git-clone }
           - { name: kind, value: task }
           - { name: name, value: git-clone }
-          - { name: version, value: "0.9" }
+          - { name: version, value: "1.7.0" }
       workspaces:
         - { name: output, workspace: source }
       params:
@@ -42,19 +42,34 @@ spec:
 
     - name: validate-config
       runAfter: [clone-repo]
-      taskRef: { name: validate-cicd-config }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: validate-cicd-config }
+          - { name: namespace, value: platform-catalog }
       workspaces:
         - { name: source, workspace: source }
 
     - name: start-flow
       runAfter: [validate-config]
-      taskRef: { name: start-flow-root-span }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: start-flow-root-span }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: flow-name, value: "$(params.tenant)/$(params.app-name)" }
 
     - name: start-build-stage-span
       runAfter: [start-flow]
-      taskRef: { name: start-stage-span }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: start-stage-span }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: stage-name, value: build }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
@@ -62,19 +77,34 @@ spec:
 
     - name: resolve-agent-image
       runAfter: [validate-config]
-      taskRef: { name: resolve-build-agent-image }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: resolve-build-agent-image }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
 
     - name: extract-governance-flags
       runAfter: [validate-config]
-      taskRef: { name: extract-governance-flags }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: extract-governance-flags }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
 
     - name: unit-test
       runAfter: [resolve-agent-image]
-      taskRef: { name: run-tests }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: run-tests }
+          - { name: namespace, value: platform-catalog }
       workspaces:
         - { name: source, workspace: source }
       params:
@@ -83,7 +113,12 @@ spec:
 
     - name: build-image
       runAfter: [unit-test, start-build-stage-span]
-      taskRef: { name: build-image }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: build-image }
+          - { name: namespace, value: platform-catalog }
       workspaces:
         - { name: source, workspace: source }
       params:
@@ -96,30 +131,55 @@ spec:
       runAfter: [build-image]
       when:
         - { input: $(tasks.extract-governance-flags.results.sast), operator: in, values: ["true"] }
-      taskRef: { name: governance-gate-stub }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: governance-gate-stub }
+          - { name: namespace, value: platform-catalog }
       params: [{ name: gate-name, value: sast }]
 
     - name: image-scan
       runAfter: [build-image]
       when:
         - { input: $(tasks.extract-governance-flags.results.image-scan), operator: in, values: ["true"] }
-      taskRef: { name: governance-gate-stub }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: governance-gate-stub }
+          - { name: namespace, value: platform-catalog }
       params: [{ name: gate-name, value: image-scan }]
 
     - name: generate-sbom
       runAfter: [build-image]
       when:
         - { input: $(tasks.extract-governance-flags.results.sbom), operator: in, values: ["true"] }
-      taskRef: { name: governance-gate-stub }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: governance-gate-stub }
+          - { name: namespace, value: platform-catalog }
       params: [{ name: gate-name, value: sbom }]
 
   finally:
     - name: end-build-stage-span
-      taskRef: { name: end-stage-span }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: end-stage-span }
+          - { name: namespace, value: platform-catalog }
       params: [{ name: status, value: $(tasks.status) }]
 
     - name: notify
-      taskRef: { name: notify-slack }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: notify-slack }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: stage-name, value: build }
@@ -130,7 +190,12 @@ spec:
     - name: send-cdevent
       when:
         - { input: $(tasks.status), operator: in, values: ["Succeeded", "Completed"] }
-      taskRef: { name: send-cdevent }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: platform-catalog }
       params:
         - { name: event-type, value: "dev.cdevents.artifact.published.0.3.0" }
         - { name: subject-content-json, value: "{\"image\": \"$(tasks.build-image.results.image-ref)\", \"revision\": \"$(params.git-revision)\", \"env\": \"dev\"}" }

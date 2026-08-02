@@ -32,7 +32,11 @@ spec:
         uuidgen | tee "$(step.results.chain-id.path)"
     - name: start-span
       ref:
-        name: otel-flow-root-start
+        resolver: cluster
+        params:
+          - { name: kind, value: stepaction }
+          - { name: name, value: otel-flow-root-start }
+          - { name: namespace, value: platform-catalog }
       # imagePullPolicy isn't a valid field on StepAction itself (only on Task steps -
       # caught as a "strict decoding error: unknown field" applying it there directly),
       # but it IS settable here, on the step that `ref`s the StepAction into this Task.

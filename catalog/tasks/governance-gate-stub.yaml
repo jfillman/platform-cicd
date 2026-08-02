@@ -22,7 +22,11 @@ spec:
   steps:
     - name: stub
       ref:
-        name: governance-stub
+        resolver: cluster
+        params:
+          - { name: kind, value: stepaction }
+          - { name: name, value: governance-stub }
+          - { name: namespace, value: platform-catalog }
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
         - name: gate-name

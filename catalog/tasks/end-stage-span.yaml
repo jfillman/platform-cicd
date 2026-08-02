@@ -19,7 +19,11 @@ spec:
   steps:
     - name: end-span
       ref:
-        name: otel-span-end
+        resolver: cluster
+        params:
+          - { name: kind, value: stepaction }
+          - { name: name, value: otel-span-end }
+          - { name: namespace, value: platform-catalog }
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
         - name: status
