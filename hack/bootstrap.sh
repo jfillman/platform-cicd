@@ -49,7 +49,7 @@ if ! kubectl get pods -n kube-system -l k8s-app=calico-node --no-headers 2>/dev/
   warn "affecting every other namespace here, and is out of scope for a repointing exercise."
 fi
 
-log "1/6 - Tekton Pipelines + Triggers + Pipelines-as-Code (not present on kind-observe)"
+log "1/6 - Tekton Pipelines + Triggers + Pipelines-as-Code + Dashboard (not present on kind-observe)"
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
@@ -78,6 +78,24 @@ kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-control
 kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-watcher --timeout=180s
 kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-webhook --timeout=180s
 kubectl apply -f observability/kind-observe/tekton-servicemonitor.yaml
+#
+# Tekton Dashboard - deliberately release.yaml (the read-only variant), not
+# release-full.yaml (its write-enabled sibling): this platform's whole PaaS model
+# is that developers configure pipelines via cicd.yaml and never hand-author or manually
+# trigger Tekton resources - a write-enabled dashboard would be a standing bypass around
+# that, and would grant its own ServiceAccount create/delete on PipelineRuns/TaskRuns
+# across every tenant namespace, which cuts against the "no elevated identity anywhere"
+# posture the rest of this platform holds to (see tenant-triggers-template.yaml's
+# impersonation-scoping comment). Confirmed by inspecting the manifest directly (not
+# assumed from the filename): its RBAC only binds to Tekton's own *-aggregate-view
+# ClusterRoles (read on pipelines/pipelineruns/tasks/taskruns/triggers resources) plus
+# get/list/watch on events/namespaces/pods/pods-log for the UI/log-streaming, and the one
+# write verb it has (create/update/delete on dashboard.tekton.dev Extensions) is scoped to
+# its own UI-extension-registration CRD, not pipeline execution. Pinned rather than
+# tracking "latest", same reasoning as PAC_VERSION above.
+TEKTON_DASHBOARD_VERSION="v0.70.0"
+kubectl apply -f "https://github.com/tektoncd/dashboard/releases/download/${TEKTON_DASHBOARD_VERSION}/release.yaml"
+kubectl -n tekton-pipelines rollout status deployment/tekton-dashboard --timeout=180s
 
 log "2/6 - External Secrets Operator (not present on kind-observe)"
 if ! kubectl get ns external-secrets >/dev/null 2>&1; then

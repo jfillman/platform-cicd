@@ -9,7 +9,19 @@ pulling changes.
 ```
 ./hack/bootstrap.sh
 kubectl -n observability port-forward svc/kube-prometheus-stack-grafana 3000:80
+kubectl -n tekton-pipelines port-forward svc/tekton-dashboard 9097:9097
 ```
+
+Grafana is for the platform's own dashboards (DORA-ish stats, trace-based durations - see
+`observability/grafana/dashboards/`). The Tekton Dashboard (`localhost:9097` above) is
+the complementary, lower-level view: live/historical PipelineRuns and TaskRuns across
+every tenant namespace, with step-by-step logs - useful for debugging a specific run
+without `kubectl get/describe/logs`-ing it by hand. Installed **read-only**
+(`release.yaml`, not `release-full.yaml`) deliberately - see the comment in
+`hack/bootstrap.sh`'s Tekton install step for why a write-enabled dashboard would cut
+against this platform's PaaS model and RBAC posture. Verified live: its ServiceAccount
+can `list`/`get` PipelineRuns cluster-wide but not `create`/`delete` them
+(`kubectl auth can-i ... --as=system:serviceaccount:tekton-pipelines:tekton-dashboard`).
 
 ## Why kind-observe, not a fresh cluster
 
@@ -31,7 +43,7 @@ had:
 | Loki | `observability` | Yes - Grafana datasource already has trace-ID log correlation (`derivedFields`) pre-wired |
 | OTel Collector | `observability` | Yes, additively patched with a spanmetrics connector - see `observability/kind-observe/otel-collector-values-patch.yaml` |
 | Project Contour (ingress) | `projectcontour` | Present, not yet used - see "Manual step: the GitHub App" below |
-| Tekton Pipelines/Triggers/PaC | - | Not present, installed by bootstrap.sh |
+| Tekton Pipelines/Triggers/PaC/Dashboard | - | Not present, installed by bootstrap.sh |
 | External Secrets Operator | - | Not present, installed by bootstrap.sh |
 
 `observability/*/values.yaml` (kube-prometheus-stack, tempo, loki, grafana,
