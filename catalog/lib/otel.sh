@@ -6,10 +6,16 @@
 # catalog/toolbox/Dockerfile). Every catalog Task step sources this file instead of
 # shelling out to otel-cli directly, so a version bump only needs a fix here.
 #
-# NOTE: the exact otel-cli flag names below match its "span background" workflow as
-# documented upstream, but MUST be re-verified against whichever otel-cli version gets
-# pinned in Phase 0 (see plan's build-sequence item "OTel: prove root-span + traceparent
-# threading within a single PipelineRun first") before this is trusted in a real Task.
+# otel-cli's --tp-print/--tp-export flags were verified live (v0.4.5, run directly
+# against the real collector, not assumed): they print a multi-line block (`# trace id:
+# ...`, `# span id: ...`, `TRACEPARENT=...`), not a bare parseable value. otel_flow_root_
+# start/otel_stage_span_start filter that down to just the traceparent themselves -
+# an earlier version of this file piped the raw multi-line block straight into a Tekton
+# result, which worked for the flow-root call (nothing parsed its result inline) but
+# broke the very next stage span, which passes that result to --tp-parent and got a
+# multi-line blob instead of a traceparent. Caught live via a real PipelineRun, then
+# reproduced and fixed by running otel-cli directly against the real collector rather
+# than re-guessing at flags a second time.
 #
 # Contract:
 #   - TRACEPARENT (W3C trace context) is threaded through Tekton task params/results,
@@ -39,7 +45,7 @@ otel_flow_root_start() {
     --name "${flow_name}" \
     --service "platform-cicd" \
     --sockdir "$(_otel_sockdir)" \
-    --tp-print
+    --tp-print | sed -n 's/^TRACEPARENT=//p'
 }
 
 # otel_stage_span_start <stage-name> <flow-traceparent> <chain-id>
@@ -48,13 +54,17 @@ otel_flow_root_start() {
 # under one trace instead of falsely nested/overlapping spans.
 otel_stage_span_start() {
   local stage_name="$1" flow_traceparent="$2" chain_id="$3"
-  otel-cli span background \
+  # There is no --tp-parent flag (verified live: otel-cli's own --help doesn't list
+  # one, and passing it errors "unknown flag") - an earlier version of this function
+  # assumed one existed. otel-cli picks up parent context from the TRACEPARENT
+  # environment variable instead (confirmed live: exporting it before this call
+  # produces a child span sharing the parent's trace id, with its own span id).
+  TRACEPARENT="${flow_traceparent}" otel-cli span background \
     --name "stage:${stage_name}" \
     --service "platform-cicd" \
-    --tp-parent "${flow_traceparent}" \
     --attrs "platform.chain_id=${chain_id},platform.stage=${stage_name}" \
     --sockdir "$(_otel_sockdir)" \
-    --tp-print
+    --tp-print | sed -n 's/^TRACEPARENT=//p'
 }
 
 # otel_step_span <step-name> -- <command...>

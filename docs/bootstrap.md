@@ -1,10 +1,10 @@
 # Bootstrap
 
 `hack/bootstrap.sh` targets the existing shared `kind-observe` dev cluster rather than
-creating a dedicated one. It installs only what's genuinely missing there (cert-manager,
-Tekton Pipelines/Triggers/Pipelines-as-Code, External Secrets Operator, the shared
-catalog, the broker) and reuses everything else already running. It's idempotent -
-re-run it after pulling changes.
+creating a dedicated one. It installs only what's genuinely missing there (Tekton
+Pipelines/Triggers/Pipelines-as-Code, External Secrets Operator, the shared catalog, the
+broker) and reuses everything else already running. It's idempotent - re-run it after
+pulling changes.
 
 ```
 ./hack/bootstrap.sh
@@ -31,7 +31,6 @@ had:
 | Loki | `observability` | Yes - Grafana datasource already has trace-ID log correlation (`derivedFields`) pre-wired |
 | OTel Collector | `observability` | Yes, additively patched with a spanmetrics connector - see `observability/kind-observe/otel-collector-values-patch.yaml` |
 | Project Contour (ingress) | `projectcontour` | Present, not yet used - see "Manual step: the GitHub App" below |
-| cert-manager | - | Not present, installed by bootstrap.sh |
 | Tekton Pipelines/Triggers/PaC | - | Not present, installed by bootstrap.sh |
 | External Secrets Operator | - | Not present, installed by bootstrap.sh |
 
@@ -63,6 +62,28 @@ NetworkPolicy - is what actually prevents cross-tenant traffic; NetworkPolicy wa
 meant as defense-in-depth layered on top of it. What's genuinely lost here is that
 second layer, on this cluster only. Don't extend that assumption to a real/production
 target without re-adding a NetworkPolicy-enforcing CNI there.
+
+## The broker's TokenReview interceptor runs plain HTTP, not HTTPS
+
+This was originally TLS-terminated with a cert-manager self-signed CA, the standard
+pattern (matching how Tekton's own built-in ClusterInterceptors are configured via
+`spec.clientConfig.caBundle`). It was dropped after extensive live debugging: the
+EventListener sink rejected the cert on every call
+(`x509: certificate signed by unknown authority`) despite confirming the CA genuinely
+issued the serving cert, ruling out a stale informer cache (recreated the
+`ClusterInterceptor` from scratch, restarted the sink), and hitting a hard wall trying
+to get the CA into the sink pod's own trust store - blocked outright by the
+`EventListener` CRD's admission webhook when attempted through the CRD's own pod-template
+override, then silently reverted by the EventListener's reconciler when patched directly
+onto the generated `Deployment`. See the comment at the top of
+`platform/broker/cmd/token-review-interceptor/main.go` for the full account.
+
+This is a real, deliberate tradeoff, not a hidden one: as covered in the NetworkPolicy
+section above, TokenReview-verified caller identity - not transport TLS - was always the
+actual trust boundary for this internal, never-leaves-the-cluster call. Losing transport
+encryption here is a smaller version of the same accepted gap. Revisit if this needs to
+run somewhere the `caBundle` mechanism can be made to work, or if a later Tekton Triggers
+version behaves differently.
 
 ## Manual step: the GitHub App
 

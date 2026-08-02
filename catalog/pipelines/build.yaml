@@ -198,7 +198,7 @@ spec:
           - { name: namespace, value: platform-catalog }
       params:
         - { name: event-type, value: "dev.cdevents.artifact.published.0.3.0" }
-        - { name: subject-content-json, value: "{\"image\": \"$(tasks.build-image.results.image-ref)\", \"revision\": \"$(params.git-revision)\", \"env\": \"dev\"}" }
+        - { name: subject-content-json, value: "{\"image\": \"$(tasks.build-image.results.image-ref)\", \"revision\": \"$(params.git-revision)\", \"git-url\": \"$(params.git-url)\", \"env\": \"dev\"}" }
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: namespace, value: $(params.tenant) }

@@ -36,8 +36,15 @@ cdevent_send() {
   local sa_token
   sa_token="$(cat "${_BROKER_TOKEN_PATH}")"
 
+  # Truncated to 20 hex chars (80 bits - collision odds are irrelevant at this
+  # volume): the TriggerTemplates build PipelineRun names as "test-$(body.context.id)"
+  # / "deploy-$(body.context.id)", and Kubernetes resource names cap at 63 characters.
+  # A full sha256sum (64 hex chars) blew that limit outright - "test-" plus the full
+  # hash is 69 characters - and the resulting PipelineRun silently never got created
+  # (caught live via the EventListener's own logs: the Trigger matched and resolved
+  # correctly, admission just rejected the name it built).
   local event_id
-  event_id="$(printf '%s' "${TEKTON_PIPELINE_RUN}:${event_type}" | sha256sum | cut -d' ' -f1)"
+  event_id="$(printf '%s' "${TEKTON_PIPELINE_RUN}:${event_type}" | sha256sum | cut -d' ' -f1 | cut -c1-20)"
 
   local payload
   payload="$(jq -n \

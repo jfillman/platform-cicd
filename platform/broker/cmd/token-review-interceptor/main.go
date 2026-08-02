@@ -60,6 +60,27 @@ const (
 
 const defaultAudience = "cdevents-broker"
 
+// Plain HTTP, not HTTPS, deliberately - not an oversight. This service was originally
+// TLS-terminated with a cert-manager-issued self-signed-CA certificate, matching how
+// Tekton's own built-in ClusterInterceptors (cel, github, ...) are configured via
+// spec.clientConfig.caBundle. In practice the EventListener sink rejected that cert on
+// every call ("x509: certificate signed by unknown authority") no matter what was tried
+// live against a real cluster: confirming the CA genuinely issued the serving cert,
+// restarting the sink to rule out a stale informer cache, deleting and recreating the
+// ClusterInterceptor with caBundle set at creation instead of patched in afterward, and
+// attempting to add the CA to the sink pod's own trust store - blocked outright by the
+// EventListener CRD's admission webhook ("must not set the field(s): ...volumes,
+// ...volumeMounts, ...env[].value"), and a direct patch of the underlying Deployment
+// was silently reverted by the EventListener reconciler on the next resync. Whatever
+// the built-in interceptors rely on to make caBundle work is not something a custom
+// ClusterInterceptor could reach in the time available to debug it live.
+//
+// This is not a silent downgrade of the security model: per docs/chaining.md, the real
+// trust boundary here was always TokenReview-verified caller identity, not transport
+// TLS - this call never leaves the cluster, and NetworkPolicy enforcement on
+// kind-observe is already a documented, accepted gap for the same reason (see
+// docs/bootstrap.md). Revisit if this needs to run somewhere the caBundle mechanism
+// can be made to work, or if a later Triggers version fixes whatever this hit.
 func main() {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -74,8 +95,8 @@ func main() {
 	mux.HandleFunc("/", handle(clientset))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	log.Println("cdevents-broker-auth interceptor listening on :8443")
-	log.Fatal(http.ListenAndServeTLS(":8443", "/etc/interceptor/tls/tls.crt", "/etc/interceptor/tls/tls.key", mux))
+	log.Println("cdevents-broker-auth interceptor listening on :8080 (plain HTTP - see comment above)")
+	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
 func handle(clientset kubernetes.Interface) http.HandlerFunc {

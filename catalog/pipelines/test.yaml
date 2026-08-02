@@ -129,7 +129,7 @@ spec:
         - { name: event-type, value: "dev.cdevents.testcaserun.finished.0.3.0" }
         - name: subject-content-json
           value: >-
-            {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "env": "dev"}
+            {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "git-url": "$(params.git-url)", "env": "dev"}
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: namespace, value: $(params.tenant) }

@@ -5,6 +5,17 @@
 # RBAC here is deliberately narrow: this ServiceAccount can create TokenReviews
 # (cluster-scoped by necessity - that API has no namespaced form) and nothing else. It
 # cannot read/write PipelineRuns, Secrets, or anything else in any tenant namespace.
+#
+# Plain HTTP, not HTTPS - see the header comment in
+# ../cmd/token-review-interceptor/main.go for why this isn't an oversight: a
+# cert-manager-issued self-signed-CA certificate here (the standard pattern, matching
+# how Tekton's own built-in ClusterInterceptors are configured) was tried and
+# extensively debugged live against a real cluster - confirmed the CA genuinely issued
+# the serving cert, ruled out stale caching, ruled out creation-vs-patch timing, and hit
+# a hard wall trying to get the CA into the sink pod's own trust store (blocked by the
+# EventListener CRD's admission webhook, then silently reverted when patched directly
+# onto the generated Deployment). TokenReview-verified caller identity remains the real
+# trust boundary here regardless - see docs/chaining.md.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -70,22 +81,13 @@ spec:
           # try (and fail) to pull from a registry that doesn't have it - caught live as
           # ImagePullBackOff, not in review.
           imagePullPolicy: IfNotPresent
-          ports: [{ containerPort: 8443, name: https }]
+          ports: [{ containerPort: 8080, name: http }]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
-          volumeMounts:
-            - { name: tls, mountPath: /etc/interceptor/tls, readOnly: true }
           livenessProbe:
-            httpGet: { path: /healthz, port: https, scheme: HTTPS }
-      volumes:
-        - name: tls
-          secret:
-            # Provisioned by cert-manager (Phase 0 dependency) - see
-            # ../../../docs/bootstrap.md. A Tekton Triggers ClusterInterceptor requires
-            # HTTPS with a CA the Triggers controller trusts.
-            secretName: cdevents-broker-auth-tls
+            httpGet: { path: /healthz, port: http, scheme: HTTP }
 ---
 apiVersion: v1
 kind: Service
@@ -94,21 +96,7 @@ metadata:
   namespace: platform-system
 spec:
   selector: { app: cdevents-broker-auth }
-  ports: [{ name: https, port: 443, targetPort: https }]
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: cdevents-broker-auth-tls
-  namespace: platform-system
-spec:
-  secretName: cdevents-broker-auth-tls
-  dnsNames:
-    - cdevents-broker-auth.platform-system.svc
-    - cdevents-broker-auth.platform-system.svc.cluster.local
-  issuerRef:
-    name: platform-ca-issuer
-    kind: ClusterIssuer
+  ports: [{ name: http, port: 8080, targetPort: http }]
 ---
 apiVersion: triggers.tekton.dev/v1alpha1
 kind: ClusterInterceptor
@@ -120,14 +108,4 @@ spec:
       name: cdevents-broker-auth
       namespace: platform-system
       path: /
-      port: 443
-    # caBundle is deliberately left empty here, not "populated by cert-manager's
-    # ca-injector" as an earlier draft of this file claimed - that was wrong. cert-
-    # manager's CA injector only supports MutatingWebhookConfiguration,
-    # ValidatingWebhookConfiguration, CRD conversion webhooks, and APIServices; Tekton
-    # Triggers' ClusterInterceptor.spec.clientConfig.caBundle isn't one of the types it
-    # knows how to inject into. hack/bootstrap.sh patches this field directly after
-    # cert-manager issues platform-ca-secret (see cluster-issuer.yaml) - see the
-    # "patch ClusterInterceptor caBundle" step there. If you apply this file by hand
-    # instead of via bootstrap.sh, you must run that patch yourself or the interceptor
-    # will never be trusted by the Triggers controller.
+      port: 8080

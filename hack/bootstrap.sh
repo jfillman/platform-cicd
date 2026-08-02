@@ -29,7 +29,7 @@ require kubectl
 require helm
 require docker
 
-log "0/7 - target the existing kind-observe cluster (not creating a new one)"
+log "0/6 - target the existing kind-observe cluster (not creating a new one)"
 if ! kubectl config get-contexts -o name | grep -qx "${CONTEXT}"; then
   echo "error: context '${CONTEXT}' not found in your kubeconfig. This script assumes" >&2
   echo "you already have the kind-observe cluster running - it does not create one." >&2
@@ -49,18 +49,7 @@ if ! kubectl get pods -n kube-system -l k8s-app=calico-node --no-headers 2>/dev/
   warn "affecting every other namespace here, and is out of scope for a repointing exercise."
 fi
 
-log "1/7 - cert-manager (TLS for the broker's TokenReview ClusterInterceptor)"
-if ! kubectl get ns cert-manager >/dev/null 2>&1; then
-  helm repo add jetstack https://charts.jetstack.io --force-update
-  helm upgrade --install cert-manager jetstack/cert-manager \
-    --namespace cert-manager --create-namespace --set crds.enabled=true --wait
-  kubectl apply -f platform/broker/manifests/cluster-issuer.yaml
-else
-  echo "cert-manager already installed, skipping"
-  kubectl apply -f platform/broker/manifests/cluster-issuer.yaml
-fi
-
-log "2/7 - Tekton Pipelines + Triggers + Pipelines-as-Code (not present on kind-observe)"
+log "1/6 - Tekton Pipelines + Triggers + Pipelines-as-Code (not present on kind-observe)"
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
@@ -90,7 +79,7 @@ kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-watcher
 kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-webhook --timeout=180s
 kubectl apply -f observability/kind-observe/tekton-servicemonitor.yaml
 
-log "3/7 - External Secrets Operator (not present on kind-observe)"
+log "2/6 - External Secrets Operator (not present on kind-observe)"
 if ! kubectl get ns external-secrets >/dev/null 2>&1; then
   helm repo add external-secrets https://charts.external-secrets.io --force-update
   helm upgrade --install external-secrets external-secrets/external-secrets \
@@ -99,20 +88,20 @@ else
   echo "external-secrets already installed, skipping"
 fi
 
-log "3.5/7 - reused, not (re)installed: ArgoCD (argocd ns), Crossplane (crossplane-system ns),"
+log "2.5/6 - reused, not (re)installed: ArgoCD (argocd ns), Crossplane (crossplane-system ns),"
 echo "        kube-prometheus-stack + Tempo + Loki + Grafana (observability ns) - all already"
 echo "        running on kind-observe. See docs/bootstrap.md for what got reused and why."
 echo "        The shared OTel Collector there was patched (additively) with a spanmetrics"
 echo "        connector - see observability/kind-observe/otel-collector-values-patch.yaml."
 
-log "4/7 - platform catalog namespace + shared Tekton catalog (read-only for tenants)"
+log "3/6 - platform catalog namespace + shared Tekton catalog (read-only for tenants)"
 kubectl create namespace platform-catalog --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n platform-catalog -f catalog/stepactions/
 kubectl apply -n platform-catalog -f catalog/tasks/
 kubectl apply -n platform-catalog -f catalog/pipelines/
 kubectl apply -f catalog/rbac/catalog-read-only.yaml
 
-log "5/7 - build + load local images (toolbox, token-review-interceptor)"
+log "4/6 - build + load local images (toolbox, token-review-interceptor)"
 docker build -f catalog/toolbox/Dockerfile -t "ghcr.io/platform-cicd/toolbox:${CATALOG_IMAGE_TAG}" .
 docker build -f platform/broker/cmd/token-review-interceptor/Dockerfile \
   -t "ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}" platform/broker
@@ -129,17 +118,11 @@ else
   warn "  ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}"
 fi
 
-log "6/7 - shared broker (EventListener + TokenReview interceptor)"
+log "5/6 - shared broker (EventListener + TokenReview interceptor)"
 kubectl apply -f platform/broker/manifests/interceptor.yaml
-kubectl wait --for=condition=Ready certificate/cdevents-broker-auth-tls -n platform-system --timeout=60s
-# See the caBundle comment in interceptor.yaml: cert-manager's CA injector doesn't
-# support this CRD field, so we patch it directly from the CA cert-manager issued.
-CA_BUNDLE="$(kubectl get secret platform-ca-secret -n cert-manager -o jsonpath='{.data.tls\.crt}')"
-kubectl patch clusterinterceptor cdevents-broker-auth --type merge \
-  -p "{\"spec\":{\"clientConfig\":{\"caBundle\":\"${CA_BUNDLE}\"}}}"
 kubectl apply -f platform/broker/manifests/eventlistener.yaml
 
-log "7/7 - Grafana dashboards, provisioned into the existing Grafana in observability ns"
+log "6/6 - Grafana dashboards, provisioned into the existing Grafana in observability ns"
 kubectl apply -k observability/grafana/
 
 log "Done. Next: onboard a pilot repo - see docs/onboarding.md."

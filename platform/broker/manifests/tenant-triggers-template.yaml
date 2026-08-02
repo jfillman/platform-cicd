@@ -95,6 +95,7 @@ metadata:
 spec:
   params:
     - { name: image-ref, value: "$(body.subject.content.image)" }
+    - { name: git-url, value: "$(body.subject.content.git-url)" }
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
@@ -108,6 +109,7 @@ metadata:
 spec:
   params:
     - name: image-ref
+    - name: git-url
     - name: git-revision
     - name: chain-id
     - name: traceparent
@@ -125,7 +127,15 @@ spec:
             - { name: name, value: test }
             - { name: namespace, value: platform-catalog }
         params:
-          - { name: git-url, value: "https://github.com/<TENANT>/<APP_NAME>" }
+          # git-url comes from the CDEvent, carried forward from build's own git-url
+          # param (see catalog/pipelines/build.yaml's send-cdevent subject-content-json)
+          # - NOT reconstructed as https://github.com/<TENANT>/<APP_NAME>, which an
+          # earlier version of this file did. <TENANT>/<APP_NAME> are platform-internal
+          # names, not necessarily the actual GitHub org/repo - that assumption broke
+          # the first time tenant and GitHub org didn't match (caught live, not in
+          # review, when the app repo also turned out to be named differently on GitHub
+          # than the local convention assumed).
+          - { name: git-url, value: $(tt.params.git-url) }
           - { name: git-revision, value: $(tt.params.git-revision) }
           - { name: image-ref, value: $(tt.params.image-ref) }
           - { name: tenant, value: <TENANT> }
@@ -171,6 +181,7 @@ spec:
   params:
     - { name: outcome, value: "$(body.subject.content.outcome)" }
     - { name: image-ref, value: "$(body.subject.content.image)" }
+    - { name: git-url, value: "$(body.subject.content.git-url)" }
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
@@ -184,6 +195,7 @@ metadata:
 spec:
   params:
     - name: image-ref
+    - name: git-url
     - name: git-revision
     - name: chain-id
     - name: traceparent
@@ -201,7 +213,9 @@ spec:
             - { name: name, value: deploy }
             - { name: namespace, value: platform-catalog }
         params:
-          - { name: git-url, value: "https://github.com/<TENANT>/<APP_NAME>" }
+          # See fire-test's identical comment above - git-url comes from the CDEvent,
+          # not reconstructed from <TENANT>/<APP_NAME>.
+          - { name: git-url, value: $(tt.params.git-url) }
           - { name: git-revision, value: $(tt.params.git-revision) }
           - { name: image-ref, value: $(tt.params.image-ref) }
           - { name: env, value: dev }
