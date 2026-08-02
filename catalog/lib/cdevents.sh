@@ -54,6 +54,7 @@ cdevent_send() {
     --arg subjectId "${subject_id}" \
     --arg chainId "${PLATFORM_CHAIN_ID:?PLATFORM_CHAIN_ID must be set - propagated from the triggering event, or generated at flow start}" \
     --arg traceparent "${PLATFORM_TRACEPARENT:?PLATFORM_TRACEPARENT must be set - see otel.sh}" \
+    --arg flowStartTime "${PLATFORM_FLOW_START_TIME:?PLATFORM_FLOW_START_TIME must be set - propagated from the triggering event, or set at flow start (see otel_flow_root_begin in otel.sh)}" \
     --argjson content "${subject_content_json}" \
     '{
       context: {
@@ -71,7 +72,7 @@ cdevent_send() {
         content: $content
       },
       customData: {
-        platform: { traceparent: $traceparent }
+        platform: { traceparent: $traceparent, flow_start_time: $flowStartTime }
       },
       customDataContentType: "application/json"
     }')"

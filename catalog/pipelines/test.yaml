@@ -27,6 +27,8 @@ spec:
       type: string
     - name: chain-id
       type: string
+    - name: flow-start-time
+      type: string
   workspaces:
     - name: source
   tasks:
@@ -64,9 +66,7 @@ spec:
           - { name: name, value: start-stage-span }
           - { name: namespace, value: platform-catalog }
       params:
-        - { name: stage-name, value: test }
         - { name: flow-traceparent, value: $(params.flow-traceparent) }
-        - { name: chain-id, value: $(params.chain-id) }
 
     - name: resolve-agent-image
       runAfter: [validate-config]
@@ -102,7 +102,13 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: end-stage-span }
           - { name: namespace, value: platform-catalog }
-      params: [{ name: status, value: $(tasks.status) }]
+      params:
+        - { name: stage-name, value: test }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: span-id, value: $(tasks.start-test-stage-span.results.span-id) }
+        - { name: start-time, value: $(tasks.start-test-stage-span.results.start-time) }
+        - { name: status, value: $(tasks.status) }
 
     - name: notify
       taskRef:
@@ -132,5 +138,6 @@ spec:
             {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "git-url": "$(params.git-url)", "env": "dev"}
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
         - { name: namespace, value: $(params.tenant) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }

@@ -6,103 +6,127 @@
 # catalog/toolbox/Dockerfile). Every catalog Task step sources this file instead of
 # shelling out to otel-cli directly, so a version bump only needs a fix here.
 #
-# otel-cli's --tp-print/--tp-export flags were verified live (v0.4.5, run directly
-# against the real collector, not assumed): they print a multi-line block (`# trace id:
-# ...`, `# span id: ...`, `TRACEPARENT=...`), not a bare parseable value. otel_flow_root_
-# start/otel_stage_span_start filter that down to just the traceparent themselves -
-# an earlier version of this file piped the raw multi-line block straight into a Tekton
-# result, which worked for the flow-root call (nothing parsed its result inline) but
-# broke the very next stage span, which passes that result to --tp-parent and got a
-# multi-line blob instead of a traceparent. Caught live via a real PipelineRun, then
-# reproduced and fixed by running otel-cli directly against the real collector rather
-# than re-guessing at flags a second time.
+# Stateless by design: every span this file emits is sent via ONE bare `otel-cli span`
+# (or `otel-cli exec`) call carrying explicit trace-id/span-id/parent-span-id/timestamps,
+# never via otel-cli's `span background` + separate `span end`/`span event` daemon-socket
+# workflow. An earlier version of this file used that daemon workflow to let a span start
+# in one Tekton Task and end in a later one (needed for flow-root/stage spans, which span
+# multiple Tasks and even multiple independently-triggered PipelineRuns) - it never
+# worked, because each Tekton Task runs in its own Pod, and otel-cli's background daemon
+# listens on a Unix socket local to whichever Pod started it: a Task in a different Pod
+# calling `span end`/`span event` against that socket path can never reach it. Every span
+# sent through that path showed an exact 1.00s duration and a `timeout` event (verified
+# live, against real trace data in Tempo) - otel-cli's own default --timeout (1s) fired
+# because the real "end" call never arrived. See docs/tracing.md.
+#
+# The fix: split "begin" (mint identifiers + a start timestamp, thread them through
+# Tekton results/CDEvents exactly like traceparent already was) from "send" (one
+# stateless otel-cli call with explicit --start/--end/--force-*-id flags, safe from any
+# Task/Pod, run only once the real end time is known - see otel_span_send).
 #
 # Contract:
 #   - TRACEPARENT (W3C trace context) is threaded through Tekton task params/results,
-#     never rediscovered locally - see catalog/stepactions/otel-span-*.yaml.
+#     never rediscovered locally - see catalog/stepactions/otel-*.yaml.
 #   - One flow-root span covers an entire build->test->deploy->release run. Every
-#     stage's root span parents directly to the flow root (flat, not nested - stages
-#     don't overlap in time, so nesting would misrepresent duration in Tempo).
+#     stage's span parents directly to the flow root (flat, not nested - stages don't
+#     overlap in time, so nesting would misrepresent duration).
 #   - The flow-root traceparent is what gets carried inside the CDEvent payload across
 #     independently-triggered PipelineRuns - see cdevents.sh.
 
 set -euo pipefail
 
-: "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
-
-_otel_sockdir() {
-  echo "${TEKTON_HOME:-/tekton/home}"
+otel_now() {
+  date -u +"%Y-%m-%dT%H:%M:%S.%NZ"
 }
 
-# otel_flow_root_start <flow-name>
-# Called once, by the first Task of the first stage in a flow (i.e. no incoming
-# traceparent param - this is a fresh build triggered by a git push). Starts the root
-# span for the whole flow and prints its traceparent on stdout; callers MUST capture
-# this into a Tekton result (conventionally named "traceparent").
-otel_flow_root_start() {
-  local flow_name="$1"
-  otel-cli span background \
-    --name "${flow_name}" \
+otel_traceparent_trace_id() {
+  cut -d- -f2 <<< "$1"
+}
+
+otel_traceparent_span_id() {
+  cut -d- -f3 <<< "$1"
+}
+
+# otel_flow_root_begin
+# Mints identifiers + a start timestamp for a NEW flow-root span, without sending
+# anything yet - see the file header. Prints "<traceparent> <start-time>". Called
+# exactly once, by build (the only stage that's always a fresh flow start).
+otel_flow_root_begin() {
+  local trace_id span_id
+  trace_id="$(openssl rand -hex 16)"
+  span_id="$(openssl rand -hex 8)"
+  printf '00-%s-%s-01 %s\n' "${trace_id}" "${span_id}" "$(otel_now)"
+}
+
+# otel_stage_span_begin <flow-traceparent>
+# Mints a span id + start timestamp for one stage's own span - a sibling of the
+# flow-root, reusing the flow's trace id so it lands in the same trace. Prints
+# "<span-id> <start-time>".
+otel_stage_span_begin() {
+  local flow_traceparent="$1"
+  # Fail fast here if the incoming traceparent is malformed, rather than only at
+  # send time (in a later, possibly much-later, Task).
+  otel_traceparent_trace_id "${flow_traceparent}" >/dev/null
+  printf '%s %s\n' "$(openssl rand -hex 8)" "$(otel_now)"
+}
+
+# otel_span_send <name> <flow-traceparent> <span-id> <start-time> <end-time> <tekton-status> [attrs]
+# The only function here that actually talks to the collector for flow-root/stage
+# spans - one stateless otel-cli call, safe from any Task/Pod. tekton-status is
+# Tekton's own aggregate status string ($(tasks.status) in a Pipeline's finally
+# block); translated to an OTel status code here so callers never need their own
+# translation step.
+#
+# <span-id> empty means "this call ends the flow-root span itself": reuse the span
+# id already embedded in <flow-traceparent>, send with no parent. Non-empty means
+# "this is one stage's own span" (minted by otel_stage_span_begin):
+# <flow-traceparent>'s span id becomes this span's *parent* instead.
+otel_span_send() {
+  : "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
+  local name="$1" flow_traceparent="$2" span_id="$3" start_time="$4" end_time="$5" tekton_status="$6"
+  local attrs="${7:-}"
+  local trace_id flow_root_span_id parent_span_id
+  trace_id="$(otel_traceparent_trace_id "${flow_traceparent}")"
+  flow_root_span_id="$(otel_traceparent_span_id "${flow_traceparent}")"
+  if [[ -z "${span_id}" ]]; then
+    span_id="${flow_root_span_id}"
+    parent_span_id=""
+  else
+    parent_span_id="${flow_root_span_id}"
+  fi
+  local status_code="ok"
+  [[ "${tekton_status}" != "Succeeded" && "${tekton_status}" != "Completed" ]] && status_code="error"
+  local -a args=(
+    span --service "platform-cicd" --name "${name}"
+    --force-trace-id "${trace_id}" --force-span-id "${span_id}"
+    --start "${start_time}" --end "${end_time}"
+    --status-code "${status_code}"
+  )
+  [[ -n "${parent_span_id}" ]] && args+=(--force-parent-span-id "${parent_span_id}")
+  [[ -n "${attrs}" ]] && args+=(--attrs "${attrs}")
+  otel-cli "${args[@]}"
+}
+
+# otel_child_span <name> <flow-traceparent> <parent-span-id> <attrs> -- <command...>
+# Runs <command...> wrapped in one stateless child span via `otel-cli exec` - safe to
+# call from a Task with no connection to whatever process/Pod owns the parent span,
+# since parenting is set with explicit --force-*-id flags, not inherited daemon/
+# process state. Used by governance-gate-stub to attach a real, queryable child span
+# under the current stage span. governance.stub=true is a span *attribute* here, not
+# an OTel span event - an earlier version emitted it as an event on the (unreachable)
+# background span, which meant it was neither delivered nor queryable via TraceQL's
+# `name =` (which matches spans, not events). A real span is straightforwardly
+# queryable, e.g. `{ name =~ "^governance:.*" }`.
+otel_child_span() {
+  : "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
+  local name="$1" flow_traceparent="$2" parent_span_id="$3" attrs="$4"; shift 4
+  local trace_id
+  trace_id="$(otel_traceparent_trace_id "${flow_traceparent}")"
+  otel-cli exec \
+    --name "${name}" \
     --service "platform-cicd" \
-    --sockdir "$(_otel_sockdir)" \
-    --tp-print | sed -n 's/^TRACEPARENT=//p'
-}
-
-# otel_stage_span_start <stage-name> <flow-traceparent> <chain-id>
-# Called once per stage (build/test/deploy/release) by that stage's first Task.
-# Parents the stage span directly to the flow root so stages render as siblings
-# under one trace instead of falsely nested/overlapping spans.
-otel_stage_span_start() {
-  local stage_name="$1" flow_traceparent="$2" chain_id="$3"
-  # There is no --tp-parent flag (verified live: otel-cli's own --help doesn't list
-  # one, and passing it errors "unknown flag") - an earlier version of this function
-  # assumed one existed. otel-cli picks up parent context from the TRACEPARENT
-  # environment variable instead (confirmed live: exporting it before this call
-  # produces a child span sharing the parent's trace id, with its own span id).
-  TRACEPARENT="${flow_traceparent}" otel-cli span background \
-    --name "stage:${stage_name}" \
-    --service "platform-cicd" \
-    --attrs "platform.chain_id=${chain_id},platform.stage=${stage_name}" \
-    --sockdir "$(_otel_sockdir)" \
-    --tp-print | sed -n 's/^TRACEPARENT=//p'
-}
-
-# otel_step_span <step-name> -- <command...>
-# Wraps a single step's command in its own child span under the current stage span.
-# This is what most Task step scripts actually call.
-otel_step_span() {
-  local step_name="$1"; shift
-  [[ "${1:-}" == "--" ]] && shift
-  otel-cli span exec \
-    --name "step:${step_name}" \
-    --service "platform-cicd" \
-    --sockdir "$(_otel_sockdir)" \
-    -- "$@"
-}
-
-# otel_span_end <tekton-status>
-# Ends the current background span (stage or flow-root). tekton-status is Tekton's own
-# aggregate status string (Succeeded/Completed/Failed/None, i.e. the value of
-# $(tasks.status) in a Pipeline's finally block) rather than a numeric exit code - this
-# is the value every calling Pipeline already has on hand natively, so there's no
-# fragile translation step between "how Tekton reports outcome" and "how otel-cli
-# reports outcome". Every Task that called otel_flow_root_start or otel_stage_span_start
-# MUST have a corresponding finally call to this, or the trace is left dangling.
-otel_span_end() {
-  local tekton_status="${1:-Succeeded}"
-  local status="ok"
-  [[ "${tekton_status}" != "Succeeded" && "${tekton_status}" != "Completed" ]] && status="error"
-  otel-cli span end --sockdir "$(_otel_sockdir)" --status-code "${status}"
-}
-
-# otel_mark_governance_stub <gate-name>
-# Tags the current span so Grafana renders this gate as a visually-distinct stub
-# rather than a real enforcement result. Every governance-stub Task must call this -
-# see docs/governance-stubs.md. This is the direct, deliberate fix for the old
-# platform's silently-always-passing `exit 0` gates.
-otel_mark_governance_stub() {
-  local gate_name="$1"
-  otel-cli span event --sockdir "$(_otel_sockdir)" \
-    --name "governance.stub" \
-    --attrs "governance.gate=${gate_name},governance.stub=true"
+    --force-trace-id "${trace_id}" \
+    --force-parent-span-id "${parent_span_id}" \
+    --attrs "${attrs}" \
+    "$@"
 }

@@ -1,9 +1,10 @@
 # catalog/tasks/start-stage-span.yaml
 #
 # Pipeline-level wrapper around the otel-stage-span-start StepAction. Every stage
-# Pipeline (build/test/deploy/release) calls this once near the start, parenting its
-# stage span to the flow-root traceparent (never to the previous stage's span - see
-# docs/tracing.md for why stages are flat siblings, not nested).
+# Pipeline (build/test/deploy/release) calls this once near the start. Only mints
+# identifiers + a start timestamp here - the stage's own span isn't actually sent to
+# the collector until this stage's `finally` block calls end-stage-span, since that's
+# the only point the real end time is known. See docs/tracing.md.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -12,15 +13,13 @@ metadata:
     platform.io/catalog: "true"
 spec:
   params:
-    - name: stage-name
-      type: string
     - name: flow-traceparent
       type: string
-    - name: chain-id
-      type: string
   results:
-    - name: stage-traceparent
-      value: $(steps.start-span.results.stage-traceparent)
+    - name: span-id
+      value: $(steps.start-span.results.span-id)
+    - name: start-time
+      value: $(steps.start-span.results.start-time)
   steps:
     - name: start-span
       ref:
@@ -31,9 +30,5 @@ spec:
           - { name: namespace, value: platform-catalog }
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
-        - name: stage-name
-          value: $(params.stage-name)
         - name: flow-traceparent
           value: $(params.flow-traceparent)
-        - name: chain-id
-          value: $(params.chain-id)

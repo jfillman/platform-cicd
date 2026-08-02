@@ -12,12 +12,11 @@ metadata:
   labels:
     platform.io/catalog: "true"
 spec:
-  params:
-    - name: flow-name
-      type: string
   results:
     - name: traceparent
       value: $(steps.start-span.results.traceparent)
+    - name: start-time
+      value: $(steps.start-span.results.start-time)
     - name: chain-id
       value: $(steps.generate-chain-id.results.chain-id)
   steps:
@@ -29,7 +28,14 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        uuidgen | tee "$(step.results.chain-id.path)"
+        # printf, not `uuidgen | tee` - uuidgen's own trailing newline was landing in
+        # this result verbatim. Harmless on its own, but once chain-id started being
+        # joined into a comma-separated otel-cli --attrs string (end-stage-span.yaml),
+        # that embedded newline broke otel-cli's CSV-based attrs parser: it silently
+        # dropped everything after the newline (platform.stage never made it into the
+        # span). Caught live by checking a real span's actual attributes in Tempo -
+        # platform.chain_id was present, platform.stage silently wasn't.
+        printf '%s' "$(uuidgen)" > "$(step.results.chain-id.path)"
     - name: start-span
       ref:
         resolver: cluster
@@ -41,6 +47,3 @@ spec:
       # caught as a "strict decoding error: unknown field" applying it there directly),
       # but it IS settable here, on the step that `ref`s the StepAction into this Task.
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
-      params:
-        - name: flow-name
-          value: $(params.flow-name)

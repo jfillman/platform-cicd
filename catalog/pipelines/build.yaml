@@ -59,8 +59,6 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: start-flow-root-span }
           - { name: namespace, value: platform-catalog }
-      params:
-        - { name: flow-name, value: "$(params.tenant)/$(params.app-name)" }
 
     - name: start-build-stage-span
       runAfter: [start-flow]
@@ -71,9 +69,7 @@ spec:
           - { name: name, value: start-stage-span }
           - { name: namespace, value: platform-catalog }
       params:
-        - { name: stage-name, value: build }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
-        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
 
     - name: resolve-agent-image
       runAfter: [validate-config]
@@ -137,7 +133,10 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: governance-gate-stub }
           - { name: namespace, value: platform-catalog }
-      params: [{ name: gate-name, value: sast }]
+      params:
+        - { name: gate-name, value: sast }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
     - name: image-scan
       runAfter: [build-image]
@@ -149,7 +148,10 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: governance-gate-stub }
           - { name: namespace, value: platform-catalog }
-      params: [{ name: gate-name, value: image-scan }]
+      params:
+        - { name: gate-name, value: image-scan }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
     - name: generate-sbom
       runAfter: [build-image]
@@ -161,7 +163,10 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: governance-gate-stub }
           - { name: namespace, value: platform-catalog }
-      params: [{ name: gate-name, value: sbom }]
+      params:
+        - { name: gate-name, value: sbom }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
   finally:
     - name: end-build-stage-span
@@ -171,7 +176,13 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: end-stage-span }
           - { name: namespace, value: platform-catalog }
-      params: [{ name: status, value: $(tasks.status) }]
+      params:
+        - { name: stage-name, value: build }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
+        - { name: span-id, value: $(tasks.start-build-stage-span.results.span-id) }
+        - { name: start-time, value: $(tasks.start-build-stage-span.results.start-time) }
+        - { name: status, value: $(tasks.status) }
 
     - name: notify
       taskRef:
@@ -201,5 +212,6 @@ spec:
         - { name: subject-content-json, value: "{\"image\": \"$(tasks.build-image.results.image-ref)\", \"revision\": \"$(params.git-revision)\", \"git-url\": \"$(params.git-url)\", \"env\": \"dev\"}" }
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
         - { name: namespace, value: $(params.tenant) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }

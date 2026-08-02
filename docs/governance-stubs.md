@@ -17,9 +17,13 @@ Every governance Task in the catalog (`catalog/tasks/governance-gate-stub.yaml`)
 `catalog/stepactions/governance-stub.yaml`, which:
 
 1. Logs, loudly, to the step's own output: `no real check implemented yet`.
-2. Emits an OTel span event `governance.stub` carrying `governance.stub=true` and
-   `governance.gate=<name>` - a structural, machine-readable fact attached to the trace
-   itself, not a comment someone can miss.
+2. Emits its own real child span, named `governance:<gate>` and parented to the current
+   stage's span, carrying `governance.stub=true` and `governance.gate=<name>` as span
+   attributes - a structural, machine-readable fact attached to the trace itself, not a
+   comment someone can miss. (An earlier version attached this as an OTel span *event*
+   on the stage span instead of a standalone span - it never reached Tempo, because it
+   relied on the same background-daemon mechanism that turned out not to work across
+   Tekton Task/Pod boundaries; see docs/tracing.md.)
 3. Sets its Task result to the literal string `"stub"` - never `"passed"` or `"failed"`,
    which would imply a real judgment was made.
 

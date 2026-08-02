@@ -19,9 +19,13 @@
 #     --version 0.165.0 -n observability -f observability/kind-observe/otel-collector-values-patch.yaml
 #
 # Why: pipelines-overview.json's "Stage duration (p50/p95)" panel queries
-# traces_spanmetrics_latency_bucket, which only exists once this connector is present -
-# see docs/tracing.md and the design review's Q5 note on Tempo's metrics-generator/
-# spanmetrics as a secondary cross-check for stage-duration percentiles.
+# traces_span_metrics_duration_milliseconds_bucket, which only exists once this connector
+# is present - see docs/tracing.md and the design review's Q5 note on Tempo's
+# metrics-generator/spanmetrics as a secondary cross-check for stage-duration percentiles.
+# Note the connector is named "spanmetrics" in this config, but the metrics it actually
+# emits are namespaced "traces_span_metrics_*" (underscore between span/metrics) - this
+# was verified live by scraping the collector's :8889/metrics endpoint directly, since it
+# doesn't match the connector's own config key name.
 
 clusterRole:
   create: true

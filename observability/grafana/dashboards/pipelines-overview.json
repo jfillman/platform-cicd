@@ -12,7 +12,7 @@
         "name": "tenant",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, namespace)",
+        "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
         "includeAll": true,
         "multi": true
       }
@@ -26,7 +26,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "sum(tekton_pipelines_controller_running_pipelineruns_count{namespace=~\"$tenant\"})", "legendFormat": "running" }
+        { "expr": "sum(tekton_pipelines_controller_running_pipelineruns_count{exported_namespace=~\"$tenant\"})", "legendFormat": "running" }
       ]
     },
     {
@@ -37,7 +37,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
       "targets": [
-        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{namespace=~\"$tenant\",status=\"success\"}[24h]))", "legendFormat": "succeeded" }
+        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"success\"}[24h]))", "legendFormat": "succeeded" }
       ]
     },
     {
@@ -48,7 +48,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } },
       "targets": [
-        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{namespace=~\"$tenant\",status=\"failed\"}[24h]))", "legendFormat": "failed" }
+        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"failed\"}[24h]))", "legendFormat": "failed" }
       ]
     },
     {
@@ -61,19 +61,20 @@
         { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" }
       ] } } },
       "targets": [
-        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{namespace=~\"$tenant\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{namespace=~\"$tenant\"}[24h]))" }
+        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))" }
       ]
     },
     {
       "id": 5,
       "title": "Stage duration (p50/p95) - from Tempo spanmetrics",
       "type": "timeseries",
-      "description": "Derived from the OTel Collector's spanmetrics connector (observability/otel-collector/values.yaml), bucketed by our own platform.stage span attribute - a cross-check against the per-trace durations visible in pipeline-detail.json, not the primary source (see docs/tracing.md).",
+      "description": "Derived from the OTel Collector's spanmetrics connector (observability/kind-observe/otel-collector-values-patch.yaml), bucketed by span_name (\"stage:build\"/\"stage:test\"/\"stage:deploy\") rather than the platform.stage dimension - platform.stage is only populated on spans created after that attribute was wired up correctly and is missing on most historical data, while span_name is set on every stage span unconditionally. A cross-check against the per-trace durations visible in pipeline-detail.json, not the primary source (see docs/tracing.md).",
+      "fieldConfig": { "defaults": { "unit": "ms" } },
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "histogram_quantile(0.5, sum(rate(traces_spanmetrics_latency_bucket[5m])) by (le, platform_stage))", "legendFormat": "p50 {{platform_stage}}" },
-        { "expr": "histogram_quantile(0.95, sum(rate(traces_spanmetrics_latency_bucket[5m])) by (le, platform_stage))", "legendFormat": "p95 {{platform_stage}}" }
+        { "expr": "histogram_quantile(0.5, sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"platform-cicd\", span_name=~\"^stage:.*\"}[5m])) by (le, span_name))", "legendFormat": "p50 {{span_name}}" },
+        { "expr": "histogram_quantile(0.95, sum(rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"platform-cicd\", span_name=~\"^stage:.*\"}[5m])) by (le, span_name))", "legendFormat": "p95 {{span_name}}" }
       ]
     },
     {
@@ -86,7 +87,7 @@
       "targets": [
         {
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"platform-cicd\" && name =~ \"^stage:\" }"
+          "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" }"
         }
       ]
     }

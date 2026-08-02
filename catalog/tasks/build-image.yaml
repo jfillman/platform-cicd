@@ -21,8 +21,8 @@
 #
 # Config resolution below is plain bash with no span wrapping - it's sub-second work,
 # and otel-cli's per-invocation overhead isn't worth it for that (see docs/tracing.md).
-# The stage-level span covering this whole Task's duration is started/ended by the
-# Pipeline via otel-stage-span-start/otel-span-end, not per-step here.
+# The stage-level span covering this whole Task's duration is started/sent by the
+# Pipeline via otel-stage-span-start/otel-span-send, not per-step here.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:

@@ -16,6 +16,11 @@ spec:
   params:
     - name: gate-name
       type: string
+    - name: flow-traceparent
+      type: string
+    - name: stage-span-id
+      type: string
+      description: The calling stage's own span id (from start-stage-span) - this gate's span is parented to it.
   results:
     - name: outcome
       value: $(steps.stub.results.outcome)
@@ -29,5 +34,6 @@ spec:
           - { name: namespace, value: platform-catalog }
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
-        - name: gate-name
-          value: $(params.gate-name)
+        - { name: gate-name, value: $(params.gate-name) }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: stage-span-id, value: $(params.stage-span-id) }

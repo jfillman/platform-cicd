@@ -28,41 +28,61 @@ per-stage drill-down the dashboard needs (see
 ## How context crosses independently-triggered PipelineRuns
 
 1. `build`'s first stage-relevant Task calls `start-flow-root-span`, which mints a fresh
-   W3C `traceparent` (root span, no incoming parent) and a fresh CDEvents `chainId`.
-   Both are threaded through every subsequent Task's params within `build` via Tekton
-   Task results.
+   W3C `traceparent` (root span, no incoming parent), a real start timestamp, and a
+   fresh CDEvents `chainId` - but does **not** send the flow-root span anywhere yet
+   (see "otel-cli" below for why). All three are threaded through every subsequent
+   Task's params within `build` via Tekton Task results.
 2. `build`'s `finally` block calls `send-cdevent`, which puts the **flow-root**
-   traceparent (not `build`'s own stage-span traceparent) into the CDEvent's
-   `customData.platform.traceparent` field, kept deliberately separate from CDEvents'
-   own `chainId` field - one is OTel trace-context, the other is CDEvents' own causal-
-   sequence correlator, and conflating them would make either harder to reason about or
-   swap out independently later.
-3. The shared broker's Trigger for this tenant extracts both fields via a
-   `TriggerBinding` and passes them as params (`flow-traceparent`, `chain-id`) into the
-   next stage's `PipelineRun` (see
+   traceparent and start-time (not `build`'s own stage-span values) into the CDEvent's
+   `customData.platform.traceparent` / `customData.platform.flow_start_time` fields,
+   kept deliberately separate from CDEvents' own `chainId` field - one is OTel
+   trace-context, the other is CDEvents' own causal-sequence correlator, and
+   conflating them would make either harder to reason about or swap out independently
+   later.
+3. The shared broker's Trigger for this tenant extracts all three fields via a
+   `TriggerBinding` and passes them as params (`flow-traceparent`, `chain-id`,
+   `flow-start-time`) into the next stage's `PipelineRun` (see
    [../platform/broker/manifests/tenant-triggers-template.yaml](../platform/broker/manifests/tenant-triggers-template.yaml)).
 4. `test` (and later `deploy`/`release`) receive `flow-traceparent` as a Pipeline param
    instead of generating their own - they call `start-stage-span` with it, producing a
    span parented to the *original* flow root, reconstructing one continuous trace across
-   PipelineRuns Tekton itself has no idea are related.
+   PipelineRuns Tekton itself has no idea are related. `flow-start-time` keeps riding
+   along, unused until whichever stage is last (`deploy`, in Phase 1) finally sends the
+   flow-root span - see `end-flow-root-span.yaml`.
 
-## otel-cli
+## otel-cli, and why spans are "begin" then "send", never "background"
 
 Span emission from bash step scripts goes through `catalog/lib/otel.sh`, which wraps
 [otel-cli](https://github.com/equinix-labs/otel-cli) (a static Go binary purpose-built
-for instrumenting shell scripts - no daemon, no SDK, no non-bash runtime needed). Two
-things worth knowing before extending it:
+for instrumenting shell scripts - no daemon, no SDK, no non-bash runtime needed).
 
-- It's fine, by design, for coarse per-step/per-stage spans (seconds to minutes - what
-  this platform actually needs). It is **not** the right tool for sub-second in-step
-  instrumentation (process-per-invocation overhead dominates at that granularity) -
-  `resolve-build-config`-style config-parsing steps deliberately skip span wrapping for
-  exactly this reason, see the comment in `catalog/tasks/build-image.yaml`.
-- The exact flag names in `catalog/lib/otel.sh` (`--tp-print`, `--tp-parent`, `--sockdir`,
-  etc.) match otel-cli's documented "span background" workflow as of when this was
-  written, but were **not independently re-verified against a pinned version** - do that
-  in Phase 0 before trusting this in a real cluster (see the plan's Phase 0 checklist
-  item "prove root-span + traceparent threading within a single PipelineRun first").
+An earlier version of this file used otel-cli's `span background` + `span end`/`span
+event` workflow: start a span in one Task, keep a local daemon alive listening on a
+Unix socket, and have a *later* Task call back into that socket to close it or attach
+an event. This is exactly the shape flow-root/stage spans need (start in one Task,
+end in a much later one - possibly a different PipelineRun entirely) - but it was
+**verified live, against real cluster data, to never work**: every span sent this way
+showed an exact 1.00s duration and a `timeout` event, because each Tekton Task runs in
+its own Pod, so the "end" call's socket path always pointed at an already-terminated
+Pod's filesystem. otel-cli's own default `--timeout` (1s) fired every time.
+
+The fix, in place now: **mint identifiers and a start timestamp locally (no otel-cli
+call, no network), thread them through Tekton results/CDEvents exactly like
+traceparent always was, and send the complete span in one stateless `otel-cli span`
+call** (explicit `--start`/`--end`/`--force-trace-id`/`--force-span-id`/
+`--force-parent-span-id`) only once the real end time is known - safe from any Task or
+Pod, since nothing is recovered from local process state. See the file header of
+`catalog/lib/otel.sh` for the exact functions (`otel_flow_root_begin`,
+`otel_stage_span_begin`, `otel_span_send`, `otel_child_span`) and
+`catalog/tasks/end-flow-root-span.yaml` for why the flow-root span is currently sent
+from `deploy`'s `finally` block (Phase 1's last stage) rather than from `build`.
+
+It's fine, by design, for coarse per-step/per-stage spans (seconds to minutes - what
+this platform actually needs). `otel-cli exec` (used by `otel_child_span`, e.g. for
+governance-stub spans) is not the right tool for sub-second in-step instrumentation
+(process-per-invocation overhead dominates at that granularity) -
+`resolve-build-config`-style config-parsing steps deliberately skip span wrapping for
+exactly this reason, see the comment in `catalog/tasks/build-image.yaml`.
 
 ## Reliability gap, not yet closed
 

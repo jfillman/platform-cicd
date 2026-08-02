@@ -24,6 +24,8 @@ spec:
       type: string
     - name: traceparent
       type: string
+    - name: flow-start-time
+      type: string
     - name: namespace
       type: string
     - name: pipeline-run-name
@@ -62,6 +64,8 @@ spec:
           value: $(params.chain-id)
         - name: PLATFORM_TRACEPARENT
           value: $(params.traceparent)
+        - name: PLATFORM_FLOW_START_TIME
+          value: $(params.flow-start-time)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail

@@ -20,7 +20,7 @@
       "id": 1,
       "title": "Flow waterfall - one row per stage, expand for steps",
       "type": "traces",
-      "description": "Flat trace shape by design: every stage (build/test/deploy/release) parents directly to the flow root, not to the previous stage, because stages don't overlap in time - nesting them would misrepresent duration. See docs/tracing.md. Spans carrying governance.stub=true (see catalog/stepactions/governance-stub.yaml) render distinctly below - never mistake a stub gate for a real enforcement result here.",
+      "description": "Flat trace shape by design: every stage (build/test/deploy/release) parents directly to the flow root, not to the previous stage, because stages don't overlap in time - nesting them would misrepresent duration. See docs/tracing.md. Governance stub gates (see catalog/stepactions/governance-stub.yaml) show up here as their own child spans named \"governance:<gate>\" under the current stage - never mistake one for a real enforcement result; see the table below.",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [
@@ -31,13 +31,13 @@
       "id": 2,
       "title": "Governance gates in this run - stub vs real",
       "type": "table",
-      "description": "Any row with governance.stub=true is not a real check result - see docs/governance-stubs.md. This is the platform's structural, loud fix for the old system's silently-always-passing exit-0 gates.",
+      "description": "Any row with governance.stub=true is not a real check result - see docs/governance-stubs.md. This is the platform's structural, loud fix for the old system's silently-always-passing exit-0 gates. Governance gates are their own spans named \"governance:<gate>\" (not span events - an earlier version tried to query governance.stub as an event, which TraceQL's `name =` filter can't match, and which never reached Tempo in the first place under the old background-span mechanism - see docs/tracing.md). The `name =~` regex (not `=`) is deliberate: exact-match `name =` combined with `trace:id =` was verified live to intermittently return zero rows even for spans confirmed to exist in the trace, while the regex form did not - a Tempo 2.9 TraceQL quirk, not a query bug.",
       "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [
         {
           "queryType": "traceql",
-          "query": "{ trace:id = \"$traceId\" && name = \"governance.stub\" } | select(governance.gate, governance.stub)"
+          "query": "{ trace:id = \"$traceId\" && name =~ \"^governance:.*\" } | select(governance.gate, governance.stub)"
         }
       ],
       "fieldConfig": {

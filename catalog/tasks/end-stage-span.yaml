@@ -1,9 +1,11 @@
 # catalog/tasks/end-stage-span.yaml
 #
-# Pipeline-level wrapper around the otel-span-end StepAction. Referenced from every
-# stage Pipeline's `finally` block so the stage span is closed whether the stage
-# succeeded or failed - a Pipeline that starts a stage span without a matching finally
-# call to this Task leaves a dangling span in Tempo.
+# Pipeline-level wrapper around otel-span-send. Referenced from every stage Pipeline's
+# `finally` block so the stage span is sent - with its real start/end timestamps -
+# whether the stage succeeded or failed. Needs flow-traceparent/span-id/start-time/
+# chain-id/stage-name as explicit params because this Task runs in a different Pod
+# than whichever Task called start-stage-span earlier in the same PipelineRun - see
+# docs/tracing.md.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -12,6 +14,16 @@ metadata:
     platform.io/catalog: "true"
 spec:
   params:
+    - name: stage-name
+      type: string
+    - name: flow-traceparent
+      type: string
+    - name: chain-id
+      type: string
+    - name: span-id
+      type: string
+    - name: start-time
+      type: string
     - name: status
       type: string
       default: "Succeeded"
@@ -22,9 +34,13 @@ spec:
         resolver: cluster
         params:
           - { name: kind, value: stepaction }
-          - { name: name, value: otel-span-end }
+          - { name: name, value: otel-span-send }
           - { name: namespace, value: platform-catalog }
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
-        - name: status
-          value: $(params.status)
+        - { name: name, value: "stage:$(params.stage-name)" }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: span-id, value: $(params.span-id) }
+        - { name: start-time, value: $(params.start-time) }
+        - { name: status, value: $(params.status) }
+        - { name: attrs, value: "platform.chain_id=$(params.chain-id),platform.stage=$(params.stage-name)" }

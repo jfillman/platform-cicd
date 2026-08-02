@@ -10,6 +10,15 @@
 # match everything cluster-wide, so a standalone ServiceMonitor object anywhere is
 # picked up automatically with no further wiring. Verify this still holds if the
 # existing Prometheus install's selectors ever get tightened.
+#
+# Selector uses `app: tekton-pipelines-controller`, not the `app.kubernetes.io/name`
+# label an earlier version of this file guessed - the actual value there is just
+# `controller` (shared with tekton-triggers-controller's Service, which sets the same
+# label to the same value and is only disambiguated by app.kubernetes.io/part-of).
+# `app: tekton-pipelines-controller` is the one label whose value is actually specific
+# to this Service. Caught live: the ServiceMonitor applied with no error, but matched
+# zero targets, so Prometheus never had this data and the dashboard was correctly
+# showing nothing - not a dashboard bug.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -19,7 +28,7 @@ metadata:
     app.kubernetes.io/part-of: platform-cicd
 spec:
   selector:
-    matchLabels: { app.kubernetes.io/name: tekton-pipelines-controller }
+    matchLabels: { app: tekton-pipelines-controller }
   namespaceSelector:
     matchNames: [tekton-pipelines]
   endpoints:

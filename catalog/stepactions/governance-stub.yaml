@@ -6,11 +6,19 @@
 #
 # This platform makes stub-ness a first-class, machine-readable fact instead of hiding
 # it in a script body: every stubbed governance gate MUST call this StepAction, which
-# emits a span event carrying governance.stub=true. Grafana's pipeline-detail dashboard
-# renders any span/gate carrying this attribute as visually distinct (grey/hatched) from
-# real results - see observability/grafana/dashboards/pipeline-detail.json. When a real
-# implementation lands for a gate (Phase 3), delete the call to this StepAction from
-# that Task; nothing else about the Pipeline shape needs to change.
+# emits its own real child span (parented to the current stage span) carrying
+# governance.stub=true as a span attribute. Grafana's pipeline-detail dashboard renders
+# any span carrying this attribute as visually distinct (grey/hatched) from real results
+# - see observability/grafana/dashboards/pipeline-detail.json. When a real implementation
+# lands for a gate (Phase 3), delete the call to this StepAction from that Task; nothing
+# else about the Pipeline shape needs to change.
+#
+# This used to attach the governance.stub fact as an OTel span *event* on the (then
+# background-daemon) stage span, via otel_mark_governance_stub. That daemon was
+# unreachable from this StepAction's own Pod (see otel.sh's file header) - the event
+# never landed anywhere, and even if it had, TraceQL's `name =` matches spans, not span
+# events, so pipeline-detail.json's governance panel could never have found it either
+# way. A real, standalone child span (otel_child_span) fixes both problems at once.
 apiVersion: tekton.dev/v1beta1
 kind: StepAction
 metadata:
@@ -23,6 +31,12 @@ spec:
     - name: gate-name
       type: string
       description: e.g. sast, image-scan, policy-check, sbom.
+    - name: flow-traceparent
+      type: string
+      description: Root traceparent for the whole flow - gives this span its trace id.
+    - name: stage-span-id
+      type: string
+      description: The current stage's own span id (from otel_stage_span_begin) - this stub's span is parented to it.
   results:
     - name: outcome
       description: Always "stub" in this phase of the platform - never "passed"/"failed", which would misrepresent a stub as a real enforcement result.
@@ -33,10 +47,12 @@ spec:
   # into a StepAction's script, only passed in as positional args.
   args:
     - "$(params.gate-name)"
+    - "$(params.flow-traceparent)"
+    - "$(params.stage-span-id)"
   script: |
     #!/usr/bin/env bash
     set -euo pipefail
     source "${PLATFORM_LIB}/otel.sh"
     echo "[governance-stub] gate=$1 - no real check implemented yet, see docs/governance-stubs.md" >&2
-    otel_mark_governance_stub "$1"
+    otel_child_span "governance:$1" "$2" "$3" "governance.gate=$1,governance.stub=true" -- true
     echo -n "stub" | tee "$(step.results.outcome.path)"

@@ -1,9 +1,14 @@
 # catalog/stepactions/otel-stage-span-start.yaml
 #
-# Starts a stage-level span (build/test/deploy/release), parented directly to the
-# flow-root traceparent - NOT to the previous stage's span. Stages are siblings under
-# one trace, never nested, because they don't overlap in time; nesting would make
-# Tempo render misleading durations. See docs/tracing.md.
+# Generates a span id + start timestamp for one stage's (build/test/deploy/release)
+# own span, WITHOUT sending anything to the collector yet - same two-phase pattern as
+# otel-flow-root-start.yaml, and for the same reason: this stage's own `finally` Task
+# (end-stage-span) runs in a different Pod and can't reach any local state this step
+# might otherwise try to keep alive. See docs/tracing.md.
+#
+# The stage span is parented directly to the flow-root - NOT to the previous stage's
+# span. Stages are siblings under one trace, never nested, because they don't overlap
+# in time; nesting would make Tempo render misleading durations.
 apiVersion: tekton.dev/v1beta1
 kind: StepAction
 metadata:
@@ -13,30 +18,25 @@ metadata:
 spec:
   image: ghcr.io/platform-cicd/toolbox:latest
   params:
-    - name: stage-name
-      type: string
-      description: One of build, test, deploy, release.
     - name: flow-traceparent
       type: string
-      description: Root traceparent for the whole flow (from otel-flow-root-start, or carried in the triggering CDEvent for stages after the first).
-    - name: chain-id
-      type: string
-      description: CDEvents chainId correlating this stage to the rest of the flow.
+      description: Root traceparent for the whole flow (from otel-flow-root-start, or carried in the triggering CDEvent for stages after the first). Only used here to fail fast on a malformed value - the real trace/parent linkage happens later, at send time.
   results:
-    - name: stage-traceparent
-      description: traceparent of this stage's span. Thread through this stage's own Task params for step-level child spans.
-  env:
-    - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
-  # See otel-flow-root-start.yaml's comment - $(params.x) can't be substituted directly
-  # into a StepAction's script, only passed in as positional args.
+    - name: span-id
+      description: This stage's own span id. Thread through this stage's own finally task (end-stage-span) and any Task that needs to parent a child span under this stage (e.g. governance-gate-stub).
+    - name: start-time
+      description: This stage's real start time. Thread through to end-stage-span.
+  # StepActions reject $(params.x) substitution directly inside `script:` (Tekton's
+  # admission webhook: "param substitution in scripts is not allowed") - unlike Tasks,
+  # where it's fine. Params have to come in as positional args instead and be read via
+  # $1/$2/... - see docs/tracing.md for this getting caught the hard way, against a
+  # real cluster, not in review.
   args:
-    - "$(params.stage-name)"
     - "$(params.flow-traceparent)"
-    - "$(params.chain-id)"
   script: |
     #!/usr/bin/env bash
     set -euo pipefail
     source "${PLATFORM_LIB}/otel.sh"
-    otel_stage_span_start "$1" "$2" "$3" \
-      | tee "$(step.results.stage-traceparent.path)"
+    read -r span_id start_time <<< "$(otel_stage_span_begin "$1")"
+    printf '%s' "${span_id}" > "$(step.results.span-id.path)"
+    printf '%s' "${start_time}" > "$(step.results.start-time.path)"

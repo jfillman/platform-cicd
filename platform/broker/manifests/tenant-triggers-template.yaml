@@ -99,6 +99,7 @@ spec:
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
+    - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
     - { name: pipeline-run-name, value: "test-$(body.context.id)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -113,6 +114,7 @@ spec:
     - name: git-revision
     - name: chain-id
     - name: traceparent
+    - name: flow-start-time
     - name: pipeline-run-name
   resourcetemplates:
     - apiVersion: tekton.dev/v1
@@ -142,6 +144,7 @@ spec:
           - { name: app-name, value: <APP_NAME> }
           - { name: flow-traceparent, value: $(tt.params.traceparent) }
           - { name: chain-id, value: $(tt.params.chain-id) }
+          - { name: flow-start-time, value: $(tt.params.flow-start-time) }
         workspaces:
           - name: source
             volumeClaimTemplate:
@@ -185,6 +188,7 @@ spec:
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
+    - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
     - { name: pipeline-run-name, value: "deploy-$(body.context.id)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -199,6 +203,7 @@ spec:
     - name: git-revision
     - name: chain-id
     - name: traceparent
+    - name: flow-start-time
     - name: pipeline-run-name
   resourcetemplates:
     - apiVersion: tekton.dev/v1
@@ -223,6 +228,7 @@ spec:
           - { name: app-name, value: <APP_NAME> }
           - { name: flow-traceparent, value: $(tt.params.traceparent) }
           - { name: chain-id, value: $(tt.params.chain-id) }
+          - { name: flow-start-time, value: $(tt.params.flow-start-time) }
         workspaces:
           - name: source
             volumeClaimTemplate:
