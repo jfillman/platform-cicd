@@ -24,6 +24,7 @@ spec:
   steps:
     - name: resolve-suite
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       results:
         - name: enabled
       script: |
@@ -34,13 +35,17 @@ spec:
     - name: integration-test
       image: $(params.agent-image)
       workingDir: $(workspaces.source.path)
+      # Cross-step result references only work in env/command/args, not inline script -
+      # see the comment in catalog/tasks/build-image.yaml's run-build-script step.
       env:
         - name: IMAGE_REF
           value: $(params.image-ref)
+        - name: TEST_ENABLED
+          value: $(steps.resolve-suite.results.enabled)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        if [[ "$(steps.resolve-suite.results.enabled)" != "true" ]]; then
+        if [[ "${TEST_ENABLED}" != "true" ]]; then
           echo "test stage disabled in cicd.yaml, skipping"
           exit 0
         fi

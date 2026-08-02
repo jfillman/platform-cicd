@@ -31,7 +31,13 @@ metadata:
   name: cdevents-broker-read-triggers
 rules:
   - apiGroups: ["triggers.tekton.dev"]
-    resources: ["triggers", "triggerbindings", "triggertemplates", "clustertriggerbindings", "clusterinterceptors"]
+    # eventlisteners and interceptors (namespaced, v1alpha1 - distinct from the
+    # cluster-scoped clusterinterceptors) were missing from an earlier version of this
+    # list - the sink controller watches its own EventListener object and any
+    # Interceptor CRs to react to config changes, and crash-loops without list/watch on
+    # both ("... is forbidden ... at the cluster scope", caught live via pod logs, not
+    # anticipated in review).
+    resources: ["triggers", "triggerbindings", "triggertemplates", "clustertriggerbindings", "clusterinterceptors", "eventlisteners", "interceptors"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -54,9 +60,14 @@ metadata:
   namespace: platform-system
 spec:
   serviceAccountName: cdevents-broker
-  triggerSelector:
-    namespaceSelector:
-      matchNames: ["*"]
+  # NamespaceSelector lives directly on EventListenerSpec, NOT nested under a
+  # "triggerSelector" field - an earlier version of this file had it wrong (nested,
+  # copying a shape from the old platform's OpenShift Pipelines-era manifests without
+  # checking it against this project's actual current API). Confirmed against
+  # tektoncd/triggers' EventListenerSpec Go type directly, not guessed - see
+  # docs/chaining.md.
+  namespaceSelector:
+    matchNames: ["*"]
   resources:
     kubernetesResource:
       replicas: 3

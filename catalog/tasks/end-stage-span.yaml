@@ -20,6 +20,7 @@ spec:
     - name: end-span
       ref:
         name: otel-span-end
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
         - name: status
           value: $(params.status)

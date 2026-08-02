@@ -70,6 +70,28 @@ release while writing this. Confirm it before treating `tenant-triggers-template
 RBAC block as correct in a real cluster - if the mechanism differs, this file (and this
 doc) is the one place that needs to change, not any Task or Pipeline.
 
+## Why a tenant is two namespaces, not one
+
+`<TENANT>` (e.g. `platform-cicd-demo`) and `<TENANT>-<ENV>` (e.g.
+`platform-cicd-demo-dev`) are deliberately separate namespaces with different jobs:
+
+- `<TENANT>` is the tenant's *CI control plane* - where `pipeline-runner` and its RBAC
+  live, where PaC actually creates build/test PipelineRuns (that's where the
+  `Repository` CR and the chaining `Trigger` CRs from `tenant-triggers-template.yaml`
+  live), where kaniko's registry push credentials sit. Pipelines *execute* here.
+- `<TENANT>-<ENV>` is where the *deployed application* actually runs - the long-lived
+  `Deployment`/`Service` serving traffic. `deploy-manifests.yaml` derives this name as
+  `<tenant>-<env>` specifically so each environment (`dev`, and later `staging`/`prod`
+  per `cicd.yaml`'s `deploy.upperEnvironments`) gets its own isolated namespace, rather
+  than every environment's Deployment colliding in one namespace.
+
+The split matters for RBAC, not just tidiness: `pipeline-runner`'s Role in
+`tenant-triggers-template.yaml` only grants rights inside `<TENANT>` - a namespace-
+scoped `Role` never extends into a different namespace. Deploying into `<TENANT>-<ENV>`
+needs its own, separate grant - see `tenant-env-rbac-template.yaml`, applied once per
+environment (a real gap caught the same way most of this doc's caveats were: by
+reasoning through what actually calls what, not by running it and hoping).
+
 ## What flows through the broker (Phase 1)
 
 - `dev.cdevents.artifact.published.0.3.0` (from `build`) -> fires `test`

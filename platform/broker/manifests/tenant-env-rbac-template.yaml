@@ -1,0 +1,33 @@
+# platform/broker/manifests/tenant-env-rbac-template.yaml
+#
+# TEMPLATE - one copy applied per <TENANT>-<ENV> deploy-target namespace (e.g. once for
+# platform-cicd-demo-dev, again for platform-cicd-demo-staging if/when that environment
+# exists). Replace <TENANT> and <ENV> throughout.
+#
+# Without this, catalog/tasks/deploy-manifests.yaml's `kubectl -n <TENANT>-<ENV> set
+# image ...` fails with Forbidden: pipeline-runner's Role in tenant-triggers-template.yaml
+# only grants rights inside the tenant's OWN namespace (<TENANT>), which is where
+# pipelines execute, not where the deployed app lives - a namespace-scoped Role never
+# extends into a different namespace. This is a separate, narrower grant scoped to
+# exactly the one namespace and exactly the one resource type deploy-manifests.yaml
+# actually touches - not a blanket "pipeline-runner can deploy anywhere" rule.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-pipeline-runner-deploy
+  namespace: <TENANT>-<ENV>
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/status"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-pipeline-runner-deploy
+  namespace: <TENANT>-<ENV>
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pipeline-runner-deploy }
+subjects:
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: <TENANT>

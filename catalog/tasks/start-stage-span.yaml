@@ -25,6 +25,7 @@ spec:
     - name: start-span
       ref:
         name: otel-stage-span-start
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
         - name: stage-name
           value: $(params.stage-name)

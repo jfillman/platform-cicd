@@ -64,9 +64,30 @@ log "2/7 - Tekton Pipelines + Triggers + Pipelines-as-Code (not present on kind-
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
-kubectl apply -f https://storage.googleapis.com/pipelines-as-code/release/latest/release.yaml
+# Pipelines-as-Code moved from the openshift-pipelines org to tektoncd, and release
+# hosting moved with it - from the old (now-404) GCS bucket to GitHub release assets.
+# release.k8s.yaml is the vanilla-Kubernetes variant (release.yaml is OpenShift-flavored
+# and includes Route objects that don't exist on kind-observe) - matches this platform's
+# "vanilla Kubernetes, no OpenShift" decision. Pinned to a specific version deliberately
+# rather than tracking "latest", same reasoning as the tool versions pinned in
+# catalog/toolbox/Dockerfile: bump PAC_VERSION here intentionally, don't let a shared
+# cluster silently pick up whatever's newest.
+#
+# v0.49.0 is broken on this cluster's arm64 node: all three PaC deployments (controller/
+# watcher/webhook) crash instantly with SIGSEGV (exit 139) and zero log output on every
+# start, while Tekton's own pods run fine under the identical restricted securityContext
+# on the same node - ruling out a node/kernel/seccomp cause. An arm64 image variant does
+# exist for v0.49.0 (confirmed via the GHCR manifest list), so this looks like a real bug
+# in that specific release rather than a missing-platform issue. v0.48.1 (chronologically
+# newer than v0.49.0 despite the lower version number - a backport release) does not
+# reproduce the crash and is what's pinned below. Re-test v0.49.0+ on a future bump.
+PAC_VERSION="v0.48.1"
+kubectl apply -f "https://github.com/tektoncd/pipelines-as-code/releases/download/${PAC_VERSION}/release.k8s.yaml"
 kubectl -n tekton-pipelines rollout status deployment/tekton-pipelines-controller --timeout=180s
 kubectl -n tekton-pipelines-resolvers rollout status deployment/tekton-pipelines-remote-resolvers --timeout=180s
+kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-controller --timeout=180s
+kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-watcher --timeout=180s
+kubectl -n pipelines-as-code rollout status deployment/pipelines-as-code-webhook --timeout=180s
 kubectl apply -f observability/kind-observe/tekton-servicemonitor.yaml
 
 log "3/7 - External Secrets Operator (not present on kind-observe)"

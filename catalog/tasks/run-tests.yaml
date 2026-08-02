@@ -21,6 +21,7 @@ spec:
   steps:
     - name: resolve-test-command
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       results:
         - name: command
         - name: enabled
@@ -35,11 +36,18 @@ spec:
     - name: unit-test
       image: $(params.agent-image)
       workingDir: $(workspaces.source.path)
+      # Cross-step result references only work in env/command/args, not inline script -
+      # see the comment in catalog/tasks/build-image.yaml's run-build-script step.
+      env:
+        - name: TEST_ENABLED
+          value: $(steps.resolve-test-command.results.enabled)
+        - name: TEST_COMMAND
+          value: $(steps.resolve-test-command.results.command)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        if [[ "$(steps.resolve-test-command.results.enabled)" != "true" ]]; then
+        if [[ "${TEST_ENABLED}" != "true" ]]; then
           echo "unit tests disabled in cicd.yaml, skipping"
           exit 0
         fi
-        bash -c '$(steps.resolve-test-command.results.command)'
+        bash -c "${TEST_COMMAND}"

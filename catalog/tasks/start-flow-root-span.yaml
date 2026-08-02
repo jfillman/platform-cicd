@@ -23,6 +23,7 @@ spec:
   steps:
     - name: generate-chain-id
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       results:
         - name: chain-id
       script: |
@@ -32,6 +33,10 @@ spec:
     - name: start-span
       ref:
         name: otel-flow-root-start
+      # imagePullPolicy isn't a valid field on StepAction itself (only on Task steps -
+      # caught as a "strict decoding error: unknown field" applying it there directly),
+      # but it IS settable here, on the step that `ref`s the StepAction into this Task.
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
         - name: flow-name
           value: $(params.flow-name)

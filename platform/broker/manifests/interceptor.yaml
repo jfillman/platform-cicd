@@ -54,10 +54,22 @@ spec:
       serviceAccountName: cdevents-broker-auth
       securityContext:
         runAsNonRoot: true
+        # Explicit numeric UID, matching distroless's documented UID for its "nonroot"
+        # user (see cmd/token-review-interceptor/Dockerfile's USER nonroot:nonroot).
+        # Without this, kubelet can't verify runAsNonRoot against a non-numeric USER
+        # name in the image and refuses to start the container at all
+        # (CreateContainerConfigError) - caught live, not in review.
+        runAsUser: 65532
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: interceptor
           image: ghcr.io/platform-cicd/token-review-interceptor:latest
+          # IfNotPresent, not the default (Always for a `:latest` tag) - this image is
+          # `kind load docker-image`-d locally on kind-observe, not actually pushed to
+          # ghcr.io. Default pull policy would make kubelet ignore the loaded image and
+          # try (and fail) to pull from a registry that doesn't have it - caught live as
+          # ImagePullBackOff, not in review.
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8443, name: https }]
           securityContext:
             allowPrivilegeEscalation: false

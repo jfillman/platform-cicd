@@ -23,6 +23,7 @@ spec:
     - name: stub
       ref:
         name: governance-stub
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       params:
         - name: gate-name
           value: $(params.gate-name)

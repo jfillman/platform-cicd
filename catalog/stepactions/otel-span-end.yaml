@@ -19,8 +19,12 @@ spec:
   env:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
       value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+  # See otel-flow-root-start.yaml's comment - $(params.x) can't be substituted directly
+  # into a StepAction's script, only passed in as positional args.
+  args:
+    - "$(params.status)"
   script: |
     #!/usr/bin/env bash
     set -euo pipefail
     source "${PLATFORM_LIB}/otel.sh"
-    otel_span_end "$(params.status)"
+    otel_span_end "$1"

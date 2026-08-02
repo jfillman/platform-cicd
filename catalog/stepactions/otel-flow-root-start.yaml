@@ -22,8 +22,15 @@ spec:
   env:
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
       value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+  # StepActions reject $(params.x) substitution directly inside `script:` (Tekton's
+  # admission webhook: "param substitution in scripts is not allowed") - unlike Tasks,
+  # where it's fine. Params have to come in as positional args instead and be read via
+  # $1/$2/... - see docs/tracing.md for this getting caught the hard way, against a
+  # real cluster, not in review.
+  args:
+    - "$(params.flow-name)"
   script: |
     #!/usr/bin/env bash
     set -euo pipefail
     source "${PLATFORM_LIB}/otel.sh"
-    otel_flow_root_start "$(params.flow-name)" | tee "$(step.results.traceparent.path)"
+    otel_flow_root_start "$1" | tee "$(step.results.traceparent.path)"

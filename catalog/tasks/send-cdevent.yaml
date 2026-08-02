@@ -44,6 +44,7 @@ spec:
   steps:
     - name: send
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       volumeMounts:
         - name: broker-token
           mountPath: /var/run/secrets/platform

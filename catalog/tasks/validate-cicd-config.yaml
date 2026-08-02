@@ -25,6 +25,7 @@ spec:
   steps:
     - name: validate
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       script: |
         #!/usr/bin/env bash
         set -euo pipefail

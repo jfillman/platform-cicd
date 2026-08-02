@@ -26,10 +26,36 @@ the plan's Q2 review notes). For now, onboarding a pilot repo is these steps:
    and adjust build/test/deploy settings for the app. This is the only file the
    developer maintains going forward.
 
-5. **Provision the dev Deployment.** Phase 1's `deploy-manifests` Task expects a
-   `Deployment` named `<APP_NAME>` to already exist in `<TENANT>-dev` (it patches the
-   image and waits for rollout - it does not create the Deployment). Apply a minimal
-   Deployment/Service manifest by hand for pilots; Phase 3's `Application` composition
-   is what eventually creates this automatically.
+5. **Provision the dev Deployment, and its RBAC.** Phase 1's `deploy-manifests` Task
+   expects a `Deployment` named `<APP_NAME>` to already exist in `<TENANT>-dev` (it
+   patches the image and waits for rollout - it does not create the Deployment). Apply
+   a minimal Deployment/Service manifest by hand for pilots; Phase 3's `Application`
+   composition is what eventually creates this automatically. `<TENANT>-dev` is a
+   *different namespace* from `<TENANT>` (see [chaining.md](chaining.md) "why two
+   namespaces" if that's not obvious), so `pipeline-runner`'s Role from step 1 does
+   **not** cover it - also apply
+   `platform/broker/manifests/tenant-env-rbac-template.yaml` (substituting `<TENANT>`
+   and `<ENV>=dev`) or `deploy-manifests.yaml` fails with `Forbidden` on its first real
+   run. Repeat this template for each additional environment (`staging`, `prod`, ...)
+   as they're added to `cicd.yaml`'s `deploy.upperEnvironments`.
 
-6. Push to `main`. Watch `pipelines-overview.json` in Grafana.
+6. **Registry credentials.** `catalog/tasks/build-image.yaml`'s kaniko step needs a
+   `kubernetes.io/dockerconfigjson` Secret named `registry-credentials` in the
+   **tenant's own namespace** (`<TENANT>`, not `<TENANT>-dev` - that's where build/test
+   PipelineRuns actually run, per the `pipeline-runner` SA created in step 1) to push to
+   a private registry:
+
+   ```
+   kubectl create secret docker-registry registry-credentials -n <TENANT> \
+     --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+   ```
+
+   If the deployed image also needs to be *pulled* from a private registry, the
+   Deployment in `<TENANT>-dev` needs its own `imagePullSecrets` referencing an
+   equivalent Secret in that namespace too - a token scoped to `write:packages` on
+   GHCR covers both push and pull, but the Secret still has to exist in each namespace
+   separately (Kubernetes Secrets aren't shared across namespaces). Making the GHCR
+   package public sidesteps the pull-secret requirement entirely, at the cost of the
+   image being publicly readable.
+
+7. Push to `main`. Watch `pipelines-overview.json` in Grafana.

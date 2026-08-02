@@ -1,12 +1,23 @@
 # catalog/tasks/build-image.yaml
 #
-# Builds and pushes the app's container image. The actual build runs on kaniko - a
-# deliberate, narrow exception to "pipeline step code is bash": kaniko's image has no
-# shell by design (that's what makes rootless builds work under Pod Security
-# "restricted" - see docs/rootless-builds.md). This mirrors a precedent already in the
-# platform's own lineage: the old system's git-clone Task likewise used a purpose-built
-# compiled binary rather than bash, for the same class of reason. Every OTHER step here,
-# and in every other catalog Task, is bash.
+# Resolves build config, runs the app's own build.sh, then builds+pushes the image with
+# kaniko. This Task's shape changed once nodejs-demo-app surfaced a real gap: an earlier
+# version of this file never invoked cicd.yaml's `build.script` at all, even though
+# schemas/cicd.schema.json marks it required - the build stage jumped straight to kaniko
+# building the Dockerfile as-is. That's fixed here: `run-build-script` now runs
+# build.script inside the app's own resolved build-agent image (same image run-tests.yaml
+# uses) BEFORE kaniko packages the result. The corresponding architectural expectation
+# for app repos is that build.sh does the actual build (npm ci, compiling, whatever the
+# language needs) and the Dockerfile becomes a thin packaging step that copies already-
+# built artifacts rather than re-running the build itself - see nodejs-demo-app's
+# build.sh/Dockerfile for the reference shape.
+#
+# The actual image-build step still runs on kaniko - a deliberate, narrow exception to
+# "pipeline step code is bash": kaniko's image has no shell by design (that's what makes
+# rootless builds work under Pod Security "restricted" - see docs/rootless-builds.md).
+# This mirrors a precedent already in the platform's own lineage: the old system's
+# git-clone Task likewise used a purpose-built compiled binary rather than bash, for the
+# same class of reason. Every OTHER step here, and in every other catalog Task, is bash.
 #
 # Config resolution below is plain bash with no span wrapping - it's sub-second work,
 # and otel-cli's per-invocation overhead isn't worth it for that (see docs/tracing.md).
@@ -19,7 +30,7 @@ metadata:
   labels:
     platform.io/catalog: "true"
 spec:
-  description: Resolves build config from cicd.yaml, then builds+pushes the image with kaniko.
+  description: Resolves build config, runs build.sh, then builds+pushes the image with kaniko.
   workspaces:
     - name: source
   params:
@@ -28,31 +39,75 @@ spec:
       description: Output of validate-cicd-config's config-json result.
     - name: image-repo
       type: string
-      description: Destination registry/repo, e.g. registry.internal/<tenant>/<app>.
+      description: Destination registry/repo, e.g. ghcr.io/<org>/<app>.
     - name: git-revision
       type: string
+    - name: agent-image
+      type: string
+      description: Resolved build-agent image (catalog/tasks/resolve-build-agent-image.yaml) - build.sh runs inside this, same image run-tests.yaml uses.
   results:
     - name: image-digest
     - name: image-ref
+  # Registry push credentials for kaniko. A `kubernetes.io/dockerconfigjson` Secret
+  # named registry-credentials must exist in the TENANT's own namespace (not -dev) -
+  # see docs/onboarding.md. Mounted at kaniko's default docker-config lookup path so no
+  # extra kaniko flag is needed.
+  volumes:
+    - name: registry-credentials
+      secret:
+        secretName: registry-credentials
+        items:
+          - key: .dockerconfigjson
+            path: config.json
   steps:
     - name: resolve-build-config
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
       results:
         - name: dockerfile-path
+        - name: build-script-path
         - name: image-ref
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        DOCKERFILE_PATH="$(jq -r '.build.dockerfile' <<< '$(params.config-json)')"
+        CFG='$(params.config-json)'
+        DOCKERFILE_PATH="$(jq -r '.build.dockerfile' <<< "${CFG}")"
+        BUILD_SCRIPT_PATH="$(jq -r '.build.script' <<< "${CFG}")"
         SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
         IMAGE_REF="$(params.image-repo):${SHORT_SHA}"
         echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"
+        echo -n "${BUILD_SCRIPT_PATH}" | tee "$(step.results.build-script-path.path)"
         echo -n "${IMAGE_REF}" | tee "$(step.results.image-ref.path)"
+
+    - name: run-build-script
+      image: $(params.agent-image)
+      workingDir: $(workspaces.source.path)
+      # Cross-step result references ($(steps.X.results.Y)) are only allowed in env/
+      # command/args, not inline in `script:` - Tekton's admission webhook rejects that
+      # directly ("stepResult substitutions are only allowed in env, command and args").
+      # Route it through an env var instead.
+      env:
+        - name: BUILD_SCRIPT_PATH
+          value: $(steps.resolve-build-config.results.build-script-path)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        SCRIPT="${BUILD_SCRIPT_PATH}"
+        if [[ ! -f "${SCRIPT}" ]]; then
+          echo "error: build.script '${SCRIPT}' (from cicd.yaml) not found in repo." >&2
+          exit 1
+        fi
+        chmod +x "${SCRIPT}" || true
+        bash "${SCRIPT}"
 
     - name: build-and-push
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
       # No bash here by design - see the exception note at the top of this file.
       command: ["/kaniko/executor"]
+      volumeMounts:
+        - name: registry-credentials
+          mountPath: /kaniko/.docker
+          readOnly: true
       args:
         - --dockerfile=$(workspaces.source.path)/$(steps.resolve-build-config.results.dockerfile-path)
         - --context=$(workspaces.source.path)
@@ -63,7 +118,11 @@ spec:
 
     - name: emit-image-ref-result
       image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      env:
+        - name: IMAGE_REF
+          value: $(steps.resolve-build-config.results.image-ref)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        echo -n "$(steps.resolve-build-config.results.image-ref)" | tee "$(results.image-ref.path)"
+        echo -n "${IMAGE_REF}" | tee "$(results.image-ref.path)"

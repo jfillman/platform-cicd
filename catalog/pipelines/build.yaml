@@ -90,6 +90,7 @@ spec:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: image-repo, value: $(params.image-repo) }
         - { name: git-revision, value: $(params.git-revision) }
+        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
 
     - name: sast-scan
       runAfter: [build-image]

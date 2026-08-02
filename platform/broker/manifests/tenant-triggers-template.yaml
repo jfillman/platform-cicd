@@ -34,12 +34,28 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "deployments/status"]
-    verbs: ["get", "list", "watch", "update", "patch"]
-  # Deliberately absent: no impersonate, no wildcard verbs/resources, no cluster-scoped
-  # rules, no cross-namespace access. This is the entire blast radius of a compromised
-  # pipeline-runner identity for this one tenant.
+  # Deliberately absent: no `apps/deployments` rule here - there is no app Deployment
+  # living in the tenant namespace itself (that's <TENANT>-<ENV>, a different
+  # namespace - see tenant-env-rbac-template.yaml, applied once per environment). Also
+  # deliberately absent: no impersonate, no wildcard verbs/resources, no cluster-scoped
+  # rules, no other cross-namespace access. This is the entire blast radius of a
+  # compromised pipeline-runner identity for this one tenant, within its own namespace.
+---
+# Binds the SA to its own Role above - an earlier version of this file defined the Role
+# but never bound it to anything, leaving pipeline-runner with zero actual permissions
+# despite the Role existing (caught live: PaC's generated PipelineRuns would have failed
+# immediately on create, not in review - a Role with no RoleBinding is a no-op, easy to
+# miss because `kubectl apply` doesn't warn about it).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pipeline-runner
+  namespace: <TENANT>
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: pipeline-runner }
+subjects:
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: <TENANT>
 ---
 # --- Scoped impersonation grant for the shared broker -----------------------
 # Lets the broker's ServiceAccount (platform-system/cdevents-broker) create the next-
