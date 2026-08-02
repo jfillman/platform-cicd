@@ -37,7 +37,7 @@
       "targets": [
         {
           "queryType": "traceql",
-          "query": "{ trace:id = \"$traceId\" && name =~ \"^governance:.*\" } | select(governance.gate, governance.stub)"
+          "query": "{ trace:id = \"$traceId\" && name =~ \"^governance:.*\" } | select(.governance.gate, .governance.stub)"
         }
       ],
       "fieldConfig": {
