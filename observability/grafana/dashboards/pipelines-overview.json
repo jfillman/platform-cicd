@@ -89,7 +89,26 @@
           "queryType": "traceql",
           "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" }"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "traceID" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in Pipeline Run Detail",
+                    "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }
