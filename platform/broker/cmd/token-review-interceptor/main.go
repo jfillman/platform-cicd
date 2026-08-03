@@ -208,13 +208,14 @@ type githubInstallationTokenResponse struct {
 }
 
 // handleGitHubInstallationToken mints a GitHub App installation token scoped to exactly
-// one repo, for a caller whose own tenant namespace genuinely owns an app that maps to
-// that repo by the platform's gitops-<app-name> convention - see docs/release.md. This
-// is the authorization check referenced in the plan: it's not enough that the caller
-// presents a valid ServiceAccount token (that only proves *which* tenant is asking),
-// the tenant also has to actually have a PaC Repository CR whose name derives the exact
-// gitops repo being requested. Deliberately narrow (list, not any write verb) RBAC on
-// repositories.pipelinesascode.tekton.dev is all this needs from its own ServiceAccount.
+// one repo, for a caller whose own tenant namespace genuinely owns that repo - either
+// directly (its own app repo, e.g. for the ephemeral-envs ApplicationSet's PR-listing
+// token, see docs/ephemeral-environments.md) or via the platform's gitops-<app-name>
+// convention (see docs/release.md). It's not enough that the caller presents a valid
+// ServiceAccount token (that only proves *which* tenant is asking) - the tenant also has
+// to actually have a PaC Repository CR whose name matches the requested repo. Deliberately
+// narrow (list, not any write verb) RBAC on repositories.pipelinesascode.tekton.dev is
+// all this needs from its own ServiceAccount.
 func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dynamic.Interface, appCreds *githubAppCreds) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -239,7 +240,7 @@ func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dyn
 			return
 		}
 
-		if err := verifyTenantOwnsGitOpsRepo(dynClient, tenantNamespace, body.Repo); err != nil {
+		if err := verifyTenantOwnsRepo(dynClient, tenantNamespace, body.Repo); err != nil {
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: err.Error()})
 			return
@@ -268,26 +269,28 @@ func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dyn
 	}
 }
 
-// verifyTenantOwnsGitOpsRepo lists PaC Repository CRs in the caller's own namespace
-// (never cross-namespace - the caller can only ever prove it, not other tenants) and
-// checks whether any of them, by name, derive the requested gitops repo under this
-// platform's gitops-<app-name> convention (see catalog/tasks/open-release-pr.yaml).
+// verifyTenantOwnsRepo lists PaC Repository CRs in the caller's own namespace (never
+// cross-namespace - the caller can only ever prove it, not other tenants) and checks
+// whether any of them, by name, match the requested repo either directly (the app's own
+// repo - needed by the ApplicationSet's pullRequest-generator token, which lists PRs on
+// the app repo itself, see docs/ephemeral-environments.md) or via this platform's
+// gitops-<app-name> convention (see catalog/tasks/open-release-pr.yaml, docs/release.md).
 // Deliberately does NOT trust the requested "owner" as part of this check - the app
 // name -> gitops repo mapping is owner-agnostic by design (a tenant's app-repo org and
 // its gitops-repo org don't have to match, same lesson learned the hard way earlier in
 // this platform's build re: tenant name vs. GitHub org - see docs/chaining.md).
-func verifyTenantOwnsGitOpsRepo(dynClient dynamic.Interface, tenantNamespace, requestedRepo string) error {
+func verifyTenantOwnsRepo(dynClient dynamic.Interface, tenantNamespace, requestedRepo string) error {
 	list, err := dynClient.Resource(repositoryGVR).Namespace(tenantNamespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("listing Repository CRs in %s: %w", tenantNamespace, err)
 	}
 	for _, item := range list.Items {
 		appName, _, _ := unstructured.NestedString(item.Object, "metadata", "name")
-		if appName != "" && "gitops-"+appName == requestedRepo {
+		if appName != "" && (appName == requestedRepo || "gitops-"+appName == requestedRepo) {
 			return nil
 		}
 	}
-	return fmt.Errorf("tenant namespace %q has no Repository CR that maps to gitops repo %q", tenantNamespace, requestedRepo)
+	return fmt.Errorf("tenant namespace %q has no Repository CR that maps to repo %q", tenantNamespace, requestedRepo)
 }
 
 func firstHeader(h map[string][]string, key string) string {

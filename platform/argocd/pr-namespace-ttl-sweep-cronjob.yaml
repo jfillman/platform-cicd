@@ -1,0 +1,97 @@
+# platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml
+#
+# Shared, platform-level CronJob (applied once, NOT a per-tenant template like the other
+# files in this directory) - deletes any platform.io/ephemeral-env=true namespace older
+# than 24h, regardless of which tenant/app it belongs to. One shared sweep across every
+# tenant, matching the same "one shared component, not one per tenant" pattern already
+# used for the CDEvents broker.
+#
+# This is a BACKSTOP, not the primary cleanup mechanism - the ApplicationSet's
+# resources-finalizer.argocd.argoproj.io (see tenant-ephemeral-envs-argocd-template.yaml)
+# is verified live to correctly cascade-delete a PR's namespace when its Application goes
+# away (PR closed/label removed). This sweep exists because the old cd-pipelines system's
+# equivalent mechanism (a working finalizer at some point) still failed in some way its
+# own commit history doesn't fully explain, and never got a working backstop either - a
+# real namespace lingering 24h despite the primary mechanism is far more likely to be
+# something stuck than a still-legitimately-open PR, so no live GitHub check is needed
+# here at all: just age + the label.
+#
+# RBAC here is cluster-scoped by necessity (Namespace has no namespaced form, same
+# unavoidable exception as the TokenReview interceptor's own TokenReview-creation grant)
+# but deliberately narrow: list/get/delete on namespaces only, nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pr-namespace-ttl-sweep
+  namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pr-namespace-ttl-sweep
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pr-namespace-ttl-sweep
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pr-namespace-ttl-sweep
+subjects:
+  - kind: ServiceAccount
+    name: pr-namespace-ttl-sweep
+    namespace: platform-system
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pr-namespace-ttl-sweep
+  namespace: platform-system
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: pr-namespace-ttl-sweep
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: sweep
+              image: ghcr.io/platform-cicd/toolbox:latest
+              imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              env:
+                - name: TTL_HOURS
+                  value: "24"
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  now_epoch="$(date -u +%s)"
+                  ttl_seconds=$(( TTL_HOURS * 3600 ))
+                  kubectl get namespaces -l platform.io/ephemeral-env=true -o json \
+                    | jq -r '.items[] | "\(.metadata.name) \(.metadata.creationTimestamp)"' \
+                    | while read -r ns created; do
+                        created_epoch="$(date -u -d "${created}" +%s)"
+                        age=$(( now_epoch - created_epoch ))
+                        if [ "${age}" -gt "${ttl_seconds}" ]; then
+                          echo "[ttl-sweep] deleting orphaned ephemeral namespace ${ns} (age ${age}s > ${ttl_seconds}s)"
+                          kubectl delete namespace "${ns}" --wait=false
+                        else
+                          echo "[ttl-sweep] ${ns} still within TTL (age ${age}s), leaving alone"
+                        fi
+                      done

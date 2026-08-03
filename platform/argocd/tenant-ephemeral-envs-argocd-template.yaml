@@ -1,0 +1,120 @@
+# platform/argocd/tenant-ephemeral-envs-argocd-template.yaml
+#
+# TEMPLATE - one copy applied per tenant at ephemeral-envs onboarding. Replace <TENANT>,
+# <APP_NAME>, <APP_REPO_URL>, <GITHUB_OWNER> throughout. See docs/ephemeral-environments.md.
+#
+# Ported from a real prior production pattern (gitops-main/charts/cd-pipelines-user's
+# appset-ephemeral-envs-pr.yaml, analyzed live) - the ApplicationSet pullRequest
+# generator itself is sound and worth keeping, but two supporting pieces in that old
+# system were confirmed broken, not just theoretically risky: cleanup was explicitly
+# disabled (a commented-out finalizer, never fixed - every PR namespace it ever created
+# was orphaned forever) and RBAC used cluster-admin for the controlling identity. Both
+# are fixed here, not repeated - see the finalizer note on the Namespace resource in
+# nodejs-demo-app's k8s/ephemeral/namespace.yaml, and the "No new elevated identity"
+# note below.
+#
+# This AppProject is the SAME one release.yaml's staging Application already uses
+# (platform/argocd/tenant-release-argocd-template.yaml) - one AppProject per tenant
+# covering every ArgoCD-managed environment, not one per feature. Applying this file
+# updates it in place (kubectl apply on the same object name), it does not create a
+# second, competing AppProject.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: <TENANT>
+  namespace: argocd
+spec:
+  description: Release-stage (staging) and PR-based ephemeral-environment deployments for <TENANT>.
+  sourceRepos:
+    - <GITOPS_REPO_URL>
+    - <APP_REPO_URL>
+  destinations:
+    - namespace: <TENANT>-staging
+      server: https://kubernetes.default.svc
+    - namespace: <TENANT>-pr-*
+      server: https://kubernetes.default.svc
+  # Namespace is cluster-scoped (unlike Deployment/Service) - needs to be in
+  # clusterResourceWhitelist, not namespaceResourceWhitelist, or ArgoCD blocks the sync
+  # of k8s/ephemeral/namespace.yaml outright regardless of the finalizer/tracked-resource
+  # fix. Still nothing else cluster-scoped is allowed.
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+  namespaceResourceWhitelist:
+    - { group: "apps", kind: Deployment }
+    - { group: "", kind: Service }
+---
+# The GitHub App installation token this generator reads is minted by a periodic CronJob
+# (pr-token-refresher-cronjob.yaml), not a long-lived PAT - see that file's comments. The
+# Secret is expected to already exist (created empty/bootstrapped) before the generator
+# starts polling; an empty/stale token just means a temporarily-failed poll, not a crash.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: <APP_NAME>-pr-envs
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=invalid"]
+  generators:
+    - pullRequest:
+        github:
+          owner: <GITHUB_OWNER>
+          repo: <APP_NAME>
+          tokenRef:
+            secretName: <APP_NAME>-pr-generator-token
+            key: token
+          # Opt-in only - matches the old system's own default and avoids spinning up a
+          # full namespace+Deployment for every WIP/typo-fix PR. A developer adds this
+          # label when they actually want a live preview.
+          labels:
+            - preview
+        requeueAfterSeconds: 180
+  template:
+    metadata:
+      name: "<APP_NAME>-pr-{{.number}}"
+      # Verified live before relying on this (see the plan's Phase 2 Item 3
+      # verification section): only cascade-deletes correctly if the Namespace is a
+      # tracked resource (k8s/ephemeral/namespace.yaml), not just a CreateNamespace=true
+      # side effect - CreateNamespace=true is deliberately NOT set below for that reason.
+      # This belongs under metadata, not spec - finalizers is a standard Kubernetes
+      # object field on every resource, not something ApplicationSet defines itself.
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: <TENANT>
+      source:
+        repoURL: <APP_REPO_URL>
+        targetRevision: "{{.head_sha}}"
+        path: k8s/ephemeral
+        kustomize:
+          nameSuffix: "-{{.number}}"
+          # build-image.yaml (platform-cicd's shared catalog Task) already tags every
+          # build ghcr.io/.../<app>-pr:<12-char-sha> - trunc 12 here matches that exactly
+          # so this points at a real, already-pushed image, not a guess. See
+          # docs/ephemeral-environments.md for why this needed Sprig's trunc rather than
+          # ArgoCD's own head_short_sha (8 chars, doesn't match this platform's 12).
+          images:
+            - "ghcr.io/<GITHUB_OWNER>/<APP_NAME>-pr:{{ trunc 12 .head_sha }}"
+          # Kustomize's nameSuffix transformer deliberately excludes Namespace objects
+          # (verified live via `kubectl kustomize` - Namespace is on Kustomize's own
+          # built-in name-transform exclusion list) - so without this patch, the
+          # Namespace stays "<TENANT>-pr" while Deployment/Service are deployed into
+          # "<TENANT>-pr-{{.number}}" via destination.namespace below: a namespace that
+          # never matches, so the sync fails with "namespace ... not found". This JSON6902
+          # patch renames the Namespace object directly, independent of nameSuffix, to
+          # the same "<TENANT>-pr-{{.number}}" value destination.namespace already uses.
+          patches:
+            - target:
+                kind: Namespace
+                name: <TENANT>-pr
+              patch: |-
+                - op: replace
+                  path: /metadata/name
+                  value: <TENANT>-pr-{{.number}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "<TENANT>-pr-{{.number}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
