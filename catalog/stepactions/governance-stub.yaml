@@ -19,6 +19,14 @@
 # never landed anywhere, and even if it had, TraceQL's `name =` matches spans, not span
 # events, so pipeline-detail.json's governance panel could never have found it either
 # way. A real, standalone child span (otel_child_span) fixes both problems at once.
+#
+# flow-traceparent/stage-span-id are optional (default "") because this same StepAction
+# is now also called from PR-triggered governance checks on a tenant's GitOps repo (see
+# docs/release.md) - those checks have no flow/stage context at all, since they're not
+# part of the CDEvents-chained PipelineRun sequence, just an independent, human-paced PR
+# review. Emitting a span there would mean inventing a fake parent trace, which is worse
+# than not tracing at all - so span emission is skipped entirely (real stub work and
+# logging still happen) whenever flow-traceparent is empty.
 apiVersion: tekton.dev/v1beta1
 kind: StepAction
 metadata:
@@ -33,10 +41,12 @@ spec:
       description: e.g. sast, image-scan, policy-check, sbom.
     - name: flow-traceparent
       type: string
-      description: Root traceparent for the whole flow - gives this span its trace id.
+      default: ""
+      description: Root traceparent for the whole flow - gives this span its trace id. Leave empty when there's no flow/stage context (e.g. a PR-triggered GitOps-repo check) - span emission is skipped in that case.
     - name: stage-span-id
       type: string
-      description: The current stage's own span id (from otel_stage_span_begin) - this stub's span is parented to it.
+      default: ""
+      description: The current stage's own span id (from otel_stage_span_begin) - this stub's span is parented to it. Ignored when flow-traceparent is empty.
   results:
     - name: outcome
       description: Always "stub" in this phase of the platform - never "passed"/"failed", which would misrepresent a stub as a real enforcement result.
@@ -54,5 +64,9 @@ spec:
     set -euo pipefail
     source "${PLATFORM_LIB}/otel.sh"
     echo "[governance-stub] gate=$1 - no real check implemented yet, see docs/governance-stubs.md" >&2
-    otel_child_span "governance:$1" "$2" "$3" "governance.gate=$1,governance.stub=true" -- true
+    if [[ -n "$2" ]]; then
+      otel_child_span "governance:$1" "$2" "$3" "governance.gate=$1,governance.stub=true" -- true
+    else
+      echo "[governance-stub] no flow-traceparent provided - skipping span emission (this is expected for PR-triggered GitOps-repo checks)" >&2
+    fi
     echo -n "stub" | tee "$(step.results.outcome.path)"

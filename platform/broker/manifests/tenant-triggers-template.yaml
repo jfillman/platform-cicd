@@ -257,3 +257,89 @@ spec:
     - { ref: cdevents-testcaserun-finished }
   template:
     ref: fire-deploy
+
+---
+# --- Stage 4: deploy succeeded -> fire release --------------------------------
+# No outcome field to check here (unlike on-test-success) - deploy.yaml's send-cdevent
+# task is itself gated on $(tasks.status) being Succeeded/Completed before it ever
+# fires, so the event's mere existence already implies success, same as build's
+# artifact.published event.
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: cdevents-service-deployed
+  namespace: <TENANT>
+spec:
+  params:
+    - { name: image-ref, value: "$(body.subject.content.artifactId)" }
+    - { name: git-url, value: "$(body.subject.content.git-url)" }
+    - { name: git-revision, value: "$(body.subject.content.revision)" }
+    - { name: chain-id, value: "$(body.context.chainId)" }
+    - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
+    - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
+    - { name: pipeline-run-name, value: "release-$(body.context.id)" }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: fire-release
+  namespace: <TENANT>
+spec:
+  params:
+    - name: image-ref
+    - name: git-url
+    - name: git-revision
+    - name: chain-id
+    - name: traceparent
+    - name: flow-start-time
+    - name: pipeline-run-name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        name: $(tt.params.pipeline-run-name)
+      spec:
+        pipelineRef:
+          resolver: cluster
+          params:
+            - { name: kind, value: pipeline }
+            - { name: name, value: release }
+            - { name: namespace, value: platform-catalog }
+        params:
+          # See fire-test's identical comment above - git-url comes from the CDEvent,
+          # not reconstructed from <TENANT>/<APP_NAME>.
+          - { name: git-url, value: $(tt.params.git-url) }
+          - { name: git-revision, value: $(tt.params.git-revision) }
+          - { name: image-ref, value: $(tt.params.image-ref) }
+          - { name: tenant, value: <TENANT> }
+          - { name: app-name, value: <APP_NAME> }
+          - { name: flow-traceparent, value: $(tt.params.traceparent) }
+          - { name: chain-id, value: $(tt.params.chain-id) }
+          - { name: flow-start-time, value: $(tt.params.flow-start-time) }
+        workspaces:
+          - name: source
+            volumeClaimTemplate:
+              spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: 1Gi } } }
+        taskRunTemplate: { serviceAccountName: pipeline-runner }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: on-deploy-success
+  namespace: <TENANT>
+spec:
+  serviceAccountName: pipeline-runner
+  interceptors:
+    - ref: { name: cdevents-broker-auth, kind: ClusterInterceptor }
+      params: [{ name: audience, value: cdevents-broker }]
+    - ref: { name: cel, kind: ClusterInterceptor }
+      params:
+        - name: filter
+          value: >-
+            body.context.type == 'dev.cdevents.service.deployed.0.3.0' &&
+            extensions.tenant_namespace == '<TENANT>' &&
+            body.context.source.startsWith('/platform-cicd/<TENANT>/')
+  bindings:
+    - { ref: cdevents-service-deployed }
+  template:
+    ref: fire-release

@@ -1,0 +1,58 @@
+# platform/argocd/tenant-release-argocd-template.yaml
+#
+# TEMPLATE - one copy applied per tenant at release-stage onboarding (same hand-applied
+# pattern as tenant-triggers-template.yaml; a Crossplane composition renders both in
+# Phase 3 - see docs/onboarding.md). Replace <TENANT>, <APP_NAME>, and
+# <GITOPS_REPO_URL> throughout (the gitops repo URL, e.g.
+# https://github.com/jfillman/gitops-nodejs-demo-app).
+#
+# Scoped AppProject rather than reusing the cluster's existing `default` project
+# (unscoped - any Application in it can sync anything, from any source, anywhere) -
+# consistent with how every other identity in this platform is narrowly scoped
+# (TokenReview broker auth, per-tenant impersonation grants, read-only Tekton
+# Dashboard). This tenant's Application can only ever source from its own one gitops
+# repo and only ever deploy into its own one staging namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: <TENANT>
+  namespace: argocd
+spec:
+  description: Release-stage (staging) deployments for <TENANT>, scoped to its own GitOps repo and namespace only.
+  sourceRepos:
+    - <GITOPS_REPO_URL>
+  destinations:
+    - namespace: <TENANT>-staging
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist: [] # no cluster-scoped resources - Deployment/Service only, both namespaced
+  namespaceResourceWhitelist:
+    - { group: "apps", kind: Deployment }
+    - { group: "", kind: Service }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: <TENANT>-staging
+---
+# No pipeline-runner RBAC needed in this namespace, unlike <TENANT>-<ENV> for dev (see
+# tenant-env-rbac-template.yaml) - the release Pipeline never touches the cluster
+# directly for this tier, only ArgoCD's own (already cluster-capable) identity does,
+# once a human has approved the GitOps PR. See docs/release.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: <APP_NAME>-staging
+  namespace: argocd
+spec:
+  project: <TENANT>
+  source:
+    repoURL: <GITOPS_REPO_URL>
+    targetRevision: main
+    path: <APP_NAME>/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: <TENANT>-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -1,0 +1,115 @@
+# catalog/tasks/open-release-pr.yaml
+#
+# Opens a PR against the tenant's GitOps repo, promoting the already-built (never
+# rebuilt) image to staging - the actual GitOps-repo->cluster deploy happens later,
+# driven entirely by ArgoCD once the PR merges (see platform/argocd/ manifests). This
+# Task never touches the cluster directly.
+#
+# Ported from a real prior production pattern (analyzed live from
+# gitops-main/charts/cd-pipelines' task-gitops-deploy-yq.yaml/task-create-pr.yaml - see
+# docs/release.md): a surgical `yq` patch of the image field, not a full manifest
+# re-render, then a plain GitHub REST API PR creation call. The credential is different
+# though - the old system used a long-lived, separately-minted static-ish token; this
+# uses a fresh, single-repo-scoped GitHub App installation token minted per-run via the
+# shared broker (see catalog/lib/github-app.sh), so nothing this Task holds could reach
+# any repo beyond the one gitops repo it was authorized for.
+#
+# GitOps repo is resolved by convention - gitops-<app-name>, same GitHub org as the
+# app's own git-url - rather than a new cicd.yaml field, deliberately not assuming
+# tenant-namespace == org (see tenant-triggers-template.yaml's git-url comment for why
+# that assumption already broke once in this platform).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: open-release-pr
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: image-ref
+      type: string
+      description: The already-built image reference (by digest) to promote to staging.
+    - name: git-url
+      type: string
+      description: The app repo's git-url - only its GitHub org/owner is used, to derive the gitops repo's owner.
+    - name: app-name
+      type: string
+    - name: git-revision
+      type: string
+  results:
+    - name: pr-url
+      description: URL of the opened (or already-open, on retry) release PR.
+  # Audience-bound projected ServiceAccount token for the shared broker's GitHub
+  # token-minting endpoint - see catalog/lib/github-app.sh. Same pattern as
+  # send-cdevent.yaml's broker-token volume, different audience/endpoint.
+  volumes:
+    - name: github-token-broker-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: github-token-broker-token
+              audience: github-installation-token
+              expirationSeconds: 600
+  steps:
+    - name: open-pr
+      image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      volumeMounts:
+        - name: github-token-broker-token
+          mountPath: /var/run/secrets/platform
+          readOnly: true
+      env:
+        - name: GITHUB_TOKEN_BROKER_URL
+          value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: APP_NAME
+          value: $(params.app-name)
+        - name: GIT_REVISION
+          value: $(params.git-revision)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        source "${PLATFORM_LIB}/github-app.sh"
+
+        # GIT_URL is "https://github.com/<owner>/<repo>[.git]" - only the owner segment
+        # is used; the gitops repo's own name is always gitops-<app-name> by convention.
+        owner="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        gitops_repo="gitops-${APP_NAME}"
+
+        token="$(github_app_installation_token "${owner}" "${gitops_repo}")"
+
+        workdir="$(mktemp -d)"
+        clone_url="https://x-access-token:${token}@github.com/${owner}/${gitops_repo}.git"
+        git clone --quiet "${clone_url}" "${workdir}/repo"
+        cd "${workdir}/repo"
+
+        branch="release-${GIT_REVISION:0:8}-$(date +%s)"
+        git checkout -b "${branch}"
+
+        manifest="${APP_NAME}/staging/deployment.yaml"
+        yq -i -e ".spec.template.spec.containers[0].image = \"${IMAGE_REF}\"" "${manifest}"
+
+        git config user.name "platform-cicd release automation"
+        git config user.email "release@platform-cicd.invalid"
+        git commit --quiet -am "Release: promote ${APP_NAME} to staging @ ${IMAGE_REF}"
+        git push --quiet "${clone_url}" "${branch}"
+
+        pr_body_text="$(printf 'Automated release PR - promotes %s to staging.\n\nImage: `%s`\nRevision: `%s`\n\nMerging this PR triggers ArgoCD to sync it to staging. See docs/release.md.' \
+          "${APP_NAME}" "${IMAGE_REF}" "${GIT_REVISION}")"
+        pr_body="$(jq -n \
+          --arg title "Release: ${APP_NAME} @ ${GIT_REVISION}" \
+          --arg body "${pr_body_text}" \
+          --arg head "${branch}" \
+          --arg base "main" \
+          '{title: $title, body: $body, head: $head, base: $base}')"
+
+        pr_response="$(curl --fail --silent --show-error \
+          -X POST -H "Authorization: Bearer ${token}" \
+          -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/repos/${owner}/${gitops_repo}/pulls" \
+          -d "${pr_body}")"
+
+        jq -r '.html_url' <<<"${pr_response}" | tee "$(results.pr-url.path)"

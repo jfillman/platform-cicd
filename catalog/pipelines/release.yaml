@@ -1,0 +1,145 @@
+# catalog/pipelines/release.yaml
+#
+# Fourth stage of the flow, and the last automated one. Fired by the shared broker on
+# the deploy Pipeline's dev.cdevents.service.deployed event (previously unconsumed).
+# Opens a PR against the tenant's GitOps repo promoting the already-built image to
+# staging - see catalog/tasks/open-release-pr.yaml and docs/release.md for the full
+# GitOps-PR-promotion design, ported from a real prior production pattern.
+#
+# Deliberately does NOT deploy anything itself, and does NOT run governance checks
+# inline - governance (sast/image-scan/policy-check/sbom) now runs as independent,
+# individually-required GitHub Checks triggered by the PR itself (see the gitops repo's
+# own .tekton/pull_request-*.yaml files, reusing the same governance-gate-stub Task).
+# ArgoCD is the only thing that ever touches the staging cluster for this tier, and only
+# once a human has approved the PR per that repo's branch protection rule - see
+# docs/release.md.
+#
+# This is also where the flow-root span - covering the entire build->test->deploy->
+# release run - is finally sent (see end-flow-root-span.yaml), since release is now the
+# last stage in the chain. Note this measures the AUTOMATED portion of the flow only
+# (through PR-open); the PR's own review/merge/ArgoCD-sync afterward is unbounded human-
+# process time, not pipeline execution time, and deliberately isn't part of this trace -
+# see docs/tracing.md.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: release
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: image-ref
+      type: string
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+    - name: flow-traceparent
+      type: string
+    - name: chain-id
+      type: string
+    - name: flow-start-time
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone-repo
+      taskRef:
+        resolver: hub
+        params:
+          - { name: catalog, value: git-clone }
+          - { name: kind, value: task }
+          - { name: name, value: git-clone }
+          - { name: version, value: "1.7.0" }
+      workspaces:
+        - { name: output, workspace: source }
+      params:
+        - { name: url, value: $(params.git-url) }
+        - { name: revision, value: $(params.git-revision) }
+
+    - name: validate-config
+      runAfter: [clone-repo]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: validate-cicd-config }
+          - { name: namespace, value: platform-catalog }
+      workspaces:
+        - { name: source, workspace: source }
+
+    - name: start-release-stage-span
+      runAfter: [validate-config]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: start-stage-span }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+
+    - name: open-release-pr
+      runAfter: [start-release-stage-span]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: open-release-pr }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: image-ref, value: $(params.image-ref) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: git-revision, value: $(params.git-revision) }
+
+  finally:
+    - name: end-release-stage-span
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: end-stage-span }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: stage-name, value: release }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: span-id, value: $(tasks.start-release-stage-span.results.span-id) }
+        - { name: start-time, value: $(tasks.start-release-stage-span.results.start-time) }
+        - { name: status, value: $(tasks.status) }
+
+    # Release is the last stage in the flow's chain (Phase 2) - this is where the
+    # flow-root span, covering the entire build->test->deploy->release run, is finally
+    # sent. This call moved here from deploy.yaml's finally block when this stage was
+    # added - see deploy.yaml's git history / docs/tracing.md.
+    - name: end-flow
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: end-flow-root-span }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: flow-name, value: "$(params.tenant)/$(params.app-name)" }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: status, value: $(tasks.status) }
+
+    - name: notify
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: notify-slack }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: stage-name, value: release }
+        - { name: status, value: $(tasks.status) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tenant, value: $(params.tenant) }

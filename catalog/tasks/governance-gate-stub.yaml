@@ -18,9 +18,12 @@ spec:
       type: string
     - name: flow-traceparent
       type: string
+      default: ""
+      description: Leave empty when there's no flow/stage context (e.g. a PR-triggered GitOps-repo check) - see governance-stub.yaml.
     - name: stage-span-id
       type: string
-      description: The calling stage's own span id (from start-stage-span) - this gate's span is parented to it.
+      default: ""
+      description: The calling stage's own span id (from start-stage-span) - this gate's span is parented to it. Ignored when flow-traceparent is empty.
   results:
     - name: outcome
       value: $(steps.stub.results.outcome)

@@ -14,6 +14,13 @@
 // CDEvent's declared source namespace. That check, not network topology, is the real
 // tenant-isolation boundary on this shared broker - see docs/chaining.md.
 //
+// This service also mints scoped GitHub App installation tokens for the release stage's
+// GitOps PR flow (see github_app.go and handleGitHubInstallationToken below) - a scope
+// extension of this same trusted, TokenReview-authenticated component rather than a new
+// service, since the alternative (copying the App's private key into every tenant
+// namespace) would let one compromised tenant Task mint tokens for every tenant's repos.
+// See docs/release.md.
+//
 // NOTE: the request/response JSON shape below mirrors the documented Tekton Triggers
 // ClusterInterceptor webhook contract (InterceptorRequest/InterceptorResponse). Re-
 // verify field names against whichever Triggers version is pinned in Phase 0 before
@@ -23,15 +30,24 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
+
+// The PaC Repository CRD - read-only, used only to check "does this tenant actually own
+// an app that resolves to the gitops repo it's asking a token for" (see
+// handleGitHubInstallationToken). Never written to.
+var repositoryGVR = schema.GroupVersionResource{Group: "pipelinesascode.tekton.dev", Version: "v1alpha1", Resource: "repositories"}
 
 type interceptorRequest struct {
 	Body              string                 `json:"body"`
@@ -90,9 +106,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("building clientset: %v", err)
 	}
+	dynClient, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Fatalf("building dynamic client: %v", err)
+	}
+
+	// Loaded once at startup, not lazily per-request: fail fast and loudly if the
+	// github-app-creds volume isn't mounted correctly, rather than only discovering it
+	// on the first release PR attempt.
+	appCreds, err := loadGitHubAppCreds()
+	if err != nil {
+		log.Fatalf("loading GitHub App credentials: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handle(clientset))
+	mux.HandleFunc("/github-installation-token", handleGitHubInstallationToken(clientset, dynClient, appCreds))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	log.Println("cdevents-broker-auth interceptor listening on :8080 (plain HTTP - see comment above)")
@@ -112,36 +141,17 @@ func handle(clientset kubernetes.Interface) http.HandlerFunc {
 			audience = defaultAudience
 		}
 
-		authHeader := firstHeader(req.Header, "Authorization")
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token == "" || token == authHeader {
+		token := bearerToken(firstHeader(req.Header, "Authorization"))
+		if token == "" {
 			writeJSON(w, interceptorResponse{Continue: false, Status: status{Code: codeUnauthenticated, Message: "missing or malformed Authorization: Bearer <token> header"}})
 			return
 		}
 
-		review := &authenticationv1.TokenReview{
-			Spec: authenticationv1.TokenReviewSpec{
-				Token:     token,
-				Audiences: []string{audience},
-			},
-		}
-		result, err := clientset.AuthenticationV1().TokenReviews().Create(context.Background(), review, metav1.CreateOptions{})
-		if err != nil {
-			writeJSON(w, interceptorResponse{Continue: false, Status: status{Code: codeUnauthenticated, Message: "TokenReview call failed: " + err.Error()}})
+		tenantNamespace, authErr := verifyCallerTenantNamespace(clientset, token, audience)
+		if authErr != "" {
+			writeJSON(w, interceptorResponse{Continue: false, Status: status{Code: codeUnauthenticated, Message: authErr}})
 			return
 		}
-		if !result.Status.Authenticated {
-			writeJSON(w, interceptorResponse{Continue: false, Status: status{Code: codeUnauthenticated, Message: "token not authenticated: " + result.Status.Error}})
-			return
-		}
-
-		// SA-token usernames are "system:serviceaccount:<namespace>:<name>".
-		parts := strings.Split(result.Status.User.Username, ":")
-		if len(parts) != 4 || parts[0] != "system" || parts[1] != "serviceaccount" {
-			writeJSON(w, interceptorResponse{Continue: false, Status: status{Code: codeUnauthenticated, Message: "caller is not a ServiceAccount identity"}})
-			return
-		}
-		tenantNamespace := parts[2]
 
 		writeJSON(w, interceptorResponse{
 			Continue:   true,
@@ -149,6 +159,135 @@ func handle(clientset kubernetes.Interface) http.HandlerFunc {
 			Status:     status{Code: codeOK},
 		})
 	}
+}
+
+// verifyCallerTenantNamespace runs the same TokenReview check the CDEvents broker path
+// uses, shared with handleGitHubInstallationToken below - one trust primitive, two
+// callers. Returns the caller's namespace, or an empty namespace + a human-readable
+// error message on any failure.
+func verifyCallerTenantNamespace(clientset kubernetes.Interface, token, audience string) (namespace string, errMsg string) {
+	review := &authenticationv1.TokenReview{
+		Spec: authenticationv1.TokenReviewSpec{
+			Token:     token,
+			Audiences: []string{audience},
+		},
+	}
+	result, err := clientset.AuthenticationV1().TokenReviews().Create(context.Background(), review, metav1.CreateOptions{})
+	if err != nil {
+		return "", "TokenReview call failed: " + err.Error()
+	}
+	if !result.Status.Authenticated {
+		return "", "token not authenticated: " + result.Status.Error
+	}
+
+	// SA-token usernames are "system:serviceaccount:<namespace>:<name>".
+	parts := strings.Split(result.Status.User.Username, ":")
+	if len(parts) != 4 || parts[0] != "system" || parts[1] != "serviceaccount" {
+		return "", "caller is not a ServiceAccount identity"
+	}
+	return parts[2], ""
+}
+
+func bearerToken(authHeader string) string {
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == authHeader {
+		return "" // no "Bearer " prefix present
+	}
+	return token
+}
+
+type githubInstallationTokenRequest struct {
+	Owner string `json:"owner"`
+	Repo  string `json:"repo"`
+}
+
+type githubInstallationTokenResponse struct {
+	Token     string `json:"token,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// handleGitHubInstallationToken mints a GitHub App installation token scoped to exactly
+// one repo, for a caller whose own tenant namespace genuinely owns an app that maps to
+// that repo by the platform's gitops-<app-name> convention - see docs/release.md. This
+// is the authorization check referenced in the plan: it's not enough that the caller
+// presents a valid ServiceAccount token (that only proves *which* tenant is asking),
+// the tenant also has to actually have a PaC Repository CR whose name derives the exact
+// gitops repo being requested. Deliberately narrow (list, not any write verb) RBAC on
+// repositories.pipelinesascode.tekton.dev is all this needs from its own ServiceAccount.
+func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dynamic.Interface, appCreds *githubAppCreds) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		token := bearerToken(r.Header.Get("Authorization"))
+		if token == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: "missing or malformed Authorization: Bearer <token> header"})
+			return
+		}
+		tenantNamespace, authErr := verifyCallerTenantNamespace(clientset, token, "github-installation-token")
+		if authErr != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: authErr})
+			return
+		}
+
+		var body githubInstallationTokenRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Owner == "" || body.Repo == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: "request body must be {\"owner\":..., \"repo\":...}"})
+			return
+		}
+
+		if err := verifyTenantOwnsGitOpsRepo(dynClient, tenantNamespace, body.Repo); err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: err.Error()})
+			return
+		}
+
+		appJWT, err := appCreds.signAppJWT()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: "signing App JWT: " + err.Error()})
+			return
+		}
+		installationID, err := installationIDForRepo(appJWT, body.Owner, body.Repo)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: err.Error()})
+			return
+		}
+		instToken, expiresAt, err := mintInstallationToken(appJWT, installationID, body.Repo)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: err.Error()})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Token: instToken, ExpiresAt: expiresAt})
+	}
+}
+
+// verifyTenantOwnsGitOpsRepo lists PaC Repository CRs in the caller's own namespace
+// (never cross-namespace - the caller can only ever prove it, not other tenants) and
+// checks whether any of them, by name, derive the requested gitops repo under this
+// platform's gitops-<app-name> convention (see catalog/tasks/open-release-pr.yaml).
+// Deliberately does NOT trust the requested "owner" as part of this check - the app
+// name -> gitops repo mapping is owner-agnostic by design (a tenant's app-repo org and
+// its gitops-repo org don't have to match, same lesson learned the hard way earlier in
+// this platform's build re: tenant name vs. GitHub org - see docs/chaining.md).
+func verifyTenantOwnsGitOpsRepo(dynClient dynamic.Interface, tenantNamespace, requestedRepo string) error {
+	list, err := dynClient.Resource(repositoryGVR).Namespace(tenantNamespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("listing Repository CRs in %s: %w", tenantNamespace, err)
+	}
+	for _, item := range list.Items {
+		appName, _, _ := unstructured.NestedString(item.Object, "metadata", "name")
+		if appName != "" && "gitops-"+appName == requestedRepo {
+			return nil
+		}
+	}
+	return fmt.Errorf("tenant namespace %q has no Repository CR that maps to gitops repo %q", tenantNamespace, requestedRepo)
 }
 
 func firstHeader(h map[string][]string, key string) string {

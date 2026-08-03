@@ -1,10 +1,10 @@
 # catalog/pipelines/deploy.yaml
 #
-# Third stage of the Phase 1 flow. Fired by the shared broker on the test Pipeline's
-# dev.cdevents.testcaserun.finished (outcome=success) event. Phase 1 scope deploys to a
-# single lower environment (dev) via direct kubectl - see the note in
-# catalog/tasks/deploy-manifests.yaml about why upper-environment GitOps-PR promotion is
-# explicitly deferred to a later phase rather than half-built here.
+# Third stage of the flow (of four - see release.yaml). Fired by the shared broker on
+# the test Pipeline's dev.cdevents.testcaserun.finished (outcome=success) event. Deploys
+# to a single lower environment (dev) via direct kubectl - deliberately not GitOps/PR-
+# gated, unlike release.yaml's promotion to staging: dev is optimized for fast inner-loop
+# feedback, not governance. See catalog/tasks/deploy-manifests.yaml and docs/release.md.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -127,25 +127,6 @@ spec:
         - { name: start-time, value: $(tasks.start-deploy-stage-span.results.start-time) }
         - { name: status, value: $(tasks.status) }
 
-    # Deploy is currently the LAST stage in the flow's fixed Phase 1 chain (no release
-    # stage yet - see platform/broker/manifests/tenant-triggers-template.yaml), so this
-    # is where the flow-root span - covering the entire build->test->deploy run - is
-    # finally sent. When Phase 2 adds a release stage after deploy, this task must move
-    # from here to release.yaml's finally block, or the flow-root span will close at
-    # deploy's finish time instead of the flow's real end. See end-flow-root-span.yaml.
-    - name: end-flow
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: end-flow-root-span }
-          - { name: namespace, value: platform-catalog }
-      params:
-        - { name: flow-name, value: "$(params.tenant)/$(params.app-name)" }
-        - { name: flow-traceparent, value: $(params.flow-traceparent) }
-        - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: status, value: $(tasks.status) }
-
     - name: notify
       taskRef:
         resolver: cluster
@@ -173,7 +154,7 @@ spec:
         - { name: event-type, value: "dev.cdevents.service.deployed.0.3.0" }
         - name: subject-content-json
           value: >-
-            {"environment": {"id": "$(params.env)"}, "artifactId": "$(params.image-ref)"}
+            {"environment": {"id": "$(params.env)"}, "artifactId": "$(params.image-ref)", "git-url": "$(params.git-url)", "revision": "$(params.git-revision)"}
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
