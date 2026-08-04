@@ -46,6 +46,7 @@ platform/broker/   the internal CDEvents relay: EventListener + TokenReview inte
 observability/     dashboards + reference Helm values; observability/kind-observe/ is what's actually applied (see docs/bootstrap.md)
 schemas/           cicd.schema.json - the developer-facing config contract
 onboarding-templates/.tekton/   boilerplate PaC trigger files generated per app repo
+onboarding-templates/.tekton-gitops/   boilerplate PaC governance-check files generated per gitops repo (release stage)
 hack/              bootstrap against the shared kind-observe dev cluster
 docs/              design docs - read chaining.md and tracing.md first
 ```

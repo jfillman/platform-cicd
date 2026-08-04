@@ -61,8 +61,16 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    ```
 
 2. **Create the `gitops-<app-name>` repo on GitHub** (e.g. `gitops-nodejs-demo-app`).
-   Push the scaffolded content provided alongside this doc: `<app-name>/staging/deployment.yaml`
-   + `service.yaml`, and the four `.tekton/pull-request-*.yaml` governance-check files.
+   Push `<app-name>/staging/deployment.yaml` + `service.yaml` (adapted from the app's own
+   dev manifests), and the four governance-check files from
+   `onboarding-templates/.tekton-gitops/` into the new repo's `.tekton/` directory -
+   `pull-request-sast.yaml`/`-image-scan.yaml`/`-sbom.yaml` are fully generic as-is;
+   `pull-request-policy-check.yaml` needs `<TENANT>`/`<APP_NAME>` substituted:
+   ```
+   sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
+     onboarding-templates/.tekton-gitops/pull-request-policy-check.yaml \
+     > <path-to-gitops-repo>/.tekton/pull-request-policy-check.yaml
+   ```
 
 3. **Install the PaC GitHub App on the new repo.** While there, check its permissions
    include `Contents: Read & write` and `Pull requests: Read & write` - PaC's own needs

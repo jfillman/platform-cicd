@@ -1,0 +1,34 @@
+# .tekton/pull-request-sast.yaml
+#
+# BOILERPLATE - one of four near-identical PR-check files (see also
+# pull-request-image-scan.yaml, pull-request-policy-check.yaml, pull-request-sbom.yaml).
+# Each references platform-cicd's shared governance-check Pipeline (which just runs the
+# governance-gate-stub Task) with a different gate-name, so each reports as its own
+# independently-required, independently-re-triggerable GitHub Check on this repo's PRs -
+# see platform-cicd's docs/release.md. All four are currently stubs (governance.stub=true
+# in the resulting trace/dashboard) - see platform-cicd's docs/governance-stubs.md for
+# why that's a structural, loud fact rather than silently theater.
+#
+# No <TENANT>/<APP_NAME> substitution needed - unlike pull-request-policy-check.yaml,
+# this file is fully generic as-is.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: sast
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: governance-check }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: gate-name, value: sast }
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "10m"

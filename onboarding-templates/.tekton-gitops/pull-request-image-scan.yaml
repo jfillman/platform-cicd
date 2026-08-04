@@ -1,0 +1,23 @@
+# .tekton/pull-request-image-scan.yaml - see pull-request-sast.yaml for the full
+# explanation. No <TENANT>/<APP_NAME> substitution needed - fully generic as-is.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: image-scan
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: governance-check }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: gate-name, value: image-scan }
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "10m"

@@ -1,0 +1,38 @@
+# .tekton/pull-request-policy-check.yaml
+#
+# Unlike pull-request-sast.yaml/-image-scan.yaml/-sbom.yaml (still stubs), this is the
+# real (Phase 3 item 2) policy-check gate - repointed from the shared governance-check
+# stub Pipeline to the dedicated policy-check Pipeline
+# (platform-cicd's catalog/pipelines/policy-check.yaml), which verifies the app-repo
+# commit's gitsign signature against this tenant's allowed-signers list. See
+# platform-cicd's docs/commit-signing.md.
+#
+# repo-url/revision are PaC's own {{ repo_url }}/{{ revision }} template variables for
+# THIS gitops repo's PR - already a proven, real pattern in this platform (used the same
+# way in nodejs-demo-app's own .tekton/*.yaml files). tenant/app-name are static, plain
+# values for this one app - generated once at onboarding (substitute <TENANT>/<APP_NAME>
+# below), not something a developer hand-edits.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: policy-check
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: policy-check }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: revision, value: "{{ revision }}" }
+    - { name: tenant, value: "<TENANT>" }
+    - { name: app-name, value: "<APP_NAME>" }
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "10m"
