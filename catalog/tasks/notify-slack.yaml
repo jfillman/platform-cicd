@@ -2,9 +2,19 @@
 #
 # Best-effort pipeline-result notification. Reads notifications.slack from cicd.yaml;
 # no-ops cleanly if disabled or unconfigured. The webhook URL is resolved from a
-# per-tenant Secret (populated by External Secrets Operator at onboarding), never
-# hardcoded in catalog YAML - the old platform's hardcoded Testkube API keys in shared
-# Pipeline templates are exactly the mistake this avoids.
+# per-tenant Secret, never hardcoded in catalog YAML - the old platform's hardcoded
+# Testkube API keys in shared Pipeline templates are exactly the mistake this avoids.
+#
+# A real bug lived here until Phase 3 item 3: the script always read
+# /var/run/secrets/platform/slack-webhook-url, but this Task never actually declared a
+# volume/volumeMount for it - so even a tenant that fully configured
+# notifications.slack.enabled: true and created the Secret exactly as this comment
+# describes would still never get a real notification, silently swallowed by the
+# script's own graceful "no secret mounted" skip path. See docs/notifications.md for the
+# fix and the one-time-per-tenant onboarding step. The Secret volume is `optional: true`
+# deliberately - most tenants won't have this Secret at all, and the pod must still start
+# cleanly for them (matches the script's own existing graceful-skip behavior for that
+# case, not a new failure mode).
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -24,10 +34,24 @@ spec:
       type: string
     - name: tenant
       type: string
+  volumes:
+    - name: slack-webhook
+      secret:
+        secretName: slack-webhook-url
+        optional: true
   steps:
     - name: notify
       image: ghcr.io/platform-cicd/toolbox:latest
       imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      volumeMounts:
+        - name: slack-webhook
+          mountPath: /var/run/secrets/platform
+          readOnly: true
+      env:
+        - name: TENANT
+          value: $(params.tenant)
+        - name: PIPELINE_RUN_NAME
+          value: $(params.pipeline-run-name)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -43,10 +67,33 @@ spec:
           echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this tenant - skipping, not failing the pipeline" >&2
           exit 0
         fi
+
+        text="[${TENANT}] $(params.stage-name) $(params.status): ${PIPELINE_RUN_NAME}"
+
+        # Failure log excerpt - only attempted when this run didn't succeed. Not gated
+        # more narrowly than that (Cancelled/Timeout included too) since a short excerpt
+        # of whatever the last-running step logged is still useful context, not just for
+        # a clean "Failed" outcome. See docs/notifications.md for why this needed no new
+        # RBAC - pipeline-runner's existing Role already covers taskruns/pods/pods-log.
+        status="$(params.status)"
+        if [[ "${status}" != "Succeeded" && "${status}" != "Completed" ]]; then
+          failed_taskrun="$(kubectl get taskrun -n "${TENANT}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json \
+            | jq -r '[.items[] | select(.status.conditions[0].status == "False")][0].metadata.name // empty')"
+          if [[ -n "${failed_taskrun}" ]]; then
+            pod_name="$(kubectl get taskrun "${failed_taskrun}" -n "${TENANT}" -o jsonpath='{.status.podName}' 2>/dev/null || true)"
+            if [[ -n "${pod_name}" ]]; then
+              log_excerpt="$(kubectl logs "${pod_name}" -n "${TENANT}" --all-containers --tail=30 2>/dev/null | tail -c 1500 || true)"
+              if [[ -n "${log_excerpt}" ]]; then
+                text="$(printf '%s\n\n*Failed task: %s*\n```%s```' "${text}" "${failed_taskrun}" "${log_excerpt}")"
+              fi
+            fi
+          fi
+        fi
+
         curl --fail --silent --show-error --max-time 10 \
           -X POST "${WEBHOOK_URL}" \
           -H 'Content-Type: application/json' \
           -d "$(jq -n \
                 --arg channel "${CHANNEL}" \
-                --arg text "[$(params.tenant)] $(params.stage-name) $(params.status): $(params.pipeline-run-name)" \
+                --arg text "${text}" \
                 '{channel: $channel, text: $text}')"
