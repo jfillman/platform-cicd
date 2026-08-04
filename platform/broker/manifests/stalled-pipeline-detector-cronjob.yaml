@@ -1,0 +1,149 @@
+# platform/broker/manifests/stalled-pipeline-detector-cronjob.yaml
+#
+# Shared, platform-level CronJob (applied once, not per tenant - same shape as
+# platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml) - detects a stage that completed
+# successfully but whose expected next-stage PipelineRun never appeared, which means a
+# CDEvent got lost somewhere between this stage's `finally` block and the broker's
+# Trigger actually firing (this session hit exactly this failure class repeatedly and
+# manually, via the recurring cloudflared tunnel dying with nothing downstream to
+# notice - see docs/stalled-pipeline-detector.md).
+#
+# NOT covering CDEvents idempotency/dedup here - that's already done. PipelineRun names
+# are deterministic (catalog/lib/cdevents.sh's cdevent_send(), reused below) so
+# at-least-once redelivery is already a harmless AlreadyExists, not a duplicate run. This
+# CronJob is only about the opposite failure: a stage finishing and NOTHING happening
+# next.
+#
+# Detection needs no new labels or state: since a completed stage's PipelineRun name is
+# known, and cdevents.sh computes the next stage's deterministic name as
+# sha256("<this-run-name>:<event-type>")[:20], this script recomputes that exact value
+# and checks whether the PipelineRun with that name exists. The hash logic is duplicated
+# here (not sourced from cdevents.sh directly) because that script hard-requires several
+# env vars this CronJob has no reason to set - if the algorithm in cdevents.sh ever
+# changes, this must change with it.
+#
+# RBAC is cluster-scoped by necessity (PipelineRuns live in every tenant namespace, and
+# no tenant-namespace-discovery label exists anywhere in this platform yet - the broker's
+# own EventListener already scans namespaceSelector: {matchNames: ["*"]} for the same
+# reason, see eventlistener.yaml) but narrow by verb: get/list/patch on
+# pipelineruns.tekton.dev (patch only to set the dedup label below), create on events.
+# Nothing else - deliberately no Secrets access, see the alerting note below.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stalled-pipeline-detector
+  namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: stalled-pipeline-detector
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: stalled-pipeline-detector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: stalled-pipeline-detector
+subjects:
+  - kind: ServiceAccount
+    name: stalled-pipeline-detector
+    namespace: platform-system
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: stalled-pipeline-detector
+  namespace: platform-system
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: stalled-pipeline-detector
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: detect
+              image: ghcr.io/platform-cicd/toolbox:latest
+              imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              env:
+                - name: STALL_THRESHOLD_MINUTES
+                  value: "10"
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  now_epoch="$(date -u +%s)"
+                  threshold_seconds=$(( STALL_THRESHOLD_MINUTES * 60 ))
+
+                  # One candidate per line: run-name, run-namespace, pipeline-name,
+                  # completionTime - only stages that actually succeeded (a failed stage
+                  # is a different, already-visible condition - see file header) and
+                  # aren't already labeled from a prior alert.
+                  kubectl get pipelinerun -A -o json | jq -r '
+                    .items[]
+                    | select(.status.conditions // [] | any(.type == "Succeeded" and .status == "True"))
+                    | select(.status.completionTime != null)
+                    | select((.metadata.labels // {})["platform.io/stall-alerted"] != "true")
+                    | . as $pr
+                    | ($pr.spec.pipelineRef.params // [] | map(select(.name == "name")) | .[0].value // "") as $pipelineName
+                    | select($pipelineName == "build" or $pipelineName == "test" or $pipelineName == "deploy")
+                    | [$pr.metadata.name, $pr.metadata.namespace, $pipelineName, $pr.status.completionTime] | @tsv
+                  ' | while IFS=$'\t' read -r run_name run_ns pipeline_name completion_time; do
+
+                    completion_epoch="$(date -u -d "${completion_time}" +%s)"
+                    age=$(( now_epoch - completion_epoch ))
+                    if [ "${age}" -lt "${threshold_seconds}" ]; then
+                      continue
+                    fi
+
+                    # Must match catalog/pipelines/{build,test,deploy}.yaml's send-cdevent
+                    # event-type params exactly - see the file header's duplication note.
+                    case "${pipeline_name}" in
+                      build)  event_type="dev.cdevents.artifact.published.0.3.0";   next_prefix="test" ;;
+                      test)   event_type="dev.cdevents.testcaserun.finished.0.3.0"; next_prefix="deploy" ;;
+                      deploy) event_type="dev.cdevents.service.deployed.0.3.0";     next_prefix="release" ;;
+                    esac
+
+                    event_id="$(printf '%s' "${run_name}:${event_type}" | sha256sum | cut -d' ' -f1 | cut -c1-20)"
+                    expected_name="${next_prefix}-${event_id}"
+
+                    if kubectl get pipelinerun "${expected_name}" -n "${run_ns}" >/dev/null 2>&1; then
+                      echo "[stall-detector] ${run_ns}/${run_name} (${pipeline_name}) -> ${expected_name} exists, chain OK"
+                      continue
+                    fi
+
+                    echo "[stall-detector] STALL DETECTED: ${run_ns}/${run_name} (${pipeline_name}) completed ${age}s ago, expected successor ${expected_name} never appeared - CDEvent likely lost in transit"
+
+                    # Built with printf + explicit \n, not an embedded heredoc - a raw
+                    # multi-line heredoc nested inside this already-indented block scalar
+                    # broke YAML parsing once before in this exact codebase (see
+                    # catalog/tasks/open-release-pr.yaml's PR-body construction).
+                    now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                    message="${pipeline_name} completed ${age}s ago but expected successor ${expected_name} was never created - CDEvents delivery may have failed"
+                    printf 'apiVersion: v1\nkind: Event\nmetadata:\n  generateName: stall-detected-\n  namespace: %s\ninvolvedObject:\n  apiVersion: tekton.dev/v1\n  kind: PipelineRun\n  name: %s\n  namespace: %s\nreason: StageChainStalled\nmessage: %s\ntype: Warning\nsource:\n  component: stalled-pipeline-detector\nfirstTimestamp: "%s"\nlastTimestamp: "%s"\ncount: 1\n' \
+                      "${run_ns}" "${run_name}" "${run_ns}" "$(jq -Rn --arg m "${message}" '$m')" "${now_ts}" "${now_ts}" \
+                      | kubectl create -f - >/dev/null
+
+                    kubectl label pipelinerun "${run_name}" -n "${run_ns}" platform.io/stall-alerted=true --overwrite
+                  done
