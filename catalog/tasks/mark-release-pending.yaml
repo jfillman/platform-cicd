@@ -1,0 +1,67 @@
+# catalog/tasks/mark-release-pending.yaml
+#
+# Stamps tracking annotations on the tenant's own ArgoCD Application (<app-name>-staging,
+# in the argocd namespace) right after open-release-pr successfully opens a promotion PR
+# - the hand-off mechanism the DORA exporter (platform/dora-exporter) reads back to know
+# a release is in flight, and to compute Deployment Frequency / Lead Time / Change
+# Failure Rate / MTTR once ArgoCD actually confirms the sync succeeded or failed. See
+# docs/dora-metrics.md for the full mechanism and why this is annotation-based rather
+# than a CDEvent the exporter subscribes to (status.summary.images, the field that would
+# have made image-based correlation possible, is empty on this ArgoCD install - checked
+# live, not assumed).
+#
+# platform.io/dora-baseline-started-at matters more than it looks: ArgoCD's own
+# operationState is overwritten by ANY sync, including its unrelated periodic selfHeal
+# drift-correction syncs - stamping the CURRENT operationState.startedAt here, before
+# this promotion's own sync has even been triggered by the merge, is what lets the
+# exporter tell "the sync I'm waiting for" apart from "a sync that already finished
+# before I started waiting."
+#
+# Runs as pipeline-runner (the tenant's own SA, via the calling PipelineRun's
+# taskRunTemplate) - kubectl here uses the pod's normal in-cluster identity, no projected
+# broker token needed (unlike open-release-pr.yaml's GitHub call). RBAC for this is
+# scoped in platform/argocd/tenant-release-argocd-template.yaml: get+patch on exactly
+# this tenant's own <app-name>-staging Application, resourceNames-scoped, nothing else.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: mark-release-pending
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+    - name: flow-start-time
+      type: string
+      description: The flow's original start time (from build's start-flow-root-span), threaded through as the Lead Time start anchor.
+  steps:
+    - name: mark-pending
+      image: ghcr.io/platform-cicd/toolbox:latest
+      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      env:
+        - name: TENANT
+          value: $(params.tenant)
+        - name: APP_NAME
+          value: $(params.app-name)
+        - name: FLOW_START_TIME
+          value: $(params.flow-start-time)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        app="${APP_NAME}-staging"
+
+        baseline="$(kubectl get application.argoproj.io "${app}" -n argocd \
+          -o jsonpath='{.status.operationState.startedAt}' 2>/dev/null || echo "")"
+
+        kubectl annotate application.argoproj.io "${app}" -n argocd \
+          platform.io/dora-pending=true \
+          platform.io/dora-flow-start-time="${FLOW_START_TIME}" \
+          platform.io/dora-baseline-started-at="${baseline}" \
+          platform.io/dora-tenant="${TENANT}" \
+          platform.io/dora-app="${APP_NAME}" \
+          --overwrite
+
+        echo "[mark-release-pending] ${app}: pending=true, baseline-started-at='${baseline}', flow-start-time=${FLOW_START_TIME}"

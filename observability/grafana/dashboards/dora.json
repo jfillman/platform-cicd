@@ -1,0 +1,164 @@
+{
+  "title": "CI/CD Platform - DORA Metrics",
+  "uid": "platform-cicd-dora",
+  "tags": ["platform-cicd", "dora"],
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-30d", "to": "now" },
+  "refresh": "5m",
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(dora_releases_total, tenant)",
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "app",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)",
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Change Failure Rate** measures *release-process* failure (the GitOps promotion itself failed to apply) - this platform has no incident-tracking or production-health signal, so it cannot detect \"the release succeeded but the code caused a production problem\". **MTTR is best-effort/experimental**: it measures time between a confirmed failed release and the next confirmed successful one for the *same app* - it cannot see a manual rollback or fix that happens outside this pipeline. See `docs/dora-metrics.md` for the full computation methodology, including why this reads ArgoCD Application status directly rather than the CDEvents stream."
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Deployments (7d)",
+      "gridPos": { "x": 0, "y": 4, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "targets": [
+        { "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[7d]))", "legendFormat": "deployments" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Deployment Frequency (daily, by app)",
+      "gridPos": { "x": 4, "y": 4, "w": 20, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[1d])) by (app)",
+          "legendFormat": "{{app}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Median Lead Time (7d)",
+      "gridPos": { "x": 0, "y": 12, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))",
+          "legendFormat": "p50 lead time"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Lead Time for Changes (p50, by app)",
+      "description": "DORA bands: elite <1h, high <1d, medium <1w, low <1mo - see the histogram bucket boundaries in platform/dora-exporter/cmd/dora-exporter/main.go (leadTimeBuckets), chosen to align with these exactly.",
+      "gridPos": { "x": 4, "y": 12, "w": 20, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[1d])) by (le, app))",
+          "legendFormat": "{{app}} p50"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Change Failure Rate (7d)",
+      "gridPos": { "x": 0, "y": 20, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 0.15, "color": "yellow" },
+              { "value": 0.3, "color": "red" }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[7d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[7d]))",
+          "legendFormat": "change failure rate"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Change Failure Rate (by app)",
+      "gridPos": { "x": 4, "y": 20, "w": 20, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [
+        {
+          "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[7d])) by (app) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (app)",
+          "legendFormat": "{{app}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "MTTR - EXPERIMENTAL (30d median)",
+      "gridPos": { "x": 0, "y": 28, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[30d])) by (le))",
+          "legendFormat": "p50 MTTR (experimental)"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Time to Restore - EXPERIMENTAL (p50, by app)",
+      "description": "Best-effort proxy only: time to the next CONFIRMED successful release for the same app after a failure, via this pipeline. Cannot see manual rollbacks or fixes applied outside this pipeline - see the caveats panel above and docs/dora-metrics.md.",
+      "gridPos": { "x": 4, "y": 28, "w": 20, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le, app))",
+          "legendFormat": "{{app}} p50 (experimental)"
+        }
+      ]
+    }
+  ]
+}

@@ -38,11 +38,19 @@ metadata:
 # tenant-env-rbac-template.yaml) - the release Pipeline never touches the cluster
 # directly for this tier, only ArgoCD's own (already cluster-capable) identity does,
 # once a human has approved the GitOps PR. See docs/release.md.
+#
+# platform.io/dora-track: "true" - a stable, explicit marker the DORA exporter's
+# informer filters on (platform/dora-exporter), so it only ever processes Applications
+# that are actually part of this platform's tenant model - the argocd namespace also
+# holds unrelated Applications (e.g. podinfo-demo-app) this exporter has no business
+# reading. See docs/dora-metrics.md.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: <APP_NAME>-staging
   namespace: argocd
+  labels:
+    platform.io/dora-track: "true"
 spec:
   project: <TENANT>
   source:
@@ -56,3 +64,30 @@ spec:
     automated:
       prune: true
       selfHeal: true
+---
+# Lets this tenant's own pipeline-runner SA (mark-release-pending.yaml) stamp/clear DORA
+# tracking annotations on exactly its own <APP_NAME>-staging Application - resourceNames-
+# scoped, same shape as pr-token-refresher-cronjob.yaml's own narrowly-scoped Role in
+# this same argocd namespace. No access to any other tenant's Application, and no access
+# to anything else Application-shaped in argocd at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-dora-tracking-<APP_NAME>
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    resourceNames: ["<APP_NAME>-staging"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-dora-tracking-<APP_NAME>
+  namespace: argocd
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-dora-tracking-<APP_NAME> }
+subjects:
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: <TENANT>

@@ -17,3 +17,6 @@ configMapGenerator:
   - name: dashboard-pipeline-detail
     files: [dashboards/pipeline-detail.json]
     options: { labels: { grafana_dashboard: "1" } }
+  - name: dashboard-dora
+    files: [dashboards/dora.json]
+    options: { labels: { grafana_dashboard: "1" } }
