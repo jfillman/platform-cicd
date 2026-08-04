@@ -46,6 +46,28 @@ spec:
         - { name: url, value: $(params.git-url) }
         - { name: revision, value: $(params.git-revision) }
 
+    # Deeper CDEvents coverage (Phase 3 item 1, see docs/chaining.md): a generic
+    # pipelinerun.started signal, independent of test's own domain-specific
+    # testcaserun.finished event below. No runAfter - chain-id/traceparent/flow-start-
+    # time already arrive as incoming params (this stage was fired by the broker off
+    # build's event), unlike build.yaml where they don't exist until start-flow runs.
+    - name: pipelinerun-started
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: event-type, value: "dev.cdevents.pipelinerun.started.0.3.0" }
+        - { name: subject-type, value: "pipelineRun" }
+        - { name: subject-content-json, value: "{\"pipelineName\": \"test\"}" }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
     - name: validate-config
       runAfter: [clone-repo]
       taskRef:
@@ -133,6 +155,7 @@ spec:
           - { name: namespace, value: platform-catalog }
       params:
         - { name: event-type, value: "dev.cdevents.testcaserun.finished.0.3.0" }
+        - { name: subject-type, value: "testCaseRun" }
         - name: subject-content-json
           value: >-
             {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "git-url": "$(params.git-url)", "env": "dev"}
@@ -141,3 +164,23 @@ spec:
         - { name: flow-start-time, value: $(params.flow-start-time) }
         - { name: namespace, value: $(params.tenant) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
+    # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
+    # NOT gated on success like the domain-specific event above. See docs/chaining.md.
+    - name: pipelinerun-finished
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: event-type, value: "dev.cdevents.pipelinerun.finished.0.3.0" }
+        - { name: subject-type, value: "pipelineRun" }
+        - { name: subject-content-json, value: "{\"pipelineName\": \"test\"}" }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tekton-status, value: $(tasks.status) }

@@ -71,6 +71,31 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
 
+    # Deeper CDEvents coverage (Phase 3 item 1, see docs/chaining.md): a generic
+    # pipelinerun.started signal, independent of build's own domain-specific
+    # artifact.published event below. Fires here, not earlier, because build is the flow
+    # root - chain-id/traceparent don't exist until start-flow generates them, unlike
+    # test/deploy/release where they already arrive as incoming params. This means
+    # build's pipelinerun.started fires a few tasks later than the other three stages' -
+    # a documented, accepted asymmetry, not an oversight.
+    - name: pipelinerun-started
+      runAfter: [start-flow]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: event-type, value: "dev.cdevents.pipelinerun.started.0.3.0" }
+        - { name: subject-type, value: "pipelineRun" }
+        - { name: subject-content-json, value: "{\"pipelineName\": \"build\"}" }
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
+        - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
     - name: resolve-agent-image
       runAfter: [validate-config]
       taskRef:
@@ -209,9 +234,32 @@ spec:
           - { name: namespace, value: platform-catalog }
       params:
         - { name: event-type, value: "dev.cdevents.artifact.published.0.3.0" }
+        - { name: subject-type, value: "artifact" }
         - { name: subject-content-json, value: "{\"image\": \"$(tasks.build-image.results.image-ref)\", \"revision\": \"$(params.git-revision)\", \"git-url\": \"$(params.git-url)\", \"env\": \"dev\"}" }
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
         - { name: namespace, value: $(params.tenant) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
+    # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
+    # NOT gated on success like the domain-specific event above: "the pipeline finished"
+    # is true whether it succeeded or failed, and a uniform completion signal that only
+    # reports success isn't a uniform signal at all. See docs/chaining.md.
+    - name: pipelinerun-finished
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: platform-catalog }
+      params:
+        - { name: event-type, value: "dev.cdevents.pipelinerun.finished.0.3.0" }
+        - { name: subject-type, value: "pipelineRun" }
+        - { name: subject-content-json, value: "{\"pipelineName\": \"build\"}" }
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
+        - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tekton-status, value: $(tasks.status) }

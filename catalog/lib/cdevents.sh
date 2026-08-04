@@ -21,8 +21,17 @@ set -euo pipefail
 
 _BROKER_TOKEN_PATH="/var/run/secrets/platform/broker-token"
 
-# cdevent_send <event-type> <subject-id> <subject-content-json>
+# cdevent_send <event-type> <subject-type> <subject-id> <subject-content-json>
 #   event-type            e.g. dev.cdevents.artifact.published.0.3.0
+#   subject-type           the CDEvents subject type this event's context.type implies -
+#                           e.g. "artifact" for artifact.published, "pipelineRun" for
+#                           pipelinerun.started/finished. CamelCase for multi-word subject
+#                           names (pipelineRun, taskRun, testCaseRun), lowercase for
+#                           single-word ones (artifact, service, change, build) - matches
+#                           the CDEvents spec's own subject-name casing convention. There
+#                           is no derivation from event-type alone worth trusting (the
+#                           event-type segment is always lowercase regardless), so this is
+#                           a required, explicit argument, not inferred.
 #   subject-id             the emitting PipelineRun's own name
 #   subject-content-json    a JSON object merged into subject.content (single-quoted JSON)
 #
@@ -31,7 +40,7 @@ _BROKER_TOKEN_PATH="/var/run/secrets/platform/broker-token"
 # produces the same event id every time. The next-stage Trigger uses this id to name the
 # PipelineRun it creates, so redelivery is a harmless no-op instead of a duplicate run.
 cdevent_send() {
-  local event_type="$1" subject_id="$2" subject_content_json="$3"
+  local event_type="$1" subject_type="$2" subject_id="$3" subject_content_json="$4"
 
   local sa_token
   sa_token="$(cat "${_BROKER_TOKEN_PATH}")"
@@ -51,6 +60,7 @@ cdevent_send() {
     --arg id "${event_id}" \
     --arg type "${event_type}" \
     --arg source "/platform-cicd/${NAMESPACE}/${TEKTON_PIPELINE_RUN}" \
+    --arg subjectType "${subject_type}" \
     --arg subjectId "${subject_id}" \
     --arg chainId "${PLATFORM_CHAIN_ID:?PLATFORM_CHAIN_ID must be set - propagated from the triggering event, or generated at flow start}" \
     --arg traceparent "${PLATFORM_TRACEPARENT:?PLATFORM_TRACEPARENT must be set - see otel.sh}" \
@@ -68,7 +78,7 @@ cdevent_send() {
       subject: {
         id: $subjectId,
         source: $source,
-        type: "pipelinerun",
+        type: $subjectType,
         content: $content
       },
       customData: {
@@ -83,4 +93,20 @@ cdevent_send() {
     -H "Authorization: Bearer ${sa_token}" \
     -H "Content-Type: application/cloudevents+json" \
     -d "${payload}"
+}
+
+# cdevents_map_outcome <tekton-status>
+#   Maps a Tekton PipelineRun's real status.conditions[].reason value (confirmed against
+#   Tekton's own docs: Succeeded, Completed, Failed, Cancelled, PipelineRunTimeout, plus
+#   other less common error reasons) to CDEvents' pipelineRun/taskRun "outcome" enum
+#   (success/failure/cancel/error - see core.md in the cdevents/spec repo). Used by
+#   send-cdevent.yaml's optional tekton-status param, not called directly by pipelines -
+#   see docs/chaining.md.
+cdevents_map_outcome() {
+  case "$1" in
+    Succeeded|Completed) echo "success" ;;
+    Failed) echo "failure" ;;
+    Cancelled) echo "cancel" ;;
+    *) echo "error" ;;
+  esac
 }

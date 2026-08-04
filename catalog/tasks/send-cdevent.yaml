@@ -17,6 +17,14 @@ spec:
     - name: event-type
       type: string
       description: e.g. dev.cdevents.artifact.published.0.3.0
+    - name: subject-type
+      type: string
+      description: >-
+        The CDEvents subject type this event-type implies, e.g. "artifact" for
+        artifact.published, "pipelineRun" for pipelinerun.started/finished, "testCaseRun"
+        for testcaserun.finished. No default - every caller must be explicit, since
+        getting this wrong silently mislabels the event's subject.type. See
+        docs/chaining.md.
     - name: subject-content-json
       type: string
       default: "{}"
@@ -30,6 +38,15 @@ spec:
       type: string
     - name: pipeline-run-name
       type: string
+    - name: tekton-status
+      type: string
+      default: ""
+      description: >-
+        Optional. When set (e.g. $(tasks.status) from a finally block), the real Tekton
+        status.conditions[].reason value is mapped to CDEvents' outcome enum
+        (cdevents_map_outcome in cdevents.sh) and merged into subject-content-json as
+        "outcome" before sending - existing call sites that leave this empty are
+        unaffected, no merge happens. See docs/chaining.md.
   # Audience-bound projected ServiceAccount token, verified by the broker's TokenReview
   # interceptor (platform/broker/cmd/token-review-interceptor) - there is no platform-
   # minted credential anywhere in this Task. Declared here, not via any cluster-wide
@@ -66,8 +83,17 @@ spec:
           value: $(params.traceparent)
         - name: PLATFORM_FLOW_START_TIME
           value: $(params.flow-start-time)
+        - name: TEKTON_STATUS
+          value: $(params.tekton-status)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/cdevents.sh"
-        cdevent_send "$(params.event-type)" "$(params.pipeline-run-name)" '$(params.subject-content-json)'
+
+        content='$(params.subject-content-json)'
+        if [[ -n "${TEKTON_STATUS}" ]]; then
+          outcome="$(cdevents_map_outcome "${TEKTON_STATUS}")"
+          content="$(jq -c --arg o "${outcome}" '. + {outcome: $o}' <<<"${content}")"
+        fi
+
+        cdevent_send "$(params.event-type)" "$(params.subject-type)" "$(params.pipeline-run-name)" "${content}"
