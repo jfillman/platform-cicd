@@ -97,8 +97,19 @@ spec:
         git commit --quiet -am "Release: promote ${APP_NAME} to staging @ ${IMAGE_REF}"
         git push --quiet "${clone_url}" "${branch}"
 
-        pr_body_text="$(printf 'Automated release PR - promotes %s to staging.\n\nImage: `%s`\nRevision: `%s`\n\nMerging this PR triggers ArgoCD to sync it to staging. See docs/release.md.' \
-          "${APP_NAME}" "${IMAGE_REF}" "${GIT_REVISION}")"
+        # Field vocabulary/ordering matches docs/design-language.md (App/Repo/Commit/
+        # Image) - the same shared language as the Slack notifications
+        # (catalog/tasks/notify-slack.yaml), applied here in GitHub-flavored markdown.
+        # No color here (unlike Slack) - GitHub PR bodies can't carry inline color
+        # without an embedded badge image, which would itself be the kind of flashy the
+        # design language explicitly isn't going for. Tenant/Run are Slack-only fields -
+        # not meaningful to an external PR reviewer. Repo-short derived with the exact
+        # same sed pattern notify-slack.yaml uses, not a second, differently-behaved
+        # technique - the two should never diverge for the same input.
+        repo_short="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
+        commit_short="${GIT_REVISION:0:12}"
+        pr_body_text="$(printf '**App**: %s\n**Repo**: [%s](%s)\n**Commit**: [`%s`](%s/commit/%s)\n**Image**: `%s`\n\nMerging this PR triggers ArgoCD to sync it to staging. See docs/release.md.' \
+          "${APP_NAME}" "${repo_short}" "${GIT_URL}" "${commit_short}" "${GIT_URL}" "${GIT_REVISION}" "${IMAGE_REF}")"
         pr_body="$(jq -n \
           --arg title "Release: ${APP_NAME} @ ${GIT_REVISION}" \
           --arg body "${pr_body_text}" \

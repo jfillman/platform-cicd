@@ -15,6 +15,12 @@
 # deliberately - most tenants won't have this Secret at all, and the pod must still start
 # cleanly for them (matches the script's own existing graceful-skip behavior for that
 # case, not a new failure mode).
+#
+# Message format follows docs/design-language.md (Phase 3 item 3 follow-up) - one blue
+# accent, a muted red only on failure, icons used only as a single `⚠` on failure, a
+# consistent field vocabulary. Every field's value was already flowing through the
+# calling Pipeline as an existing param/result - this Task just has new params to
+# receive them, no new upstream plumbing was needed anywhere else.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -34,6 +40,32 @@ spec:
       type: string
     - name: tenant
       type: string
+    - name: app-name
+      type: string
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: image-ref
+      type: string
+      default: ""
+      description: Full image ref, when the calling Pipeline already has one as a plain param (test/deploy/release). Leave empty for build - see image-repo below.
+    - name: image-repo
+      type: string
+      default: ""
+      description: >-
+        build only. NOT a reference to build-image's own result on purpose - Tekton
+        skips a finally task entirely if any of its params references a result from a
+        task that failed or didn't run (confirmed against Tekton's own docs before
+        relying on this), which would silently break "notify always fires, even on
+        build-image failure" for exactly the failure case a log excerpt matters most for.
+        image-repo is a plain Pipeline param, always available regardless of build-image's
+        outcome - the script derives the same 12-char-SHA-tagged ref build-image.yaml
+        itself computes, from inputs that don't depend on that task having succeeded.
+    - name: env
+      type: string
+      default: ""
+      description: Only meaningful on deploy - omitted from the message when empty.
   volumes:
     - name: slack-webhook
       secret:
@@ -50,8 +82,24 @@ spec:
       env:
         - name: TENANT
           value: $(params.tenant)
+        - name: APP_NAME
+          value: $(params.app-name)
         - name: PIPELINE_RUN_NAME
           value: $(params.pipeline-run-name)
+        - name: STAGE_NAME
+          value: $(params.stage-name)
+        - name: STATUS
+          value: $(params.status)
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: GIT_REVISION
+          value: $(params.git-revision)
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+        - name: IMAGE_REPO
+          value: $(params.image-repo)
+        - name: ENV_NAME
+          value: $(params.env)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -68,32 +116,133 @@ spec:
           exit 0
         fi
 
-        text="[${TENANT}] $(params.stage-name) $(params.status): ${PIPELINE_RUN_NAME}"
+        # docs/design-language.md: one blue accent, muted red only on failure, a single
+        # ⚠ on the header only when the outcome isn't success - not a stoplight, not a
+        # per-stage icon.
+        case "${STAGE_NAME}" in
+          build) STAGE_DISPLAY="Build" ;;
+          test) STAGE_DISPLAY="Test" ;;
+          deploy) STAGE_DISPLAY="Deploy" ;;
+          release) STAGE_DISPLAY="Release" ;;
+          *) STAGE_DISPLAY="${STAGE_NAME}" ;;
+        esac
+        if [[ "${STATUS}" == "Succeeded" || "${STATUS}" == "Completed" ]]; then
+          COLOR="#2563EB"
+          HEADER_TEXT="${APP_NAME} · ${STAGE_DISPLAY} ${STATUS}"
+        else
+          COLOR="#B91C1C"
+          HEADER_TEXT="⚠ ${APP_NAME} · ${STAGE_DISPLAY} ${STATUS}"
+        fi
+
+        # Repo short-name derived the same way open-release-pr.yaml already derives its
+        # owner segment - not reimplemented differently. 12-char SHA matches this
+        # platform's existing truncation convention from build-image.yaml.
+        REPO_SHORT="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
+        SHORT_SHA="${GIT_REVISION:0:12}"
+        COMMIT_URL="${GIT_URL}/commit/${GIT_REVISION}"
+
+        # Tekton Dashboard deep-link for the Run field - route confirmed live against the
+        # actual installed dashboard's own JS bundle (HashRouter, /namespaces/:namespace
+        # + /pipelineruns/:name), not guessed from docs (which don't document the route at
+        # all). Only resolves when someone has the dashboard's own port-forward running
+        # locally (docs/bootstrap.md) - this platform has no ingress/stable URL for it,
+        # same already-documented gap as everywhere else access needs port-forward. Still
+        # worth linking: a dead link when nobody's forwarding costs nothing, and it's a
+        # real, correct link the moment someone is.
+        DASHBOARD_URL="http://localhost:9097/#/namespaces/${TENANT}/pipelineruns/${PIPELINE_RUN_NAME}"
+
+        # build only - see the image-repo param's own comment for why this is derived
+        # here instead of referencing build-image's result directly.
+        if [[ -z "${IMAGE_REF}" && -n "${IMAGE_REPO}" ]]; then
+          IMAGE_REF="${IMAGE_REPO}:${SHORT_SHA}"
+        fi
+
+        # release only - a live, best-effort lookup (same resilience pattern as the
+        # failure log excerpt below), NOT a Tekton-level $(tasks.open-release-pr.results...)
+        # reference, for the identical reason image-repo above isn't a task-result
+        # reference: that would skip this whole notify task whenever open-release-pr
+        # fails, breaking the failure-notification path for release's most likely real
+        # failure point. Naturally comes back empty (and is simply omitted) when
+        # open-release-pr didn't succeed - no special-casing needed for that.
+        pr_url=""
+        if [[ "${STAGE_NAME}" == "release" ]]; then
+          pr_url="$(kubectl get taskrun -n "${TENANT}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=open-release-pr" \
+            -o jsonpath='{.items[0].status.results[?(@.name=="pr-url")].value}' 2>/dev/null || true)"
+        fi
 
         # Failure log excerpt - only attempted when this run didn't succeed. Not gated
         # more narrowly than that (Cancelled/Timeout included too) since a short excerpt
         # of whatever the last-running step logged is still useful context, not just for
         # a clean "Failed" outcome. See docs/notifications.md for why this needed no new
         # RBAC - pipeline-runner's existing Role already covers taskruns/pods/pods-log.
-        status="$(params.status)"
-        if [[ "${status}" != "Succeeded" && "${status}" != "Completed" ]]; then
+        failed_taskrun=""
+        log_excerpt=""
+        if [[ "${STATUS}" != "Succeeded" && "${STATUS}" != "Completed" ]]; then
           failed_taskrun="$(kubectl get taskrun -n "${TENANT}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json \
             | jq -r '[.items[] | select(.status.conditions[0].status == "False")][0].metadata.name // empty')"
           if [[ -n "${failed_taskrun}" ]]; then
             pod_name="$(kubectl get taskrun "${failed_taskrun}" -n "${TENANT}" -o jsonpath='{.status.podName}' 2>/dev/null || true)"
             if [[ -n "${pod_name}" ]]; then
               log_excerpt="$(kubectl logs "${pod_name}" -n "${TENANT}" --all-containers --tail=30 2>/dev/null | tail -c 1500 || true)"
-              if [[ -n "${log_excerpt}" ]]; then
-                text="$(printf '%s\n\n*Failed task: %s*\n```%s```' "${text}" "${failed_taskrun}" "${log_excerpt}")"
-              fi
             fi
           fi
         fi
 
+        payload="$(jq -n \
+          --arg channel "${CHANNEL}" \
+          --arg color "${COLOR}" \
+          --arg headerText "${HEADER_TEXT}" \
+          --arg app "${APP_NAME}" \
+          --arg tenant "${TENANT}" \
+          --arg repoShort "${REPO_SHORT}" \
+          --arg repoUrl "${GIT_URL}" \
+          --arg shortSha "${SHORT_SHA}" \
+          --arg commitUrl "${COMMIT_URL}" \
+          --arg image "${IMAGE_REF}" \
+          --arg runName "${PIPELINE_RUN_NAME}" \
+          --arg dashboardUrl "${DASHBOARD_URL}" \
+          --arg envName "${ENV_NAME}" \
+          --arg prUrl "${pr_url}" \
+          --arg failedTask "${failed_taskrun}" \
+          --arg logExcerpt "${log_excerpt}" \
+          --arg footer "platform-cicd · $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '
+          def field(fieldLabel; fieldValue): {type: "mrkdwn", text: ("*" + fieldLabel + "*\n" + fieldValue)};
+          (
+            [
+              field("App"; $app),
+              field("Tenant"; $tenant),
+              field("Repo"; "<" + $repoUrl + "|" + $repoShort + ">"),
+              field("Commit"; "<" + $commitUrl + "|" + $shortSha + ">")
+            ]
+            + (if $image != "" then [field("Image"; "`" + $image + "`")] else [] end)
+            + (if $envName != "" then [field("Environment"; $envName)] else [] end)
+            + [field("Run"; "<" + $dashboardUrl + "|" + $runName + ">")]
+            + (if $prUrl != "" then [field("PR"; "<" + $prUrl + "|View PR>")] else [] end)
+          ) as $fields
+          |
+          (
+            {
+              channel: $channel,
+              attachments: [{
+                color: $color,
+                blocks: (
+                  [
+                    {type: "header", text: {type: "plain_text", text: $headerText, emoji: true}},
+                    {type: "section", fields: $fields}
+                  ]
+                  + (if $logExcerpt != "" then [
+                      {type: "section", text: {type: "mrkdwn", text: ("*Failed task:* `" + $failedTask + "`")}},
+                      {type: "section", text: {type: "mrkdwn", text: ("```" + $logExcerpt + "```")}}
+                    ] else [] end)
+                  + [{type: "context", elements: [{type: "mrkdwn", text: $footer}]}]
+                )
+              }]
+            }
+          )
+          ')"
+
         curl --fail --silent --show-error --max-time 10 \
           -X POST "${WEBHOOK_URL}" \
           -H 'Content-Type: application/json' \
-          -d "$(jq -n \
-                --arg channel "${CHANNEL}" \
-                --arg text "${text}" \
-                '{channel: $channel, text: $text}')"
+          -d "${payload}"
