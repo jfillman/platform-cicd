@@ -1,0 +1,72 @@
+# platform/sigstore/fulcio-config.yaml
+#
+# The non-sensitive half of Fulcio's config - the `type: kubernetes` OIDC issuer that
+# lets Fulcio validate a plain Kubernetes-projected ServiceAccount token directly against
+# this cluster's own API server (TokenReview-style), with no SPIFFE/SPIRE and no public
+# exposure - everything reaching Fulcio does so via in-cluster Service DNS only. Confirmed
+# against Fulcio's own real CI test (sigstore/fulcio/.github/workflows/verify-k8s.yml),
+# not guessed - that's also where this exact issuer-url/client-id pairing and the
+# config.yaml/server.yaml file split (this file vs. fulcio-server-config, a Secret since
+# it carries the CA passphrase) come from.
+#
+# issuer-url must exactly match signers.x509.fulcio.issuer in Tekton Chains' own
+# chains-config (platform/sigstore/chains-config-patch.yaml) - if these two ever drift,
+# Chains' identity token gets rejected. See docs/image-signing.md.
+#
+# The issuer-url value is cluster-specific, confirmed live, not copied verbatim from
+# Fulcio's own CI example (which uses "https://kubernetes.default.svc" - no
+# ".cluster.local" suffix). On kind-observe, Fulcio's own OIDC discovery against the API
+# server returns "https://kubernetes.default.svc.cluster.local" - using the shorter
+# upstream-example form here fails with "issuer URL provided to client ... did not match
+# the issuer URL returned by provider" at Fulcio startup (Go's OIDC client requires the
+# discovery document's own self-reported "issuer" field to exactly match the URL used to
+# fetch it). Re-verify this if ever repointing at a different cluster - it depends on
+# that cluster's own --service-account-issuer / cluster domain config, not a
+# platform-cicd constant.
+#
+# ca-cert is inlined PEM (this cluster's own kube-root-ca.crt ConfigMap's "ca.crt" key,
+# read live, not guessed), not a file path. Fulcio's source
+# (pkg/config/config.go's httpClientForIssuer) has a special-case shortcut that
+# auto-trusts the cluster CA and auto-attaches a bearer token when the issuer key is the
+# *exact* hardcoded literal "https://kubernetes.default.svc" - but that shortcut doesn't
+# apply here since our issuer key is the (required, per above) longer
+# ".cluster.local" form, confirmed live via the "x509: certificate signed by unknown
+# authority" error that appeared without this field. Setting ca-cert explicitly is the
+# documented, general-purpose escape hatch for exactly this case - see the CACert field's
+# own doc comment in that source file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fulcio-config
+  namespace: fulcio-system
+data:
+  config.yaml: |
+    oidc-issuers:
+      https://kubernetes.default.svc.cluster.local:
+        issuer-url: "https://kubernetes.default.svc.cluster.local"
+        client-id: "sigstore"
+        type: "kubernetes"
+        ca-cert: |
+          -----BEGIN CERTIFICATE-----
+          MIIDBTCCAe2gAwIBAgIISJN8q/q5nzcwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+          AxMKa3ViZXJuZXRlczAeFw0yNjA3MjYwNDU0NDlaFw0zNjA3MjMwNDU5NDlaMBUx
+          EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+          AoIBAQDdm201tC8gV9yRwMuSNpMI1HHQcopQ3JxQOGVytveusGuah3PVzYoIL2PY
+          Jh2GaqHgXCIN40sKQ5hLscb0qIBNbY4JDZRjLnqMtS0iVO1yEGPleTmdYuM7Xln6
+          KMwBSqZ8HmgAOZfTxXq4wBbwqPqK5TLkultqpBnlawv4rHa+jxOr1FOLr4crlTyi
+          UumIjrtMLhogg1WPGcLgViqbADrqwkmjMEPNNTXoX25MVsr7GtAz/8YF97i5qOF4
+          lJbh1dRnuzlFTp0BK4Z0k5f8Hmq66Fb7tJtmus/+2AO0k3rRYSdNI19CV2oHbzD4
+          3MU2rE5tExil8Sc6AiPv3uW5L34NAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+          BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQyZd/TnuK5G8MQP0OleM3Wx1wpojAV
+          BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCJRM+EwOOV
+          phG74EHuTSRrHYu79EXcOwMvcRmseY4HOvOuuMm1//H1Q14re4voL4etYjQga81I
+          /T8X/rc0NeFqV2eqRYeIVFZ4++9vtsGJogruRJtI6iVzagHzml8AO8deCFseScBn
+          wq+yXl5zPqkMLOXJE1s40uJDyeBE8CTw9Zdlmc18BUhzkJUCLdBJLdLe3W2ToFkN
+          8LXTXpVL8H0+xnJ/y8bYJi5NrqBmXz2WdOpk6oJXG8K0Mz9wYVMjrZ7NXCKCU8Hi
+          hYieRNWCXH75a+DradRdZb/8ImOfh/nd4FatuE+EqAMwInns9MiJx+AZ1zuYZGXO
+          ptRXZRv3U7Ip
+          -----END CERTIFICATE-----
+        # NOTE: this is the cluster's kube-root-ca.crt content as of implementation time
+        # - if the cluster's serving CA is ever rotated, this needs to be refreshed too
+        # (a real, accepted maintenance burden of inlining rather than reading a mounted
+        # file at startup, worth revisiting if that ever becomes disruptive in practice).

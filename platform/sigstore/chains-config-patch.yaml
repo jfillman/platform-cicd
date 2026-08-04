@@ -1,0 +1,53 @@
+# platform/sigstore/chains-config-patch.yaml
+#
+# Overlay onto Tekton Chains' own `chains-config` ConfigMap (installed empty by default -
+# confirmed live, nothing to clobber) - applied via `kubectl patch --type merge`, not
+# `kubectl apply` replacing the whole object, matching this platform's existing
+# patch-not-replace convention for third-party-owned config (e.g. how
+# `open-release-pr.yaml`'s GitHub Check statuses work alongside PaC's own management of
+# that repo, not fighting it).
+#
+# signers.x509.fulcio.address/issuer values are cluster-specific, confirmed live against
+# the real fulcio-server Service and its own real /api/v2/configuration response - not
+# copied from any example. See platform/sigstore/fulcio-config.yaml for why the issuer
+# has the ".cluster.local" suffix.
+#
+# signers.x509.identity.token.file points at /var/run/sigstore/cosign/oidc-token -
+# Tekton Chains' controller Deployment already ships a projected ServiceAccount token
+# volume at exactly this path with audience "sigstore" out of the box (confirmed live by
+# reading the installed Deployment spec - no patch needed to add it, unlike this plan's
+# original assumption that a new volume/mount would need to be added by hand).
+#
+# artifacts.taskrun.storage AND artifacts.pipelinerun.storage are both "oci", not the
+# seemingly-simpler "tekton" (annotations on the object itself) this plan originally
+# chose - these are two *separate* config keys (confirmed live the hard way: setting only
+# artifacts.taskrun.storage still left PipelineRun-level storage on its own "tekton"
+# default, still failing) - not one setting covering both object kinds. Confirmed live
+# this "tekton" storage genuinely breaks: a real PipelineRun's full in-toto/SLSA payload
+# exceeded Kubernetes' hard 256KiB total-annotations cap ("metadata.annotations: Too
+# long: may not be more than 262144 bytes", chains controller logs) - Fulcio signing
+# itself succeeded every time, only the write-back storage step failed. "oci" (provenance
+# attached to the produced image in the registry, standard cosign/SLSA convention,
+# verifiable via `cosign verify-attestation`) has no such ceiling and is also the more
+# standard place for provenance to live, not just a workaround.
+#
+# transparency.enabled: "false" is load-bearing, not a placeholder - Chains' own default
+# transparency.url is the PUBLIC rekor.sigstore.dev. Leaving this unset would mean this
+# Fulcio-only setup (Rekor/Trillian/MySQL deliberately deferred - see the plan) silently
+# attempts to upload every signature to the public transparency log. See
+# docs/image-signing.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chains-config
+  namespace: tekton-chains
+data:
+  signers.x509.fulcio.enabled: "true"
+  signers.x509.fulcio.address: "http://fulcio-server.fulcio-system.svc"
+  signers.x509.fulcio.issuer: "https://kubernetes.default.svc.cluster.local"
+  signers.x509.fulcio.provider: "filesystem"
+  signers.x509.identity.token.file: "/var/run/sigstore/cosign/oidc-token"
+  artifacts.taskrun.storage: "oci"
+  artifacts.pipelinerun.storage: "oci"
+  artifacts.oci.storage: "oci"
+  transparency.enabled: "false"

@@ -1,0 +1,39 @@
+# platform/sigstore/issuer-discovery-rbac.yaml
+#
+# Fulcio's self-hosted `type: kubernetes` issuer needs to fetch this cluster's own
+# `/.well-known/openid-configuration` and `/openid/v1/jwks` - both read-only, deliberately
+# public-by-design Kubernetes endpoints (this is the same mechanism AWS EKS/GKE use to
+# make their own clusters' issuer URLs externally verifiable - confirmed via research, not
+# a novel pattern). Confirmed live this cluster doesn't already allow anonymous reads here
+# (`system:anonymous cannot get path "/.well-known/openid-configuration"`, 403) - the
+# built-in `system:service-account-issuer-discovery` ClusterRole already exists (it ships
+# with Kubernetes itself), but its only existing binding is scoped to the
+# `system:serviceaccounts` group (i.e. already-authenticated in-cluster callers) - not
+# anonymous.
+#
+# Fulcio's own outbound request for this happens as `system:anonymous`, not with a bearer
+# token: Fulcio's source (pkg/config/config.go's httpClientForIssuer) has a special-case
+# shortcut that auto-attaches the pod's own SA token for exactly this call, but only when
+# the configured issuer key is the *literal* hardcoded string
+# "https://kubernetes.default.svc" - our issuer key has to be the longer
+# ".cluster.local" form (see fulcio-config.yaml's own comment on why), so that shortcut
+# doesn't apply and there's no other config knob to manually attach a token instead.
+#
+# A new, separate ClusterRoleBinding rather than widening the existing one - narrower
+# (binds system:anonymous specifically, not the broader system:unauthenticated group) and
+# doesn't touch a binding this platform doesn't own, matching this platform's consistent
+# "additive, not edits to shared/pre-existing bindings" RBAC discipline used everywhere
+# else (e.g. every tenant Role/RoleBinding is its own new object, never a patch onto
+# something pre-existing).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fulcio-anonymous-issuer-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - kind: User
+    name: system:anonymous
+    apiGroup: rbac.authorization.k8s.io

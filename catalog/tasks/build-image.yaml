@@ -48,6 +48,8 @@ spec:
   results:
     - name: image-digest
     - name: image-ref
+    - name: image-repo
+      description: Bare repo name, no tag - only exists so build.yaml's Pipeline-level IMAGE_URL result (Tekton Chains' type-hinting convention, see docs/image-signing.md) has a task-result expression to reference; Tekton's admission webhook rejects a Pipeline result whose value is a plain $(params.*) reference, it must be $(tasks.*.results.*).
   # Registry push credentials for kaniko. A `kubernetes.io/dockerconfigjson` Secret
   # named registry-credentials must exist in the TENANT's own namespace (not -dev) -
   # see docs/onboarding.md. Mounted at kaniko's default docker-config lookup path so no
@@ -122,7 +124,10 @@ spec:
       env:
         - name: IMAGE_REF
           value: $(steps.resolve-build-config.results.image-ref)
+        - name: IMAGE_REPO
+          value: $(params.image-repo)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
         echo -n "${IMAGE_REF}" | tee "$(results.image-ref.path)"
+        echo -n "${IMAGE_REPO}" | tee "$(results.image-repo.path)"

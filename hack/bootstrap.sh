@@ -97,6 +97,13 @@ TEKTON_DASHBOARD_VERSION="v0.70.0"
 kubectl apply -f "https://github.com/tektoncd/dashboard/releases/download/${TEKTON_DASHBOARD_VERSION}/release.yaml"
 kubectl -n tekton-pipelines rollout status deployment/tekton-dashboard --timeout=180s
 
+log "1.5/6 - Tekton Chains (not present on kind-observe) - keyless image/provenance signing, see docs/image-signing.md"
+# Chains ships one Deployment (tekton-chains-controller) - no separate webhook Deployment
+# like Pipelines/Triggers/PaC have (confirmed live from the release manifest, not assumed
+# from that pattern).
+kubectl apply -f https://storage.googleapis.com/tekton-releases/chains/latest/release.yaml
+kubectl -n tekton-chains rollout status deployment/tekton-chains-controller --timeout=180s
+
 log "2/6 - External Secrets Operator (not present on kind-observe)"
 if ! kubectl get ns external-secrets >/dev/null 2>&1; then
   helm repo add external-secrets https://charts.external-secrets.io --force-update

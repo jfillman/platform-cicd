@@ -25,6 +25,22 @@ spec:
       type: string
   workspaces:
     - name: source
+  # Pipeline-level IMAGE_URL/IMAGE_DIGEST results - Tekton Chains' own "type hinting"
+  # convention for identifying which image a PipelineRun's provenance/signature belongs
+  # to (confirmed live: without these, Chains logs "No image subject to attest ...
+  # Skipping upload to registry" and silently produces no OCI signature at all, despite
+  # otherwise reporting chains.tekton.dev/signed: "true" - a real, non-obvious gap this
+  # surfaced, not a hypothetical). IMAGE_URL is the bare repo name (no tag - confirmed
+  # against Tekton's own docs example); must be $(tasks.*.results.*), not $(params.*) -
+  # Tekton's admission webhook rejects a Pipeline result whose value is a plain param
+  # reference, so build-image.yaml grew a trivial new `image-repo` result just to give
+  # this a task-result expression to point at. IMAGE_DIGEST is build-image's own
+  # already-`sha256:`-prefixed result - see docs/image-signing.md.
+  results:
+    - name: IMAGE_URL
+      value: $(tasks.build-image.results.image-repo)
+    - name: IMAGE_DIGEST
+      value: $(tasks.build-image.results.image-digest)
   tasks:
     - name: clone-repo
       taskRef:
