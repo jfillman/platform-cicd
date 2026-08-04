@@ -94,7 +94,21 @@ spec:
 
         git config user.name "platform-cicd release automation"
         git config user.email "release@platform-cicd.invalid"
-        git commit --quiet -am "Release: promote ${APP_NAME} to staging @ ${IMAGE_REF}"
+
+        # X-App-Repo/X-App-Commit trailers (Phase 3 item 2, docs/commit-signing.md) are
+        # how catalog/tasks/verify-commit-signature.yaml, running as a check on THIS
+        # gitops repo's own PR, finds its way back to the app-repo commit that actually
+        # needs a verified human signature - the gitops commit itself is machine-
+        # generated right here, never hand-signed, so there's nothing meaningful to
+        # verify on it directly. Full 40-char SHA, not the 12-char truncation used
+        # elsewhere for the image tag - 12 hex chars isn't reliably enough to
+        # unambiguously `git fetch` one specific commit. Built with printf + \n escapes,
+        # not a raw multi-line string - the exact same reason the PR body below already
+        # needed this (a raw embedded-newline heredoc broke YAML parsing once this
+        # session, see docs/release.md's git history for that fix).
+        commit_message="$(printf 'Release: promote %s to staging @ %s\n\nX-App-Repo: %s\nX-App-Commit: %s' \
+          "${APP_NAME}" "${IMAGE_REF}" "${GIT_URL}" "${GIT_REVISION}")"
+        git commit --quiet -am "${commit_message}"
         git push --quiet "${clone_url}" "${branch}"
 
         # Field vocabulary/ordering matches docs/design-language.md (App/Repo/Commit/

@@ -19,6 +19,12 @@
 # binary at all (checked against its actual release assets, v1.4.1 - only linux/amd64 and
 # linux/386, plus darwin/arm64) - built from source in a Go stage instead of downloaded.
 #
+# gitsign (Phase 3 item 2, docs/commit-signing.md) - used by catalog/tasks/verify-
+# commit-signature.yaml to verify a fetched app-repo commit's signature/identity, not to
+# sign anything from inside a Task (signing is a developer-machine, interactive-OIDC-flow
+# action, see docs/commit-signing.md). Real linux_amd64/linux_arm64 asset names confirmed
+# against the actual v0.17.0 release (checked live via the GitHub API), not guessed.
+#
 # Build context MUST be the repo root (paths below are repo-root-relative):
 #   docker build -f catalog/toolbox/Dockerfile -t ghcr.io/platform-cicd/toolbox:latest .
 #
@@ -37,6 +43,7 @@ FROM alpine:3.20
 ARG OTEL_CLI_VERSION=0.4.5
 ARG YQ_VERSION=4.44.3
 ARG KUBECTL_VERSION=1.30.4
+ARG GITSIGN_VERSION=0.17.0
 
 RUN apk add --no-cache bash curl jq git openssl ca-certificates util-linux coreutils
 
@@ -56,7 +63,10 @@ RUN set -euo pipefail; \
     && chmod +x /usr/local/bin/yq \
     && curl -fsSL -o /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
-    && chmod +x /usr/local/bin/kubectl
+    && chmod +x /usr/local/bin/kubectl \
+    && curl -fsSL -o /usr/local/bin/gitsign \
+      "https://github.com/sigstore/gitsign/releases/download/v${GITSIGN_VERSION}/gitsign_${GITSIGN_VERSION}_linux_${ARCH}" \
+    && chmod +x /usr/local/bin/gitsign
 
 COPY --from=yajsv-build /go/bin/yajsv /usr/local/bin/yajsv
 
