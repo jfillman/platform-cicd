@@ -1,0 +1,76 @@
+{
+    "title": "DORA Variant 5 - Deep Dive",
+    "uid": "platform-cicd-dora-deepdive",
+    "description": "For someone who doesn't trust a single p50 number. Full percentile spreads, a raw lead-time heatmap (the underlying distribution, not just a quantile line), and deploys-vs-failure-rate plotted together to eyeball whether shipping faster is correlated with more breakage on this platform.",
+    "tags": ["platform-cicd", "dora", "dora-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-30d", "to": "now" },
+    "refresh": "5m",
+    "templating": {
+        "list": [
+            { "name": "tenant", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total, tenant)", "includeAll": true, "multi": true },
+            { "name": "app", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)", "includeAll": true, "multi": true }
+        ]
+    },
+    "panels": [
+        { "id": 100, "type": "row", "title": "Lead time - full percentile spread + raw distribution", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+            "id": 1, "type": "timeseries", "title": "Lead time p50 / p90 / p99",
+            "gridPos": { "x": 0, "y": 1, "w": 12, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "s" } },
+            "targets": [
+                { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p50" },
+                { "expr": "histogram_quantile(0.9, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p90" },
+                { "expr": "histogram_quantile(0.99, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p99" }
+            ]
+        },
+        {
+            "id": 2, "type": "heatmap", "title": "Lead time distribution (raw buckets)",
+            "description": "Every observation, not just a summary quantile - shows whether lead time is a tight cluster or a bimodal split (e.g. 'most PRs promote same-day, a few sit for a week').",
+            "gridPos": { "x": 12, "y": 1, "w": 12, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [ { "expr": "sum by (le) (increase(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "format": "heatmap", "legendFormat": "{{le}}" } ],
+            "options": { "calculate": false, "yAxis": { "unit": "s" } }
+        },
+        { "id": 101, "type": "row", "title": "MTTR - full percentile spread (experimental)", "gridPos": { "x": 0, "y": 10, "w": 24, "h": 1 } },
+        {
+            "id": 3, "type": "timeseries", "title": "MTTR p50 / p90 (experimental)",
+            "gridPos": { "x": 0, "y": 11, "w": 12, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+            "targets": [
+                { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p50 ⚠" },
+                { "expr": "histogram_quantile(0.9, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p90 ⚠" }
+            ]
+        },
+        {
+            "id": 4, "type": "heatmap", "title": "MTTR distribution (raw buckets, experimental)",
+            "gridPos": { "x": 12, "y": 11, "w": 12, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [ { "expr": "sum by (le) (increase(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d]))", "format": "heatmap", "legendFormat": "{{le}}" } ],
+            "options": { "calculate": false, "yAxis": { "unit": "s" } }
+        },
+        { "id": 102, "type": "row", "title": "Does shipping faster correlate with more failures?", "gridPos": { "x": 0, "y": 20, "w": 24, "h": 1 } },
+        {
+            "id": 5, "type": "timeseries", "title": "Deploys/day (left axis) vs Change Failure Rate (right axis)",
+            "description": "Dual-axis overlay, both series over the same window - eyeball whether CFR spikes track deploy-volume spikes.",
+            "gridPos": { "x": 0, "y": 21, "w": 24, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short" },
+                "overrides": [ { "matcher": { "id": "byName", "options": "change failure rate" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "custom.axisPlacement", "value": "right" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] } ] },
+            "targets": [
+                { "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "legendFormat": "deploys/day" },
+                { "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[1d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "legendFormat": "change failure rate" }
+            ]
+        },
+        {
+            "id": 6, "type": "text", "title": "",
+            "gridPos": { "x": 0, "y": 30, "w": 24, "h": 3 },
+            "options": { "mode": "markdown", "content": "Methodology, bucket boundaries, and every caveat: `docs/dora-metrics.md`. Source: `platform/dora-exporter` watching `applications.argoproj.io` in the `argocd` namespace - see the Phase 2 Item 4 design in the platform's own build plan for why this reads ArgoCD status directly rather than the CDEvents stream." }
+        }
+    ]
+}

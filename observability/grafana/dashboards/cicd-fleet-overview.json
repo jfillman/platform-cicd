@@ -1,0 +1,89 @@
+{
+    "title": "CI/CD Variant 5 - Fleet Overview",
+    "uid": "platform-cicd-fleet-overview",
+    "description": "One board, every tenant. Built specifically for the multi-tenant future: as more app repos get onboarded, each one gets a row here automatically (driven by label_values, no per-tenant panel edits ever needed) rather than a dashboard that only reads well for a single demo app.",
+    "tags": ["platform-cicd", "cicd-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-24h", "to": "now" },
+    "refresh": "30s",
+    "templating": { "list": [] },
+    "panels": [
+        { "id": 100, "type": "row", "title": "Fleet at a glance", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+            "id": 1, "type": "stat", "title": "Active tenants (24h)",
+            "description": "Distinct tenant namespaces that ran at least one pipeline in the last 24h - the fleet's real current size, not a static onboarding count.",
+            "gridPos": { "x": 0, "y": 1, "w": 6, "h": 5 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+            "targets": [ { "expr": "count(count by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count[24h]) > 0))" } ]
+        },
+        {
+            "id": 2, "type": "stat", "title": "Total runs today",
+            "gridPos": { "x": 6, "y": 1, "w": 6, "h": 5 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short" } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count[24h]))" } ]
+        },
+        {
+            "id": 3, "type": "stat", "title": "Failures today",
+            "gridPos": { "x": 12, "y": 1, "w": 6, "h": 5 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{status=\"failed\"}[24h]))" } ]
+        },
+        {
+            "id": 4, "type": "gauge", "title": "Running now (platform-wide)",
+            "gridPos": { "x": 18, "y": 1, "w": 6, "h": 5 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "min": 0, "max": 15, "unit": "short",
+                "thresholds": { "steps": [ { "value": 0, "color": "blue" }, { "value": 8, "color": "yellow" }, { "value": 12, "color": "red" } ] } } },
+            "targets": [ { "expr": "tekton_pipelines_controller_running_pipelineruns" } ]
+        },
+        { "id": 101, "type": "row", "title": "Every tenant, one board", "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 } },
+        {
+            "id": 5, "type": "table", "title": "Tenant fleet board (24h)",
+            "description": "One row per tenant namespace. Runs/Failed/Success rate/p95 duration - Success rate rendered as an inline gradient-gauge bar so unhealthy tenants jump out visually without needing a separate panel per app.",
+            "gridPos": { "x": 0, "y": 7, "w": 24, "h": 11 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+                { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count[24h]))", "format": "table", "instant": true, "refId": "A" },
+                { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{status=\"failed\"}[24h]))", "format": "table", "instant": true, "refId": "B" },
+                { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{status=\"success\"}[24h])) / sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count[24h]))", "format": "table", "instant": true, "refId": "C" },
+                { "expr": "histogram_quantile(0.95, sum by (le, exported_namespace) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{pipeline=\"build\"}[24h])))", "format": "table", "instant": true, "refId": "D" }
+            ],
+            "transformations": [
+                { "id": "merge", "options": {} },
+                { "id": "organize", "options": {
+                    "excludeByName": { "Time": true },
+                    "renameByName": { "exported_namespace": "Tenant", "Value #A": "Runs (24h)", "Value #B": "Failed (24h)", "Value #C": "Success rate", "Value #D": "Build p95" }
+                } }
+            ],
+            "fieldConfig": { "defaults": {},
+                "overrides": [
+                    { "matcher": { "id": "byName", "options": "Success rate" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "min", "value": 0 }, { "id": "max", "value": 1 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } ] },
+                    { "matcher": { "id": "byName", "options": "Build p95" }, "properties": [ { "id": "unit", "value": "s" } ] },
+                    { "matcher": { "id": "byName", "options": "Failed (24h)" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-text" } }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] } } ] }
+                ] }
+        },
+        { "id": 102, "type": "row", "title": "Activity by tenant over time", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 } },
+        {
+            "id": 6, "type": "timeseries", "title": "Runs per hour, stacked by tenant",
+            "description": "Stacked bars so growth in fleet size (more tenants, more color bands) is as visible as growth in per-tenant volume.",
+            "gridPos": { "x": 0, "y": 19, "w": 24, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 60, "stacking": { "mode": "normal" } } } },
+            "targets": [ { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count[1h]))", "legendFormat": "{{exported_namespace}}" } ]
+        },
+        { "id": 103, "type": "row", "title": "Leaderboard", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
+        {
+            "id": 7, "type": "bargauge", "title": "Busiest tenants (24h)",
+            "gridPos": { "x": 0, "y": 29, "w": 24, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+            "fieldConfig": { "defaults": { "unit": "short", "min": 0,
+                "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
+            "targets": [ { "expr": "topk(15, sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count[24h])))", "legendFormat": "{{exported_namespace}}" } ]
+        }
+    ]
+}

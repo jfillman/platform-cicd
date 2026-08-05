@@ -1,0 +1,57 @@
+{
+    "title": "DORA Variant 3 - Trends & Timeline",
+    "uid": "platform-cicd-dora-trends",
+    "description": "Is engineering performance improving? A 90-day window with daily bars for every metric, so a slow drift (not just a single bad day) is visible. Built for a retro/quarterly-review conversation rather than a live wallboard.",
+    "tags": ["platform-cicd", "dora", "dora-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-90d", "to": "now" },
+    "refresh": "1h",
+    "templating": {
+        "list": [
+            { "name": "tenant", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total, tenant)", "includeAll": true, "multi": true },
+            { "name": "app", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)", "includeAll": true, "multi": true }
+        ]
+    },
+    "panels": [
+        { "id": 100, "type": "row", "title": "Deployment Frequency - daily deploys", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+            "id": 1, "type": "timeseries", "title": "Deploys per day (stacked by app)",
+            "gridPos": { "x": 0, "y": 1, "w": 24, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 80, "stacking": { "mode": "normal" }, "lineWidth": 0 } } },
+            "targets": [ { "expr": "sum by (app) (increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "legendFormat": "{{app}}" } ]
+        },
+        { "id": 101, "type": "row", "title": "Lead Time trend", "gridPos": { "x": 0, "y": 9, "w": 24, "h": 1 } },
+        {
+            "id": 2, "type": "timeseries", "title": "Lead time p50 vs p95, over time",
+            "description": "Bands: elite <1h, high <1d, medium <1w, low <1mo.",
+            "gridPos": { "x": 0, "y": 10, "w": 24, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "s" },
+                "overrides": [ { "matcher": { "id": "byRegexp", "options": "p95" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } } ] } ] },
+            "targets": [
+                { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p50" },
+                { "expr": "histogram_quantile(0.95, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p95" }
+            ]
+        },
+        { "id": 102, "type": "row", "title": "Change Failure Rate trend", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 } },
+        {
+            "id": 3, "type": "timeseries", "title": "Weekly change failure rate",
+            "gridPos": { "x": 0, "y": 19, "w": 24, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "drawStyle": "bars", "fillOpacity": 60 } } },
+            "targets": [ { "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[7d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[7d]))", "legendFormat": "CFR (7d rolling)" } ]
+        },
+        { "id": 103, "type": "row", "title": "MTTR trend (experimental)", "gridPos": { "x": 0, "y": 27, "w": 24, "h": 1 } },
+        {
+            "id": 4, "type": "timeseries", "title": "MTTR p50, weekly (experimental)",
+            "gridPos": { "x": 0, "y": 28, "w": 24, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p50 MTTR ⚠ experimental" } ]
+        }
+    ]
+}

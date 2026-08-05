@@ -1,0 +1,81 @@
+{
+    "title": "CI/CD Variant 3 - Performance & Bottlenecks",
+    "uid": "platform-cicd-performance",
+    "description": "Where does pipeline time actually go? Per-stage percentile durations, a task-level bottleneck leaderboard, duration trends, and a per-tenant/task drill-down table. Useful for judging the payoff of 8.1's build-source/unit-test parallelization and 8.3's dependency caching.",
+    "tags": ["platform-cicd", "cicd-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-24h", "to": "now" },
+    "refresh": "1m",
+    "templating": {
+        "list": [
+            {
+                "name": "tenant",
+                "type": "query",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
+                "includeAll": true,
+                "multi": true
+            }
+        ]
+    },
+    "panels": [
+        { "id": 100, "type": "row", "title": "Stage duration, p50 / p95 / p99", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+            "id": 1, "type": "timeseries", "title": "PipelineRun duration by stage (p50 solid, p95 dashed)",
+            "gridPos": { "x": 0, "y": 1, "w": 24, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "s" },
+                "overrides": [ { "matcher": { "id": "byRegexp", "options": "p95.*" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } } ] } ] },
+            "targets": [
+                { "expr": "histogram_quantile(0.5, sum by (le, pipeline) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[30m])))", "legendFormat": "p50 {{pipeline}}" },
+                { "expr": "histogram_quantile(0.95, sum by (le, pipeline) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[30m])))", "legendFormat": "p95 {{pipeline}}" }
+            ]
+        },
+        { "id": 101, "type": "row", "title": "Task-level bottlenecks", "gridPos": { "x": 0, "y": 10, "w": 24, "h": 1 } },
+        {
+            "id": 2, "type": "bargauge", "title": "Slowest tasks (p95, 24h)",
+            "description": "Every catalog Task, ranked by p95 duration - the direct answer to 'what should we optimize next'.",
+            "gridPos": { "x": 0, "y": 11, "w": 12, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+            "fieldConfig": { "defaults": { "unit": "s", "min": 0,
+                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } },
+            "targets": [ { "expr": "topk(12, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[24h]))))", "legendFormat": "{{task}}" } ]
+        },
+        {
+            "id": 3, "type": "bargauge", "title": "Fastest tasks (p50, 24h)",
+            "description": "The other end of the leaderboard - cheap, well-behaved tasks. Useful as a sanity check that the slow list above isn't just 'everything'.",
+            "gridPos": { "x": 12, "y": 11, "w": 12, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "displayMode": "lcd", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+            "fieldConfig": { "defaults": { "unit": "s", "min": 0,
+                "thresholds": { "steps": [ { "value": 0, "color": "green" } ] } } },
+            "targets": [ { "expr": "bottomk(12, histogram_quantile(0.5, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[24h]))))", "legendFormat": "{{task}}" } ]
+        },
+        { "id": 102, "type": "row", "title": "Trend and drill-down", "gridPos": { "x": 0, "y": 21, "w": 24, "h": 1 } },
+        {
+            "id": 4, "type": "timeseries", "title": "build-source vs unit-test duration (parallelized since 8.1)",
+            "description": "These two run concurrently as of Phase 3 item 8.1 - watch that neither one alone is dragging out build-image's start.",
+            "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "s" } },
+            "targets": [
+                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\",task=\"build-source\"}[1h])))", "legendFormat": "build-source p50" },
+                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\",task=\"unit-test\"}[1h])))", "legendFormat": "unit-test p50" },
+                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\",task=\"build-image\"}[1h])))", "legendFormat": "build-image p50" }
+            ]
+        },
+        {
+            "id": 5, "type": "table", "title": "Task duration by tenant (p95, 24h)",
+            "description": "Gradient-gauge cells turn the table into a scannable heat-map as tenant/task combinations multiply.",
+            "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [ { "expr": "histogram_quantile(0.95, sum by (le, exported_namespace, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[24h])))", "format": "table", "instant": true } ],
+            "transformations": [ { "id": "organize", "options": { "renameByName": { "exported_namespace": "Tenant", "task": "Task", "Value": "p95 duration" } } } ],
+            "fieldConfig": { "defaults": { "unit": "s", "min": 0, "max": 120,
+                "custom": { "cellOptions": { "type": "gauge", "mode": "gradient" } },
+                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } }
+        }
+    ]
+}

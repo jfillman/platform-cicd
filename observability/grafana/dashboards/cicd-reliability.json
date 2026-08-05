@@ -1,0 +1,122 @@
+{
+    "title": "CI/CD Variant 2 - Reliability & Health",
+    "uid": "platform-cicd-reliability",
+    "description": "Is the platform trustworthy? Success-rate gauges per stage, a flaky-task leaderboard, controller error trends, and a per-tenant/per-pipeline reliability table. Built to answer 'what's breaking and for whom' as more tenants and apps get onboarded.",
+    "tags": ["platform-cicd", "cicd-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-24h", "to": "now" },
+    "refresh": "1m",
+    "templating": {
+        "list": [
+            {
+                "name": "tenant",
+                "type": "query",
+                "datasource": { "type": "prometheus", "uid": "prometheus" },
+                "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
+                "includeAll": true,
+                "multi": true
+            }
+        ]
+    },
+    "panels": [
+        { "id": 100, "type": "row", "title": "Success rate by stage (24h)", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+            "id": 1, "type": "gauge", "title": "build",
+            "gridPos": { "x": 0, "y": 1, "w": 4, "h": 6 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"build\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"build\"}[24h]))" } ]
+        },
+        {
+            "id": 2, "type": "gauge", "title": "test",
+            "gridPos": { "x": 4, "y": 1, "w": 4, "h": 6 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"test\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"test\"}[24h]))" } ]
+        },
+        {
+            "id": 3, "type": "gauge", "title": "deploy",
+            "gridPos": { "x": 8, "y": 1, "w": 4, "h": 6 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"deploy\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"deploy\"}[24h]))" } ]
+        },
+        {
+            "id": 4, "type": "gauge", "title": "release",
+            "gridPos": { "x": 12, "y": 1, "w": 4, "h": 6 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"release\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"release\"}[24h]))" } ]
+        },
+        {
+            "id": 5, "type": "gauge", "title": "governance gates (combined)",
+            "description": "sast-check + image-scan-check + sbom-check + policy-check combined pass rate.",
+            "gridPos": { "x": 16, "y": 1, "w": 4, "h": 6 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\"}[24h]))" } ]
+        },
+        {
+            "id": 6, "type": "gauge", "title": "overall platform",
+            "gridPos": { "x": 20, "y": 1, "w": 4, "h": 6 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))" } ]
+        },
+        { "id": 101, "type": "row", "title": "Where it's breaking", "gridPos": { "x": 0, "y": 7, "w": 24, "h": 1 } },
+        {
+            "id": 7, "type": "bargauge", "title": "Flakiest tasks (failure count, 24h)",
+            "description": "Task-level failure counts across every pipeline and tenant, sorted descending - the first place to look when reliability drops.",
+            "gridPos": { "x": 0, "y": 8, "w": 12, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+            "fieldConfig": { "defaults": { "unit": "short", "min": 0,
+                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 5, "color": "red" } ] } } },
+            "targets": [ { "expr": "topk(10, sum by (task) (increase(tekton_pipelines_controller_taskrun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"failed\"}[24h])))", "legendFormat": "{{task}}" } ]
+        },
+        {
+            "id": 8, "type": "timeseries", "title": "Failures over time, by stage",
+            "gridPos": { "x": 12, "y": 8, "w": 12, "h": 9 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short" } },
+            "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"failed\"}[15m]))", "legendFormat": "{{pipeline}}" } ]
+        },
+        { "id": 102, "type": "row", "title": "Reliability by tenant x pipeline", "gridPos": { "x": 0, "y": 17, "w": 24, "h": 1 } },
+        {
+            "id": 9, "type": "table", "title": "Success rate table (24h)",
+            "description": "One row per tenant+pipeline combination. Gradient-gauge cells double as an inline progress bar so a scan down the Success rate column instantly shows who's healthy - scales cleanly to many tenants and many apps.",
+            "gridPos": { "x": 0, "y": 18, "w": 24, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+                { "expr": "sum by (exported_namespace, pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"success\"}[24h])) / sum by (exported_namespace, pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))",
+                  "format": "table", "instant": true }
+            ],
+            "transformations": [ { "id": "organize", "options": { "renameByName": { "exported_namespace": "Tenant", "pipeline": "Pipeline", "Value": "Success rate" } } } ],
+            "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
+                "custom": { "cellOptions": { "type": "gauge", "mode": "gradient" } },
+                "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" } ] } } }
+        },
+        { "id": 103, "type": "row", "title": "Controller-level errors", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
+        {
+            "id": 10, "type": "timeseries", "title": "Reconcile error rate by reconciler",
+            "gridPos": { "x": 0, "y": 29, "w": 12, "h": 7 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "percentunit" } },
+            "targets": [ { "expr": "sum by (reconciler) (increase(tekton_pipelines_controller_reconcile_count{success=\"false\"}[15m])) / sum by (reconciler) (increase(tekton_pipelines_controller_reconcile_count[15m]))", "legendFormat": "{{reconciler}}" } ]
+        },
+        {
+            "id": 11, "type": "timeseries", "title": "Workqueue retries",
+            "gridPos": { "x": 12, "y": 29, "w": 12, "h": 7 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "fieldConfig": { "defaults": { "unit": "short" } },
+            "targets": [ { "expr": "sum by (name) (increase(tekton_pipelines_controller_workqueue_retries_total[15m]))", "legendFormat": "{{name}}" } ]
+        }
+    ]
+}

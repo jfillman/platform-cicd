@@ -1,0 +1,63 @@
+{
+    "title": "DORA Variant 1 - Classic Quadrant",
+    "uid": "platform-cicd-dora-quadrant",
+    "description": "The four DORA metrics as a literal 2x2 quadrant, each with a big headline number colored by the DORA performance band (elite/high/medium/low) and a small trend line underneath. MTTR's whole quadrant is visually marked experimental per its own caveat.",
+    "tags": ["platform-cicd", "dora", "dora-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-30d", "to": "now" },
+    "refresh": "5m",
+    "templating": {
+        "list": [
+            { "name": "tenant", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total, tenant)", "includeAll": true, "multi": true },
+            { "name": "app", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)", "includeAll": true, "multi": true }
+        ]
+    },
+    "panels": [
+        {
+            "id": 100, "type": "text", "title": "",
+            "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
+            "options": { "mode": "markdown", "content": "Bands: **Deployment Frequency** elite = on-demand (multiple/day) · **Lead Time** elite <1h · **Change Failure Rate** elite <15% · **MTTR** elite <1h (experimental, see bottom-right quadrant)." }
+        },
+        { "id": 101, "type": "row", "title": "", "gridPos": { "x": 0, "y": 2, "w": 24, "h": 1 } },
+        {
+            "id": 1, "type": "stat", "title": "Deployment Frequency",
+            "gridPos": { "x": 0, "y": 3, "w": 12, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "graphMode": "area", "textMode": "value_and_name", "colorMode": "background" },
+            "fieldConfig": { "defaults": { "unit": "short", "decimals": 1,
+                "thresholds": { "steps": [ { "value": 0, "color": "dark-red" }, { "value": 1, "color": "orange" }, { "value": 7, "color": "yellow" }, { "value": 30, "color": "green" } ] } } },
+            "targets": [ { "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[30d])) / 30", "legendFormat": "deploys/day (30d avg)" } ]
+        },
+        {
+            "id": 2, "type": "stat", "title": "Lead Time for Changes",
+            "gridPos": { "x": 12, "y": 3, "w": 12, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "graphMode": "area", "textMode": "value_and_name", "colorMode": "background" },
+            "fieldConfig": { "defaults": { "unit": "s",
+                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 3600, "color": "yellow" }, { "value": 86400, "color": "orange" }, { "value": 604800, "color": "dark-red" } ] } } },
+            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[30d])) by (le))", "legendFormat": "p50 lead time" } ]
+        },
+        {
+            "id": 3, "type": "stat", "title": "Change Failure Rate",
+            "gridPos": { "x": 0, "y": 13, "w": 12, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "graphMode": "area", "textMode": "value_and_name", "colorMode": "background" },
+            "fieldConfig": { "defaults": { "unit": "percentunit",
+                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 0.15, "color": "yellow" }, { "value": 0.3, "color": "orange" }, { "value": 0.45, "color": "dark-red" } ] } } },
+            "targets": [ { "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[30d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[30d]))", "legendFormat": "change failure rate" } ]
+        },
+        {
+            "id": 4, "type": "stat", "title": "MTTR (experimental)",
+            "description": "Best-effort: time between a confirmed failed release and the next confirmed success for the same app. Cannot see manual rollbacks outside this pipeline - see docs/dora-metrics.md.",
+            "gridPos": { "x": 12, "y": 13, "w": 12, "h": 10 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "options": { "graphMode": "area", "textMode": "value_and_name", "colorMode": "background" },
+            "fieldConfig": { "defaults": { "unit": "s",
+                "thresholds": { "steps": [ { "value": 0, "color": "purple" }, { "value": 3600, "color": "semi-dark-purple" }, { "value": 86400, "color": "dark-purple" } ] } } },
+            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[30d])) by (le))", "legendFormat": "p50 MTTR ⚠ experimental" } ]
+        }
+    ]
+}

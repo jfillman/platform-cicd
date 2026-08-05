@@ -1,0 +1,51 @@
+{
+    "title": "DORA Variant 4 - Team/Tenant Comparison",
+    "uid": "platform-cicd-dora-comparison",
+    "description": "All four DORA metrics, one row per app, across every tenant - built for the moment this platform has dozens of onboarded apps and the question becomes 'which teams are elite/high/medium/low' rather than 'how is the one demo app doing'. Sortable, gradient-gauge cells double as inline bars.",
+    "tags": ["platform-cicd", "dora", "dora-variant"],
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-30d", "to": "now" },
+    "refresh": "5m",
+    "templating": {
+        "list": [
+            { "name": "tenant", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total, tenant)", "includeAll": true, "multi": true }
+        ]
+    },
+    "panels": [
+        {
+            "id": 100, "type": "text", "title": "",
+            "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
+            "options": { "mode": "markdown", "content": "One row per (tenant, app). Deploys/day higher is better · Lead time lower is better · Change failure rate lower is better · MTTR lower is better (experimental)." }
+        },
+        {
+            "id": 1, "type": "table", "title": "DORA scorecard, by app (30d)",
+            "gridPos": { "x": 0, "y": 2, "w": 24, "h": 14 },
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "targets": [
+                { "expr": "sum by (tenant, app) (increase(dora_deployments_total{tenant=~\"$tenant\"}[30d])) / 30", "format": "table", "instant": true, "refId": "A" },
+                { "expr": "histogram_quantile(0.5, sum by (le, tenant, app) (rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\"}[30d])))", "format": "table", "instant": true, "refId": "B" },
+                { "expr": "sum by (tenant, app) (increase(dora_releases_total{tenant=~\"$tenant\",outcome=\"failed\"}[30d])) / sum by (tenant, app) (increase(dora_releases_total{tenant=~\"$tenant\"}[30d]))", "format": "table", "instant": true, "refId": "C" },
+                { "expr": "histogram_quantile(0.5, sum by (le, tenant, app) (rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\"}[30d])))", "format": "table", "instant": true, "refId": "D" },
+                { "expr": "sum by (tenant, app) (increase(dora_releases_total{tenant=~\"$tenant\"}[30d]))", "format": "table", "instant": true, "refId": "E" }
+            ],
+            "transformations": [
+                { "id": "merge", "options": {} },
+                { "id": "organize", "options": {
+                    "excludeByName": { "Time": true },
+                    "renameByName": { "tenant": "Tenant", "app": "App", "Value #A": "Deploys/day", "Value #B": "Lead time p50", "Value #C": "Change failure rate", "Value #D": "MTTR p50 (exp.)", "Value #E": "Total releases (30d)" },
+                    "indexByName": { "Tenant": 0, "App": 1, "Deploys/day": 2, "Lead time p50": 3, "Change failure rate": 4, "MTTR p50 (exp.)": 5, "Total releases (30d)": 6 }
+                } }
+            ],
+            "fieldConfig": { "defaults": {},
+                "overrides": [
+                    { "matcher": { "id": "byName", "options": "Deploys/day" }, "properties": [ { "id": "unit", "value": "short" }, { "id": "decimals", "value": 2 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 5 }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.14, "color": "orange" }, { "value": 1, "color": "yellow" }, { "value": 3, "color": "green" } ] } } ] },
+                    { "matcher": { "id": "byName", "options": "Lead time p50" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.cellOptions", "value": { "type": "color-background" } }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "green" }, { "value": 3600, "color": "yellow" }, { "value": 86400, "color": "orange" }, { "value": 604800, "color": "red" } ] } } ] },
+                    { "matcher": { "id": "byName", "options": "Change failure rate" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 1 }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "green" }, { "value": 0.15, "color": "yellow" }, { "value": 0.3, "color": "red" } ] } } ] },
+                    { "matcher": { "id": "byName", "options": "MTTR p50 (exp.)" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.cellOptions", "value": { "type": "color-background" } }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "purple" }, { "value": 3600, "color": "semi-dark-purple" }, { "value": 86400, "color": "dark-purple" } ] } } ] },
+                    { "matcher": { "id": "byName", "options": "Total releases (30d)" }, "properties": [ { "id": "unit", "value": "short" } ] }
+                ] }
+        }
+    ]
+}
