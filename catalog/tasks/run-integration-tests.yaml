@@ -30,7 +30,12 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        jq -r '.test.enabled // true' <<< '$(params.config-json)' | tee "$(step.results.enabled.path)"
+        # NOT `.test.enabled // true` - a real, previously-undiscovered bug found live
+        # (see run-tests.yaml's own identical fix for the full explanation): jq's `//`
+        # treats `false` the same as missing/null, so an explicit `test.enabled: false`
+        # was silently ignored - no tenant has ever actually been able to disable the
+        # integration-test stage via cicd.yaml.
+        jq -r 'if .test.enabled == false then "false" else "true" end' <<< '$(params.config-json)' | tee "$(step.results.enabled.path)"
 
     - name: integration-test
       image: $(params.agent-image)

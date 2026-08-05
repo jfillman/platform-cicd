@@ -136,7 +136,12 @@
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean", "default": false },
-            "channel": { "type": "string" }
+            "channel": { "type": "string" },
+            "scanResults": {
+              "type": "boolean",
+              "default": true,
+              "description": "Shift-left notifications from sast-scan/image-scan the moment each real scan produces a result, separate from the general build/test/deploy/release pass-fail notification above (which stays on whenever slack.enabled is true). Only takes effect when slack.enabled is also true. Defaults on (matching the pipeline's own default real-scan behavior), but a tenant that finds these too frequent/verbose can turn just this off without losing the general per-stage notifications."
+            }
           }
         }
       }

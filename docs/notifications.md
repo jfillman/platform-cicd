@@ -5,6 +5,21 @@ Every stage's pipeline (`build`/`test`/`deploy`/`release`) calls
 message per stage completion, with a failure log excerpt appended when the stage didn't
 succeed.
 
+`sast-scan`/`image-scan` (Phase 3 items 8.4/8.5) additionally send their own, separate
+shift-left notification the moment each real scan produces a result, rather than waiting
+for the stage-level message above. This is controlled by its own
+`notifications.slack.scanResults` toggle (default `true`, only takes effect when
+`notifications.slack.enabled` is also `true`) - the user asked for this to be optional
+independently of the general per-stage notifications, since scan results are more
+frequent/verbose and a tenant might want one without the other:
+
+```yaml
+notifications:
+  slack:
+    enabled: true
+    scanResults: false   # turn off just the sast-scan/image-scan pings, keep the rest
+```
+
 ## The bug this fixes
 
 The plumbing (`notify-slack.yaml`, reading `notifications.slack` from `cicd.yaml`, a

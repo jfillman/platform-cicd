@@ -105,6 +105,16 @@ spec:
         #!/usr/bin/env bash
         set -uo pipefail
         source "${PLATFORM_LIB}/otel.sh"
+        # otel.sh itself does `set -euo pipefail` at module level (catalog/lib/otel.sh) -
+        # sourcing it silently forces -e onto THIS script too, since `source` runs in the
+        # same shell, not a subshell. A real, previously-undiscovered bug (same class
+        # found live in image-scan.yaml, via a throwaway debug pod - see that file's own
+        # comment): this script deliberately wants -e OFF so a real cosign_attest failure
+        # falls through to its own EXIT_CODE check and outcome="failed" write below,
+        # rather than silently dying mid-script with no result ever recorded. Re-declaring
+        # `set -uo pipefail` does NOT clear an already-set -e (independent toggles) - only
+        # an explicit `set +e` does.
+        set +e
 
         trivy image --format cyclonedx --output /tmp/sbom.json "${IMAGE_REF}"
         if [[ $? -ne 0 ]]; then

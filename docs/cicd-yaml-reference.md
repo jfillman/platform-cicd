@@ -132,6 +132,26 @@ Phase 3 item 8.1), which only supports one PVC-backed workspace per TaskRun pod
 (confirmed live: `[User error] more than one PersistentVolumeClaim is bound`). See
 `build-source.yaml`'s own header comment for the full explanation.
 
+## A real bug that made `enabled: false` silently ineffective
+
+`build.unitTest.enabled` and `test.enabled` both used to be read via `jq -r '.path.enabled
+// true'` - a genuine, previously-undiscovered bug: jq's `//` alternative operator treats
+`false` the same as `null`/missing and falls through to the right-hand default, so an
+explicit `enabled: false` was silently overridden back to `"true"`. **No tenant had ever
+actually been able to disable unit tests or the integration-test stage via `cicd.yaml`**
+until this was found and fixed (`run-tests.yaml`/`run-integration-tests.yaml`, now
+`jq -r 'if .path.enabled == false then "false" else "true" end'`). Found as a side effect
+of building the same fix for `notifications.slack.scanResults` below, then confirmed via
+a direct `jq` test (`echo '{"test":{"enabled":false}}' | jq -r '.test.enabled // true'`
+prints `true`) before scanning the rest of the catalog for the same pattern. Verified
+live afterward: `unitTest.enabled: false` now genuinely skips the test command
+(`unit tests disabled in cicd.yaml, skipping`, not an actual test run).
+
+Anywhere else in this catalog that needs "default true unless explicitly false" should
+use the `if ... == false then ... else ... end` form, not `// true` - `// false` is fine
+as-is (both sides collapse to the same falsy result either way, so there's nothing for
+the bug to hide behind).
+
 ## Staleness of the platform-generated boilerplate
 
 `cicd.yaml` itself never goes stale (see above), but the two files onboarding generates

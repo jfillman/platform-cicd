@@ -125,6 +125,29 @@ all six task spans (including `image-scan`, which failed on real pre-existing CV
 confirming spans emit on failure too, not just success) correctly nested under
 `stage:build` in a real Tempo trace.
 
+## A real bug: sourcing otel.sh silently forces `set -e` onto the caller
+
+`catalog/lib/otel.sh` declares `set -euo pipefail` at module level. Since `source`/`.`
+runs in the *same* shell as the caller (not a subshell), this silently applies to
+whatever script sourced it too - even if that script deliberately started with `set -uo
+pipefail` (no `-e`) specifically because it needs to survive a command's real failure and
+keep running (to build a findings summary, write an `outcome: failed` result, etc.).
+Re-declaring `set -uo pipefail` again *after* the `source` line does **not** undo this -
+`-u`/`pipefail` are independent toggles from `-e`, so a bare `set -uo pipefail` never
+clears an already-set `-e`. Only an explicit `set +e` does.
+
+Found live via a throwaway debug pod reproducing the exact pattern (`source otel.sh`,
+then a deliberately-failing piped command, then more script) after `image-scan.yaml`'s
+new post-scan findings-enrichment code silently never ran on a real scan failure - the
+step's container just died right after the `trivy` call, with no error surfaced. A
+full sweep of every file that sources `otel.sh` found exactly two genuinely at risk (the
+only two that explicitly wanted `-e` off *and* have code after the source line that needs
+to survive a failure): `image-scan.yaml` and `generate-sbom.yaml` (the latter never
+actually hit this live, but has the identical structural bug waiting for the first real
+`cosign attest` failure). Both now do `set +e` immediately after sourcing. Every other
+otel.sh-sourcing file already declared `set -euo pipefail` itself before the source line,
+so the redundant `-e` from otel.sh changes nothing for them.
+
 ## Reliability gap, not yet closed
 
 CDEvents delivery to the broker is at-least-once (plain HTTP POST with retries - see
