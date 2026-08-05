@@ -421,6 +421,57 @@ a pre-Chains-setup image tag (built before Tekton Chains existed on this cluster
 cleanly with `no matching attestations` - the "no attestation exists at all" case, distinct
 from "attestation exists but fails policy" proven above.
 
+## Closing the two remaining gaps
+
+All four findings above are now fixed - `verify-provenance` reports a genuine, zero-
+violation pass (`"success":true, "violations":[]`, `success-count: 22`) against a real
+build, confirmed on the real GitHub Check (`policy-check: completed/success`).
+
+**`build_task_image_results_found` / `subject_build_task_matches`**: `build-image.yaml`
+now emits two new **Task-level** results, `IMAGE_URL`/`IMAGE_DIGEST` (exact case), duplicating
+the same values already computed for the existing `image-repo`/`image-digest` results.
+Confirmed live before assuming it was safe: this reads
+`predicate.buildConfig.tasks[].results[]`, which Chains populates for every task
+regardless of `artifacts.taskrun.storage` - completely unrelated to the signing-storage
+bug fixed earlier in this doc, not a risk of reintroducing it. Tested in isolation first
+(a real build, confirmed `chains.tekton.dev/signed: "true"` still worked) before moving on,
+given the stakes of getting this wrong.
+
+Two real bugs surfaced while wiring this up:
+
+1. Kaniko's `image-digest` is a **Task**-level result (`--digest-file=$(results.image-digest.path)`),
+   not a step-level one - a cross-step step-result reference to it silently resolves to the
+   literal, unresolved placeholder string rather than erroring. Task-level result files
+   live at the stable, documented `/tekton/results/<name>` path regardless of which step
+   wrote them - read directly from there instead.
+2. Tekton's admission webhook rejects a result-path reference used inline in `script:`
+   once the result belongs to a different, earlier step ("stepResult substitutions are
+   only allowed in env, command and args") - and, non-obviously, this validation is a
+   **plain string match against the whole script text**, with no awareness of bash
+   comments. Writing the offending syntax inside a `#`-prefixed explanatory comment
+   trips the same rejection as using it for real. Worded the comment around the
+   pattern instead of quoting it literally.
+
+**`attested_source_code_reference` / `source_code_reference_provided` /
+`materials_format_okay`**: two separate, real fixes were needed, since these two rules
+read from two genuinely different places:
+
+1. `build.yaml` gained two new Pipeline-level results, `CHAINS-GIT_URL`/`CHAINS-GIT_COMMIT`
+   (Tekton Chains' own real, documented type-hint convention for promoting a task's
+   source-checkout results into `predicate.materials` - confirmed via
+   `tekton.dev/docs/chains/slsa-provenance`, not guessed), sourced from `clone-repo`'s
+   own `url`/`commit` results. Same Pipeline-level-result pattern already proven for
+   `IMAGE_URL`/`IMAGE_DIGEST` - not the separate `artifacts.pipelinerun.enable-deep-
+   inspection` auto-discovery mechanism, which isn't needed for an explicit Pipeline-level
+   result. This closes `attested_source_code_reference` and `materials_format_okay`,
+   which read `predicate.materials` itself.
+2. `verify-image-provenance.yaml` now also supplies `input.image.source.git.url`/
+   `.revision` in its wrapped document - a genuinely separate field
+   `slsa_source_correlated.rego`'s `_expected_sources` reads directly off plain `input`,
+   not off the attestation at all. Extracted independently from `git-clone`'s own task
+   results (the one true source), not round-tripped back out of the newly-populated
+   materials entry. This closes `source_code_reference_provided`.
+
 ## A real operational constraint: Fulcio certs are short-lived, and there's no TSA
 
 Hit live while re-testing against an already-open PR after a long gap: `cosign
@@ -435,6 +486,40 @@ deferral, not a gap in `verify-image-provenance.yaml` itself. In practice this i
 issue for the real automated flow (`policy-check` runs within seconds of the image being
 signed, well inside the validity window) - it only surfaces when manually re-testing
 against a stale signature, as happened here.
+
+## A real, unrelated incident hit mid-testing: the cluster's disk filled to 100%
+
+While re-verifying the two gap-closure fixes, a `deploy` PipelineRun died mid-run with
+`no space left on device` writing a Tekton init binary - nothing to do with this platform's
+own code. `df -h` on the kind node showed the root filesystem at 100% (453MB free of 93GB).
+
+Root cause, found by checking what was actually consuming space: **MinIO's PVC in the
+pre-existing `observability` namespace was using 27GB** (`du -sh
+/var/local-path-provisioner/pvc-*-observability_minio`) - unrelated shared infrastructure
+on this cluster, not anything from platform-cicd's own churn. A safe, reversible
+`crictl rmi --prune` (removing unused container image layers) reclaimed a little space but
+wasn't the real fix.
+
+The actual root cause, one layer deeper: the podman VM's own virtual disk was already
+379GB (`podman machine inspect`), but the VM's root **partition** had only ever been sized
+to 93GB (`lsblk` inside the VM showed `vda` at 379G with `vda4` - the root partition - at
+only 92.5G) - roughly 286GB of already-available disk was simply never allocated to the
+partition. Fixed live, no VM restart needed: `growpart /dev/vda 4` to extend the partition
+into the unallocated space, then `xfs_growfs /` to grow the filesystem to match (XFS
+supports online/live growth of a mounted root filesystem). Went from 93GB/94% full to
+379GB/25% full in under a minute.
+
+Separately, at the user's explicit direction, MinIO's old 27GB of accumulated data was
+also cleared for a genuinely fresh start: scale the `minio` Deployment to 0 (release the
+volume), clear the local-path-provisioner backing directory's contents **including the
+hidden `.minio.sys` metadata directory** (a plain shell glob `*` doesn't match dotfiles -
+confirmed live it left `.minio.sys` behind on the first pass), then scale back to 1. MinIO
+came back up healthy against empty storage.
+
+Net result: 379GB/18% used, 314GB free - real, lasting headroom, not just a one-time
+reclaim. Worth remembering for future sessions: if a pod fails with `no space left on
+device` on this cluster again, check `lsblk`/lsblk-equivalent partition sizing before
+assuming the VM itself needs a bigger disk allocation - the disk may already be big enough.
 
 ## Verification performed (live, not synthetic)
 

@@ -178,6 +178,28 @@ spec:
         wrapped_provenance_file="${workdir}/wrapped-provenance.json"
         jq -s '{attestations: map({statement: .})}' "${provenance_files[@]}" > "${wrapped_provenance_file}"
 
+        # input.image.source - a genuinely separate thing from predicate.materials, read
+        # by a DIFFERENT part of slsa_source_correlated.rego (`_expected_sources`, off
+        # plain `input`, not off the attestation at all) to know what source reference to
+        # actually check the attestation against. Extracted straight from git-clone's own
+        # task results in buildConfig.tasks (the same values now also promoted into
+        # materials via build.yaml's CHAINS-GIT_URL/CHAINS-GIT_COMMIT results, but read
+        # independently here rather than round-tripped back out of materials, since this
+        # is the one true source and materials is a derived copy). Revision must be the
+        # full commit SHA, not a symbolic ref - git-clone's own `commit` result already is.
+        source_git_url="$(jq -r '[.attestations[].statement.predicate.buildConfig.tasks[]
+          | select(.invocation.environment.labels["tekton.dev/task"] == "git-clone")
+          | .results[] | select(.name == "url") | .value][0] // empty' "${wrapped_provenance_file}")"
+        source_git_commit="$(jq -r '[.attestations[].statement.predicate.buildConfig.tasks[]
+          | select(.invocation.environment.labels["tekton.dev/task"] == "git-clone")
+          | .results[] | select(.name == "commit") | .value][0] // empty' "${wrapped_provenance_file}")"
+        if [[ -n "${source_git_url}" && -n "${source_git_commit}" ]]; then
+          jq --arg url "${source_git_url}" --arg rev "${source_git_commit}" \
+            '. + {image: {source: {git: {url: $url, revision: $rev}}}}' \
+            "${wrapped_provenance_file}" > "${wrapped_provenance_file}.tmp"
+          mv "${wrapped_provenance_file}.tmp" "${wrapped_provenance_file}"
+        fi
+
         # Tenant's own policy data - the same ConfigMap verify-commit-signature.yaml
         # already reads, no new template. Exposed to Conforma as ruleData so it's
         # structurally available for a future rule to consume, even though no current

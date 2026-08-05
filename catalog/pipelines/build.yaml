@@ -36,11 +36,24 @@ spec:
   # reference, so build-image.yaml grew a trivial new `image-repo` result just to give
   # this a task-result expression to point at. IMAGE_DIGEST is build-image's own
   # already-`sha256:`-prefixed result - see docs/image-signing.md.
+  # CHAINS-GIT_URL/CHAINS-GIT_COMMIT - Tekton Chains' own real, documented type-hint
+  # convention (confirmed via tekton.dev/docs/chains/slsa-provenance) for promoting a
+  # task's own source-checkout results into the provenance's materials field (predicate
+  # .materials for SLSA v0.2). Exact names, case-sensitive. Sourced from clone-repo's own
+  # url/commit results (git-clone's proven, already-correct output - see
+  # docs/commit-signing.md) - same Pipeline-level-result pattern as IMAGE_URL/IMAGE_DIGEST
+  # above, not the separate artifacts.pipelinerun.enable-deep-inspection auto-discovery
+  # mechanism (not needed since these are explicit Pipeline-level results, not buried in
+  # an un-pointed-to child Task result). See docs/provenance-policy.md.
   results:
     - name: IMAGE_URL
       value: $(tasks.build-image.results.image-repo)
     - name: IMAGE_DIGEST
       value: $(tasks.build-image.results.image-digest)
+    - name: CHAINS-GIT_URL
+      value: $(tasks.clone-repo.results.url)
+    - name: CHAINS-GIT_COMMIT
+      value: $(tasks.clone-repo.results.commit)
   tasks:
     - name: clone-repo
       taskRef:

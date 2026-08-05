@@ -50,6 +50,10 @@ spec:
     - name: image-ref
     - name: image-repo
       description: Bare repo name, no tag - only exists so build.yaml's Pipeline-level IMAGE_URL result (Tekton Chains' type-hinting convention, see docs/image-signing.md) has a task-result expression to reference; Tekton's admission webhook rejects a Pipeline result whose value is a plain $(params.*) reference, it must be $(tasks.*.results.*).
+    - name: IMAGE_URL
+      description: Same value as image-repo, duplicated under Conforma's exact-cased Task-level type-hint name - policy/release/lib/tekton/task_results.rego's build_tasks() looks for a task with results *ending in* "IMAGE_URL"/"IMAGE_DIGEST", independent of and unrelated to Chains' own artifacts.taskrun.storage signing/storage config (confirmed live before adding this - it only reads predicate.buildConfig.tasks[].results, which Chains already populates for every task regardless of storage settings). See docs/provenance-policy.md.
+    - name: IMAGE_DIGEST
+      description: Same value as image-digest, duplicated under Conforma's exact-cased Task-level type-hint name - see IMAGE_URL above.
   # Registry push credentials for kaniko. A `kubernetes.io/dockerconfigjson` Secret
   # named registry-credentials must exist in the TENANT's own namespace (not -dev) -
   # see docs/onboarding.md. Mounted at kaniko's default docker-config lookup path so no
@@ -131,3 +135,16 @@ spec:
         set -euo pipefail
         echo -n "${IMAGE_REF}" | tee "$(results.image-ref.path)"
         echo -n "${IMAGE_REPO}" | tee "$(results.image-repo.path)"
+        echo -n "${IMAGE_REPO}" | tee "$(results.IMAGE_URL.path)"
+        # image-digest is a TASK-level result (kaniko writes it via --digest-file), not a
+        # step-level one - a cross-step "steps dot results dot name" env var reference only
+        # applies to step-scoped results and silently resolves to the literal unresolved
+        # placeholder string for a task-level one (confirmed live, a real bug on the first
+        # attempt - and note: writing that exact syntax even inside a comment here trips
+        # Tekton's admission webhook, since its variable substitution is a plain string
+        # match with no awareness of bash comments - confirmed live the hard way). A
+        # results-dot-name-dot-path reference inline in script is ALSO rejected once the
+        # result belongs to an earlier step. Task-level result files live at the
+        # well-documented, stable /tekton/results/<name> path regardless of which step
+        # wrote them, so read it directly rather than fighting either restriction.
+        cat /tekton/results/image-digest | tee "$(results.IMAGE_DIGEST.path)"
