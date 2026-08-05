@@ -1,0 +1,51 @@
+# catalog/pipelines/sast-check.yaml
+#
+# Real (not stub) SAST governance check - Phase 3 item 8.4. Runs as a PR-triggered Check
+# on a tenant's gitops repo (see docs/release.md for the general governance-check
+# pattern), scanning the promoted app-repo commit's actual source rather than the gitops
+# repo's own manifests.
+#
+# No flow/stage context here (unlike build.yaml's own sast-scan usage) - this is a
+# PR-triggered, human-paced review check, not part of the CDEvents-chained PipelineRun
+# sequence. flow-traceparent/stage-span-id are left at their default "" on sast-scan's
+# own params, so span emission is skipped entirely (real scan work still happens) - same
+# convention governance-stub.yaml already established.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: sast-check
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Resolves the promoted app-repo commit from a gitops PR, then runs a real Semgrep SAST scan against it.
+  params:
+    - name: repo-url
+      type: string
+    - name: revision
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: resolve-app-commit
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: resolve-app-commit }
+          - { name: namespace, value: platform-catalog }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: repo-url, value: $(params.repo-url) }
+        - { name: revision, value: $(params.revision) }
+
+    - name: sast-scan
+      runAfter: [resolve-app-commit]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: sast-scan }
+          - { name: namespace, value: platform-catalog }
+      workspaces:
+        - { name: source, workspace: source }

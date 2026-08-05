@@ -1,16 +1,14 @@
 # catalog/tasks/build-image.yaml
 #
-# Resolves build config, runs the app's own build.sh, then builds+pushes the image with
-# kaniko. This Task's shape changed once nodejs-demo-app surfaced a real gap: an earlier
-# version of this file never invoked cicd.yaml's `build.script` at all, even though
-# schemas/cicd.schema.json marks it required - the build stage jumped straight to kaniko
-# building the Dockerfile as-is. That's fixed here: `run-build-script` now runs
-# build.script inside the app's own resolved build-agent image (same image run-tests.yaml
-# uses) BEFORE kaniko packages the result. The corresponding architectural expectation
-# for app repos is that build.sh does the actual build (npm ci, compiling, whatever the
-# language needs) and the Dockerfile becomes a thin packaging step that copies already-
-# built artifacts rather than re-running the build itself - see nodejs-demo-app's
-# build.sh/Dockerfile for the reference shape.
+# Resolves the Dockerfile path + image tag, then builds+pushes the image with kaniko.
+# The architectural expectation for app repos is that build.sh (catalog/tasks/
+# build-source.yaml, a separate Task as of Phase 3 item 8.1) does the actual build (npm
+# ci, compiling, whatever the language needs) and the Dockerfile becomes a thin packaging
+# step that copies already-built artifacts rather than re-running the build itself - see
+# nodejs-demo-app's build.sh/Dockerfile for the reference shape. Teams doing the whole
+# build inside a multi-stage Dockerfile instead (no separate build.sh) skip build-source
+# entirely (see that file's own header) - this Task doesn't need to know which case it is,
+# kaniko just builds whatever Dockerfile it's given either way.
 #
 # The actual image-build step still runs on kaniko - a deliberate, narrow exception to
 # "pipeline step code is bash": kaniko's image has no shell by design (that's what makes
@@ -30,7 +28,7 @@ metadata:
   labels:
     platform.io/catalog: "true"
 spec:
-  description: Resolves build config, runs build.sh, then builds+pushes the image with kaniko.
+  description: Resolves the Dockerfile path + image tag, then builds+pushes the image with kaniko.
   workspaces:
     - name: source
   params:
@@ -42,9 +40,12 @@ spec:
       description: Destination registry/repo, e.g. ghcr.io/<org>/<app>.
     - name: git-revision
       type: string
-    - name: agent-image
+    - name: flow-traceparent
       type: string
-      description: Resolved build-agent image (catalog/tasks/resolve-build-agent-image.yaml) - build.sh runs inside this, same image run-tests.yaml uses.
+      description: Root traceparent for the whole flow (from start-flow-root-span) - gives the kaniko-duration span its trace id. See emit-image-ref-result's own span-emission comment for why this Task can't wrap kaniko directly.
+    - name: stage-span-id
+      type: string
+      description: The current stage's own span id (from start-stage-span) - the kaniko-duration span is parented to it.
   results:
     - name: image-digest
     - name: image-ref
@@ -71,40 +72,25 @@ spec:
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       results:
         - name: dockerfile-path
-        - name: build-script-path
         - name: image-ref
+        - name: span-start-time
+          description: Stamped immediately before kaniko starts - see emit-image-ref-result's span-emission comment for why the actual span is sent from there instead of here.
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
         CFG='$(params.config-json)'
         DOCKERFILE_PATH="$(jq -r '.build.dockerfile' <<< "${CFG}")"
-        BUILD_SCRIPT_PATH="$(jq -r '.build.script' <<< "${CFG}")"
         SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
         IMAGE_REF="$(params.image-repo):${SHORT_SHA}"
         echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"
-        echo -n "${BUILD_SCRIPT_PATH}" | tee "$(step.results.build-script-path.path)"
         echo -n "${IMAGE_REF}" | tee "$(step.results.image-ref.path)"
-
-    - name: run-build-script
-      image: $(params.agent-image)
-      workingDir: $(workspaces.source.path)
-      # Cross-step result references ($(steps.X.results.Y)) are only allowed in env/
-      # command/args, not inline in `script:` - Tekton's admission webhook rejects that
-      # directly ("stepResult substitutions are only allowed in env, command and args").
-      # Route it through an env var instead.
-      env:
-        - name: BUILD_SCRIPT_PATH
-          value: $(steps.resolve-build-config.results.build-script-path)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        SCRIPT="${BUILD_SCRIPT_PATH}"
-        if [[ ! -f "${SCRIPT}" ]]; then
-          echo "error: build.script '${SCRIPT}' (from cicd.yaml) not found in repo." >&2
-          exit 1
-        fi
-        chmod +x "${SCRIPT}" || true
-        bash "${SCRIPT}"
+        # -n here matters, unlike the two lines above it's not just style: this result is
+        # read back by emit-image-ref-result via a cross-step env var substitution, not a
+        # `cat`-based one - command substitution strips a trailing newline automatically,
+        # a raw env var substitution doesn't. A bare `date | tee` here left one in, which
+        # otel-cli's --start flag received literally - a real bug, found live: the span
+        # silently never reached Tempo (no error, no exit-nonzero, just absent).
+        echo -n "$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")" | tee "$(step.results.span-start-time.path)"
 
     - name: build-and-push
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
@@ -122,6 +108,15 @@ spec:
         - --cache=true
         - --cache-ttl=336h
 
+    # Sends the span covering kaniko's own build-and-push duration - not from within
+    # build-and-push itself, since kaniko's image has no shell/otel-cli (the file
+    # header's exception note). Using this step's own start (immediately after kaniko
+    # exits) as the span's end time is an approximation, not kaniko's exact internal
+    # finish instant - close enough for real diagnostic purposes, and there's no cheaper
+    # way to get closer without wrapping kaniko in something that has a shell, which
+    # would reintroduce the exact problem this exception avoids. Only reached if kaniko
+    # succeeded (a failed build-and-push halts the TaskRun before this step runs) - same
+    # honest, documented gap as build-source.yaml/run-tests.yaml's own emit-span steps.
     - name: emit-image-ref-result
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
@@ -130,9 +125,18 @@ spec:
           value: $(steps.resolve-build-config.results.image-ref)
         - name: IMAGE_REPO
           value: $(params.image-repo)
+        - name: SPAN_START
+          value: $(steps.resolve-build-config.results.span-start-time)
+        - name: FLOW_TRACEPARENT
+          value: $(params.flow-traceparent)
+        - name: STAGE_SPAN_ID
+          value: $(params.stage-span-id)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+        source "${PLATFORM_LIB}/otel.sh"
         echo -n "${IMAGE_REF}" | tee "$(results.image-ref.path)"
         echo -n "${IMAGE_REPO}" | tee "$(results.image-repo.path)"
         echo -n "${IMAGE_REPO}" | tee "$(results.IMAGE_URL.path)"
@@ -148,3 +152,5 @@ spec:
         # well-documented, stable /tekton/results/<name> path regardless of which step
         # wrote them, so read it directly rather than fighting either restriction.
         cat /tekton/results/image-digest | tee "$(results.IMAGE_DIGEST.path)"
+        otel_task_span_send "build-image" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" \
+          "${SPAN_START}" "$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")" "Succeeded"

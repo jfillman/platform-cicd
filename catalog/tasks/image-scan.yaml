@@ -1,0 +1,76 @@
+# catalog/tasks/image-scan.yaml
+#
+# Real (not stub) image vulnerability scanning via Trivy - Phase 3 item 8.5. Replaces
+# governance-gate-stub for the `image-scan` gate in both build.yaml's image-scan Task
+# and (via extract-promoted-image.yaml + catalog/pipelines/image-scan-check.yaml) the
+# gitops repo's PR-triggered image-scan Check.
+#
+# Trivy, not a second SAST-style source scanner: scans the actual built OCI image (OS
+# packages + language deps), no server/license needed, single static binary (a real
+# GitHub-release binary confirmed live for linux/arm64, unlike Semgrep - see
+# sast-scan.yaml's own header for that contrast) - pinned into the toolbox image
+# (catalog/toolbox/Dockerfile) the same way as gitsign/ec/cosign. Runs entirely inside
+# the toolbox image (unlike sast-scan's dedicated non-toolbox step image) - no
+# start/end-timestamp handoff needed, otel-cli is right there, so this wraps the trivy
+# invocation directly in otel_child_span.
+#
+# --severity HIGH,CRITICAL: MEDIUM/LOW findings are real but not build-blocking at this
+# phase - a real, deliberate bar, not "scan everything and never fail." Revisit if this
+# proves too loose/strict once run against more real images.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: image-scan
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Runs Trivy against the given image reference; fails closed on HIGH/CRITICAL vulnerabilities.
+  params:
+    - name: image-ref
+      type: string
+      description: Full image reference (repo:tag) to scan - must already be pushed to the registry, Trivy pulls it directly.
+    - name: flow-traceparent
+      type: string
+      default: ""
+      description: Leave empty when there's no flow/stage context (e.g. a PR-triggered GitOps-repo check) - see governance-stub.yaml for the same convention.
+    - name: stage-span-id
+      type: string
+      default: ""
+      description: The calling stage's own span id - this scan's span is parented to it. Ignored when flow-traceparent is empty.
+  results:
+    - name: outcome
+      description: "'passed'/'failed' - a real result, never 'stub' (this is a real implementation, not governance-gate-stub)."
+  steps:
+    - name: scan
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      env:
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+        - name: FLOW_TRACEPARENT
+          value: $(params.flow-traceparent)
+        - name: STAGE_SPAN_ID
+          value: $(params.stage-span-id)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+      script: |
+        #!/usr/bin/env bash
+        set -uo pipefail
+        source "${PLATFORM_LIB}/otel.sh"
+
+        if [[ -n "${FLOW_TRACEPARENT}" ]]; then
+          otel_child_span "image-scan" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" "image=${IMAGE_REF}" -- \
+            trivy image --severity HIGH,CRITICAL --exit-code 1 --scanners vuln "${IMAGE_REF}"
+        else
+          echo "no flow-traceparent provided - skipping span emission (expected for PR-triggered GitOps-repo checks)" >&2
+          trivy image --severity HIGH,CRITICAL --exit-code 1 --scanners vuln "${IMAGE_REF}"
+        fi
+        EXIT_CODE=$?
+
+        if [[ "${EXIT_CODE}" -eq 0 ]]; then
+          echo -n "passed" | tee "$(results.outcome.path)"
+        else
+          echo "image-scan: trivy found HIGH/CRITICAL vulnerabilities (exit ${EXIT_CODE})" >&2
+          echo -n "failed" | tee "$(results.outcome.path)"
+          exit 1
+        fi

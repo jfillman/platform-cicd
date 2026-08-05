@@ -31,6 +31,107 @@ See [examples/cicd.yaml](examples/cicd.yaml) for a complete example and
   old platform had gates that looked identical whether they were real or `exit 0`
   one-liners. This one doesn't let that ambiguity exist.
 
+## Two build strategies: `build.script`, or a multi-stage Dockerfile
+
+`build.script` (e.g. `./build.sh`) is **optional**, not required. Two ways to structure
+a build, pick whichever fits:
+
+- **Script + thin Dockerfile** (the reference shape - see
+  [examples/cicd.yaml](examples/cicd.yaml)): `build.script` does the actual build (`npm
+  ci && npm run build`, `mvn package`, ...) inside the resolved `build.agent` image, and
+  `build.dockerfile` becomes a thin packaging step that just copies the already-built
+  artifacts. This runs as its own Tekton Task (`build-source`), concurrently with unit
+  tests - see [tracing.md](tracing.md)/the build Pipeline's own DAG comments for why that's
+  safe (they don't share build output).
+- **Everything in a multi-stage Dockerfile**: omit `build.script` entirely and do the
+  whole build inside `build.dockerfile` (`FROM ... AS builder` / `RUN npm ci && npm run
+  build` / `COPY --from=builder`). The `build-source` Task is skipped entirely (Tekton's
+  `when:` clause, driven by `validate-cicd-config`'s `has-build-script` result) and kaniko
+  builds the Dockerfile directly. Build caching in this path comes from kaniko's own layer
+  cache (confirmed live - kaniko logs `Returning cached image manifest` on unchanged
+  layers, a real effect of `--cache=true`, not just the flag being present), not
+  `build.cache` below - order your Dockerfile's `COPY package*.json` / `RUN npm ci` (or
+  the Maven/`pom.xml` equivalent) *before* copying the rest of the source, standard
+  Docker layer-caching practice, or the cache invalidates on every source change
+  regardless of whether dependencies changed.
+
+`build.agent` is required either way - unit tests always run inside it, independent of
+which build strategy you pick.
+
+## Build dependency caching (`build.cache`)
+
+Only applies to the `build.script` path above - the multi-stage-Dockerfile path caches
+via kaniko's own layers instead (see above). Opt in with:
+
+```yaml
+build:
+  agent: nodejs-20
+  script: ./build.sh
+  cache:
+    enabled: true
+    size: small   # small=1Gi, medium=2.5Gi, large=5Gi, xlarge=8Gi - default small
+```
+
+No `type` field - it's derived from `build.agent`'s prefix (`nodejs-*` -> npm, `openjdk-*`
+-> Maven), not a second, separately-declarable value that could disagree with `agent`.
+Agents without cache support yet (`python-*`, `go-1.22`) treat `enabled: true` as a no-op
+(logged, not an error).
+
+`size` is a t-shirt size (same dictionary as the old `cd-pipelines-user` Helm chart's
+`buildSpec.cacheSize`, reused as-is: small=1Gi, medium=2.5Gi, large=5Gi, xlarge=8Gi),
+picked per-app since different apps have genuinely different dependency-tree sizes -
+default `small` if omitted. **Not resizable live**: kind-observe's default `standard`
+StorageClass has `allowVolumeExpansion: false` (confirmed via `kubectl get
+storageclass`), so changing this after onboarding means deleting and recreating the PVC
+(losing its cached content, not otherwise harmful), not a transparent resize.
+
+What's actually cached is the build tool's own *download* cache (npm's tarball cache via
+`NPM_CONFIG_CACHE`, Maven's local repository via `-Dmaven.repo.local`) - not
+`node_modules`/`target` directly. `npm ci` in particular deletes and rebuilds
+`node_modules` from scratch on every run by design, so caching that directory would do
+nothing; what actually avoids re-downloading is the tool's own cache, backed here by a
+real, persistent, **per-app** PVC (`build-cache-<app-name>`, provisioned at onboarding -
+see `platform/broker/manifests/app-build-cache-pvc-template.yaml`) that survives across
+runs, unlike the ephemeral per-run `source` workspace. Per-app rather than shared across
+a tenant's apps specifically so `size` above can vary per app.
+
+The cache is keyed by a hash of the relevant lockfile (`package-lock.json` for npm,
+`pom.xml` for Maven), scoped under `<cache-type>/<hash>` on the PVC - a dependency
+change produces a new hash and therefore a fresh, uncontaminated cache subdirectory,
+rather than silently serving stale packages. Verified live: a rebuild with an unchanged
+lockfile measurably reused the existing download cache (npm's own reported install time
+dropped from 584ms to 317ms); a lockfile content change produced a new cache key and
+fell back to a full, uncached download (720ms), with the old key's cache left untouched
+alongside it.
+
+**Initialization**: there's no seeding step. The PVC is created empty (a manual
+`kubectl apply` of the onboarding template today, same maturity level as
+`registry-credentials`); cache *content* is populated lazily by whichever build first
+hits a given `<cache-type>/<hash>` key - exactly the miss-then-hit sequence verified
+above. Nothing pre-warms it.
+
+**Concurrent builds** (real, expected usage on this platform - multiple feature
+branches, or PR-triggered ephemeral-env builds, building the same app at the same time)
+share this same per-app cache, since it isn't scoped per-branch/per-PipelineRun. npm and
+Maven behave differently here, and the platform treats them differently as a result:
+npm's own cache store is content-addressable and explicitly built for safe concurrent
+access from multiple processes - no extra handling needed. Maven's local repository is
+not - concurrent `mvn` processes writing to the same local repo is a well-documented
+corruption risk - so `build-source.yaml` wraps the Maven case in a plain, portable
+mkdir-based lock (no extra binary dependency on a generic upstream agent image) that
+serializes concurrent builds landing on the *same* cache key (which only happens when
+they share the identical `pom.xml`, so they'd resolve the same dependencies anyway);
+different keys never contend, so this doesn't add contention for the common case of
+different branches touching different dependencies.
+
+Implementation note for anyone touching `build-source.yaml`: this cache is mounted as a
+plain Kubernetes `volumes:`/`volumeMounts:` entry, not a Tekton *workspace* - a
+workspace-bound PVC here collides with Tekton's Affinity Assistant (active because
+`unit-test` and `build-source` share the PVC-backed `source` workspace concurrently,
+Phase 3 item 8.1), which only supports one PVC-backed workspace per TaskRun pod
+(confirmed live: `[User error] more than one PersistentVolumeClaim is bound`). See
+`build-source.yaml`'s own header comment for the full explanation.
+
 ## Staleness of the platform-generated boilerplate
 
 `cicd.yaml` itself never goes stale (see above), but the two files onboarding generates

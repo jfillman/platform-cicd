@@ -18,6 +18,16 @@ spec:
     - name: agent-image
       type: string
       description: Resolved build-agent image, see catalog/lib/build-agents.env for the cicd.yaml `build.agent` name -> image mapping.
+    - name: flow-traceparent
+      type: string
+      description: Root traceparent for the whole flow (from start-flow-root-span) - gives this Task's span its trace id.
+    - name: stage-span-id
+      type: string
+      description: The current stage's own span id (from start-stage-span) - this Task's span is parented to it.
+  results:
+    - name: span-start-time
+    - name: span-end-time
+      description: Set only if the unit-test step itself succeeded (or tests were disabled) - see emit-span's own header comment for the honest limit a real test failure implies.
   steps:
     - name: resolve-test-command
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -35,19 +45,64 @@ spec:
 
     - name: unit-test
       image: $(params.agent-image)
-      workingDir: $(workspaces.source.path)
-      # Cross-step result references only work in env/command/args, not inline script -
-      # see the comment in catalog/tasks/build-image.yaml's run-build-script step.
+      # Deliberately NOT $(workspaces.source.path) - real bug, caught live (Phase 3 item
+      # 8.2 testing): this Task now runs concurrently with build-source (item 8.1), and
+      # both independently run their own full dependency install (test.sh's own header
+      # already documents "this script owns npm ci itself" - a from-scratch install,
+      # logically unrelated to build.sh's own `npm ci --omit=dev`). Both writing to the
+      # SAME shared workspace's node_modules at the same time is a genuine race, not a
+      # hypothetical: a real concurrent run failed with "npm error enoent ... mkdir
+      # '/workspace/source/node_modules/send'" from exactly this collision. Copying the
+      # source into an isolated, non-shared local directory first (excluding
+      # node_modules - test.sh's own npm ci rebuilds it from scratch there anyway, so
+      # copying the old one first would be wasted work) gives this Task's own dependency
+      # install nothing to collide with, without needing a second PVC-backed workspace.
+      workingDir: /tmp/test-src
       env:
         - name: TEST_ENABLED
           value: $(steps.resolve-test-command.results.enabled)
         - name: TEST_COMMAND
           value: $(steps.resolve-test-command.results.command)
+        - name: SOURCE_WORKSPACE
+          value: $(workspaces.source.path)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+        mkdir -p /tmp/test-src
+        cp -a "${SOURCE_WORKSPACE}/." /tmp/test-src/
+        rm -rf /tmp/test-src/node_modules
+        # Plain `date`, not catalog/lib/otel.sh - this step runs inside the app's own
+        # resolved build-agent image, which has neither otel-cli nor $PLATFORM_LIB. See
+        # build-source.yaml's own run-build-script step for the full rationale - same
+        # handoff-to-a-later-toolbox-step pattern.
+        date -u +"%Y-%m-%dT%H:%M:%S.%NZ" | tee "$(results.span-start-time.path)"
         if [[ "${TEST_ENABLED}" != "true" ]]; then
           echo "unit tests disabled in cicd.yaml, skipping"
-          exit 0
+        else
+          bash -c "${TEST_COMMAND}"
         fi
-        bash -c "${TEST_COMMAND}"
+        date -u +"%Y-%m-%dT%H:%M:%S.%NZ" | tee "$(results.span-end-time.path)"
+
+    # Deliberately only reached on success - see build-source.yaml's own emit-span step
+    # for the full rationale (a failing test halts the TaskRun before this step runs, so
+    # a failed unit-test gets no span - an honest, documented gap, not a silent one).
+    - name: emit-span
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      env:
+        - name: FLOW_TRACEPARENT
+          value: $(params.flow-traceparent)
+        - name: STAGE_SPAN_ID
+          value: $(params.stage-span-id)
+        - name: SPAN_START
+          value: $(results.span-start-time.path)
+        - name: SPAN_END
+          value: $(results.span-end-time.path)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        source "${PLATFORM_LIB}/otel.sh"
+        otel_task_span_send "unit-test" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" \
+          "$(cat "${SPAN_START}")" "$(cat "${SPAN_END}")" "Succeeded"

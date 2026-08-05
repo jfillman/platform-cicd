@@ -107,6 +107,40 @@ otel_span_send() {
   otel-cli "${args[@]}"
 }
 
+# otel_task_span_send <name> <flow-traceparent> <parent-span-id> <start-time> <end-time> <tekton-status> [attrs]
+# Sends a span for one Task's own already-finished work, nested under an explicit
+# <parent-span-id> (typically the current stage's span id). Distinct from
+# otel_span_send on purpose: that function is hardcoded for a STAGE's own span (always
+# parents to the flow root, and reuses its <span-id> arg AS the new span's own id,
+# since that id was pre-minted by otel_stage_span_begin specifically for the stage).
+# Calling otel_span_send from a Task with the stage span id doesn't nest the Task under
+# the stage - it mints a span with the *same id as the stage span itself*, parented to
+# the flow root as a sibling, not a child. Real bug, found live: multiple Task spans
+# (and the stage span) all claiming the same (trace-id, span-id) pair meant Tempo could
+# only keep one of them - explains why some Task spans silently never appeared while
+# others "worked" (one arbitrary survivor of the collision). This function mints a
+# genuinely fresh span id every call and takes the parent explicitly, so nesting is
+# correct and no id is ever reused across spans.
+otel_task_span_send() {
+  : "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
+  local name="$1" flow_traceparent="$2" parent_span_id="$3" start_time="$4" end_time="$5" tekton_status="$6"
+  local attrs="${7:-}"
+  local trace_id span_id
+  trace_id="$(otel_traceparent_trace_id "${flow_traceparent}")"
+  span_id="$(openssl rand -hex 8)"
+  local status_code="ok"
+  [[ "${tekton_status}" != "Succeeded" && "${tekton_status}" != "Completed" ]] && status_code="error"
+  local -a args=(
+    span --service "platform-cicd" --name "${name}"
+    --force-trace-id "${trace_id}" --force-span-id "${span_id}"
+    --force-parent-span-id "${parent_span_id}"
+    --start "${start_time}" --end "${end_time}"
+    --status-code "${status_code}"
+  )
+  [[ -n "${attrs}" ]] && args+=(--attrs "${attrs}")
+  otel-cli "${args[@]}"
+}
+
 # otel_child_span <name> <flow-traceparent> <parent-span-id> <attrs> -- <command...>
 # Runs <command...> wrapped in one stateless child span via `otel-cli exec` - safe to
 # call from a Task with no connection to whatever process/Pod owns the parent span,

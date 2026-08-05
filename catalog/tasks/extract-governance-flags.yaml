@@ -1,8 +1,9 @@
 # catalog/tasks/extract-governance-flags.yaml
 #
 # Extracts the four governance toggles from cicd.yaml's `governance` block so the
-# calling Pipeline can `when`-guard each stub gate individually. All four gates are
-# stubs in this phase of the platform - see catalog/stepactions/governance-stub.yaml.
+# calling Pipeline can `when`-guard each gate individually. sast is real as of Phase 3
+# item 8.4; image-scan/policy-check/sbom are still stubs - see
+# catalog/stepactions/governance-stub.yaml.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -26,7 +27,14 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         CFG='$(params.config-json)'
-        jq -r '.governance.sast // false' <<< "${CFG}" | tee "$(results.sast.path)"
-        jq -r '.governance.imageScan // false' <<< "${CFG}" | tee "$(results.image-scan.path)"
-        jq -r '.governance.policyCheck // false' <<< "${CFG}" | tee "$(results.policy-check.path)"
-        jq -r '.governance.sbom // false' <<< "${CFG}" | tee "$(results.sbom.path)"
+        # echo -n, not a bare `jq -r ... | tee` - jq's raw output is newline-terminated,
+        # and that trailing newline was silently written into the result value. A real,
+        # previously-dormant bug found live: Tekton's `when: { operator: in, values:
+        # ["true"] }` does an exact-string match, so a result value of "true\n" never
+        # matches "true" - every when-guarded gate below silently never fired even when
+        # its cicd.yaml flag was genuinely true. Never caught earlier because no gate had
+        # ever actually been enabled in a real run before sast was (Phase 3 item 8.4).
+        echo -n "$(jq -r '.governance.sast // false' <<< "${CFG}")" | tee "$(results.sast.path)"
+        echo -n "$(jq -r '.governance.imageScan // false' <<< "${CFG}")" | tee "$(results.image-scan.path)"
+        echo -n "$(jq -r '.governance.policyCheck // false' <<< "${CFG}")" | tee "$(results.policy-check.path)"
+        echo -n "$(jq -r '.governance.sbom // false' <<< "${CFG}")" | tee "$(results.sbom.path)"

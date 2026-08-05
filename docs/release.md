@@ -114,6 +114,49 @@ the governance checks are real (Phase 3) and trusted, drop
 repo directly. Nothing in the platform needs to change for this; the PR flow becomes
 fully automatic (checks-gated only) the moment that setting changes.
 
+## Governance checks, re-triggering, and break-glass
+
+Every gitops-repo release PR carries four independent, required GitHub Checks -
+`sast`/`image-scan`/`policy-check`/`sbom` (see the PR body itself, which now documents
+this directly - Phase 3 item 8.6). `sast`/`image-scan`/`policy-check` are real as of
+Phase 3 items 8.4/8.5/item 2; `sbom` is still a stub pending item 8.7.
+
+**Re-running a failed check**: comment `/retest <check-name>` on the PR (e.g. `/retest
+sast`) to re-run just that one, or `/retest` alone to re-run all four - PaC's own native
+comment mechanism, no platform code involved. Fix the underlying issue first if the
+failure is real; re-running only re-evaluates the check, it does not bypass it.
+
+**Break-glass** (decided with the user, 2026-08-05): who can force a release through a
+failing required check, and how it's made visible.
+
+- **Who**: a dedicated GitHub team (e.g. `platform-admins`), not repo/org admins
+  generally - narrower, purpose-specific access. This is a **manual GitHub
+  configuration step**, not something this platform's code performs: create the team,
+  add its intended members, then on the gitops repo's branch protection rule for `main`,
+  enable "Allow specified actors to bypass required pull requests" (or the equivalent
+  "Do not require approvals/status checks for administrators" toggle, depending on which
+  GitHub plan/UI is in use) scoped to that team. Matches this platform's existing
+  precedent for branch protection itself (`docs/release.md`'s own "Evolving the approval
+  requirement" section above) - a manual, out-of-band GitHub setting, not platform IaC.
+- **Audit**: GitHub's own merge/audit-log record is real and already visible on the PR,
+  but a security-relevant bypass shouldn't depend on someone thinking to go check it -
+  `catalog/tasks/detect-bypass-merge.yaml` fires on every PR close (via the new
+  `.tekton/pull-request-merged.yaml` trigger) and posts a real Slack alert (same
+  `slack-webhook-url` Secret/design language as every other notification, but **not**
+  gated on `notifications.slack.enabled` - a bypass alert isn't a routine preference)
+  whenever a PR merged despite one of the four checks not showing `success`. A normal,
+  fully-green merge produces no alert - this is deliberately quiet in the common case.
+  Verified live against real GitHub data (not merely the code path): a real merged PR
+  with all checks green correctly produced no alert; a real PR with a genuinely failing
+  `policy-check`, fed synthetically as `merged=true` (no actual bypass has happened yet
+  on this repo), correctly detected it and posted a real, visible Slack message.
+  **Not yet verified**: the trigger file's own `on-cel-expression` (`body.action ==
+  "closed"`) and `{{ body.pull_request.number }}`/`{{ body.pull_request.merged }}`
+  field access - this needs a real PR close event to confirm PaC resolves them exactly
+  as written, which wasn't exercised this session (no actual bypass-eligible merge
+  occurred). Worth a real end-to-end pass once the `platform-admins` team/branch-
+  protection setting above is actually configured.
+
 ## Verification
 
 - Push to the app repo, let it flow through build->test->deploy->release for real.

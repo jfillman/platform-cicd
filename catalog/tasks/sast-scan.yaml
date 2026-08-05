@@ -1,0 +1,116 @@
+# catalog/tasks/sast-scan.yaml
+#
+# Real (not stub) SAST via Semgrep - Phase 3 item 8.4. Replaces governance-gate-stub for
+# the `sast` gate in both build.yaml's sast-scan Task and (via resolve-app-commit.yaml +
+# catalog/pipelines/sast-check.yaml) the gitops repo's PR-triggered sast Check.
+#
+# Semgrep, not CodeQL: broad multi-language support matching this platform's multi-agent
+# (nodejs/java, more later) ambition, no license server/GitHub-Advanced-Security
+# dependency. Runs on the OFFICIAL semgrep/semgrep image directly as this Task's step
+# image, not baked into the shared toolbox image - checked live before deciding this:
+# Semgrep's GitHub releases ship ZERO downloadable binary assets (confirmed via the
+# GitHub API - `.assets` is an empty array on the latest release), so the toolbox's usual
+# pinned-static-binary pattern (gitsign/ec/cosign) doesn't apply here at all. A dedicated
+# step image is the same deliberate exception already established in this codebase for
+# kaniko (see build-image.yaml's own header) - confirmed the official image is genuinely
+# multi-arch (linux/arm64 included) via `docker manifest inspect` before committing to it,
+# not assumed.
+#
+# `--config p/ci --config p/security-audit`: both free, no-login-required registry
+# rulesets (`--config auto` needs a Semgrep App token for its full behavior, which this
+# platform doesn't have or want to depend on for a build-blocking gate). p/ci alone was
+# tried first and found genuinely insufficient for a SECURITY gate, not just assumed
+# adequate: a deliberately-planted command-injection snippet (child_process.exec with
+# unsanitized input) scanned clean under p/ci (only 16 JS rules, more a general-quality
+# bundle than a security one), then correctly flagged as a blocking finding
+# (javascript.lang.security.detect-child-process) once p/security-audit was added -
+# confirmed live via a throwaway pod before committing to this config, not guessed from
+# Semgrep's own naming.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sast-scan
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Runs Semgrep (p/ci ruleset) against the source workspace; fails closed on real findings.
+  workspaces:
+    - name: source
+  params:
+    - name: flow-traceparent
+      type: string
+      default: ""
+      description: Leave empty when there's no flow/stage context (e.g. a PR-triggered GitOps-repo check) - see governance-stub.yaml for the same convention.
+    - name: stage-span-id
+      type: string
+      default: ""
+      description: The calling stage's own span id - this scan's span is parented to it. Ignored when flow-traceparent is empty.
+  results:
+    - name: outcome
+      description: "'passed'/'failed' - a real result, never 'stub' (this is a real implementation, not governance-gate-stub)."
+    - name: span-start-time
+    - name: span-end-time
+      description: Set only if the scan step itself ran to completion (pass or fail) - see emit-span's own comment. Task-level (not step-level), like outcome above - all three are written and read within this same self-contained Task, matching build-source.yaml's own proven pattern for this shape.
+  steps:
+    - name: scan
+      image: semgrep/semgrep:1.172.0
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env bash
+        # Not set -e: semgrep's own exit code (0=clean, 1=findings under --error) is the
+        # real pass/fail signal this Task reports - a script-level early exit would skip
+        # writing the `outcome` result entirely, turning a real failure into a silent gap.
+        set -uo pipefail
+        # Plain `date`, not catalog/lib/otel.sh - this step runs in semgrep's own image
+        # (neither otel-cli nor $PLATFORM_LIB present), same handoff-to-a-later-toolbox-
+        # step pattern as build-source.yaml/run-tests.yaml's own agent-image steps.
+        date -u +"%Y-%m-%dT%H:%M:%S.%NZ" | tee "$(results.span-start-time.path)"
+
+        semgrep scan --config p/ci --config p/security-audit --error .
+        EXIT_CODE=$?
+
+        date -u +"%Y-%m-%dT%H:%M:%S.%NZ" | tee "$(results.span-end-time.path)"
+
+        if [[ "${EXIT_CODE}" -eq 0 ]]; then
+          echo -n "passed" | tee "$(results.outcome.path)"
+        else
+          echo "sast-scan: semgrep reported blocking findings (exit ${EXIT_CODE})" >&2
+          echo -n "failed" | tee "$(results.outcome.path)"
+          exit 1
+        fi
+
+    # Reached whether the scan passed OR failed (unlike build-source/run-tests' own
+    # emit-span, which only runs on success) - semgrep's own controlled `exit 1` above
+    # doesn't halt the TaskRun the way an unguarded `set -e` failure would, so this step
+    # still runs either way and a failed SAST scan gets a real span too, not a gap.
+    - name: emit-span
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      env:
+        - name: FLOW_TRACEPARENT
+          value: $(params.flow-traceparent)
+        - name: STAGE_SPAN_ID
+          value: $(params.stage-span-id)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [[ -z "${FLOW_TRACEPARENT}" ]]; then
+          echo "no flow-traceparent provided - skipping span emission (expected for PR-triggered GitOps-repo checks)" >&2
+          exit 0
+        fi
+        source "${PLATFORM_LIB}/otel.sh"
+        # outcome/span-start-time/span-end-time are all TASK-level results written by an
+        # earlier step (scan) - a cross-step templated reference to a task-level result
+        # silently resolves to the literal unresolved placeholder string (the same real
+        # bug found live in build-image.yaml's emit-image-ref-result - see that file's
+        # own comment). Read the stable, well-documented /tekton/results/<name> path
+        # directly instead, same proven workaround.
+        OUTCOME_VALUE="$(cat /tekton/results/outcome 2>/dev/null || echo unknown)"
+        SPAN_START="$(cat /tekton/results/span-start-time 2>/dev/null || echo "")"
+        SPAN_END="$(cat /tekton/results/span-end-time 2>/dev/null || echo "")"
+        TEKTON_STATUS="Succeeded"
+        [[ "${OUTCOME_VALUE}" != "passed" ]] && TEKTON_STATUS="Failed"
+        otel_task_span_send "sast-scan" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" \
+          "${SPAN_START}" "${SPAN_END}" "${TEKTON_STATUS}" "sast.outcome=${OUTCOME_VALUE}"

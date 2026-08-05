@@ -1,5 +1,13 @@
-# .tekton/pull-request-image-scan.yaml - see pull-request-sast.yaml for the full
-# explanation. No <TENANT>/<APP_NAME> substitution needed - fully generic as-is.
+# .tekton/pull-request-image-scan.yaml
+#
+# BOILERPLATE - real (not stub) as of Phase 3 item 8.5. See pull-request-sast.yaml for
+# the full pattern explanation. References platform-cicd's dedicated image-scan-check
+# Pipeline, which resolves the promoted image from the gitops PR's own staging manifest
+# and runs a real Trivy scan against it - see catalog/tasks/image-scan.yaml's own header.
+#
+# No <TENANT>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
+# from PaC's own template vars, and extract-promoted-image.yaml clones the gitops repo
+# into its own scratch dir internally rather than a shared Pipeline workspace.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -13,10 +21,11 @@ spec:
     resolver: cluster
     params:
       - { name: kind, value: pipeline }
-      - { name: name, value: governance-check }
+      - { name: name, value: image-scan-check }
       - { name: namespace, value: platform-catalog }
   params:
-    - { name: gate-name, value: image-scan }
+    - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: revision, value: "{{ revision }}" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:

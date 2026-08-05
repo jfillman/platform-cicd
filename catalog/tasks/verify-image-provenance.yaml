@@ -14,8 +14,10 @@
 # root, and constructing a valid self-hosted TUF repository by hand for just our own
 # Fulcio (no public trust, no live TUF mirror) turned out to be genuinely heavy
 # infrastructure for what should be a simple local trust anchor. `cosign verify`/
-# `verify-attestation --ca-roots <pem>` (already proven working in sub-item 2's own
-# verification) does the same cryptographic job without needing TUF at all. `ec validate
+# `verify-attestation --trusted-root <json>` (a local doc built via `cosign trusted-root
+# create`, not a live TUF fetch - see the --trusted-root construction below for why this
+# replaced the simpler --ca-roots <pem> this file used until Phase 3 item 8.7) does the
+# same cryptographic job without needing TUF at all. `ec validate
 # input` then runs Conforma's real Rego policy engine against the already-verified,
 # decoded provenance JSON - also no TUF involved, since it's pure policy evaluation, not
 # signature verification. Same 3-stage design `ec validate image` itself documents
@@ -114,6 +116,21 @@ spec:
         kubectl get configmap fulcio-root-ca -n platform-catalog \
           -o jsonpath='{.data.cert\.pem}' > "${workdir}/fulcio-root.pem"
 
+        # --trusted-root (a local JSON doc), not the older --ca-roots (a bare PEM) this
+        # call used until Phase 3 item 8.7 - real bug hit live once generate-sbom.yaml
+        # started attaching a real attestation signed via cosign 3.x's newer bundle
+        # format (same tool, --signing-config/--trusted-root based signing - see that
+        # file's own header): cosign's verification then requires --trusted-root
+        # unconditionally ("CA roots/intermediates must be provided using --trusted-root
+        # when using --new-bundle-format"), even for verifying the unrelated SLSA
+        # provenance attestation below - confirmed live, not assumed from cosign's own
+        # deprecation warning alone. Same `cosign trusted-root create` mechanism
+        # generate-sbom.yaml already uses, same fulcio-root-ca source.
+        cosign trusted-root create \
+          --fulcio="url=http://fulcio-server.fulcio-system.svc,certificate-chain=${workdir}/fulcio-root.pem" \
+          --no-default-ctfe --no-default-rekor --no-default-tsa \
+          --out "${workdir}/trusted-root.json"
+
         identity_regexp="^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$"
         issuer="https://kubernetes.default.svc.cluster.local"
 
@@ -139,7 +156,7 @@ spec:
           --insecure-ignore-tlog=true \
           --insecure-ignore-sct=true \
           --type slsaprovenance \
-          --ca-roots "${workdir}/fulcio-root.pem" \
+          --trusted-root "${workdir}/trusted-root.json" \
           --certificate-identity-regexp "${identity_regexp}" \
           --certificate-oidc-issuer "${issuer}" \
           "${image_ref}" > "${att_dir}/attestations.jsonl"
@@ -274,6 +291,28 @@ spec:
         # mismatch for this platform's cluster/hub-resolved catalog Tasks - see
         # docs/provenance-policy.md for why that's deliberately excluded, not an
         # oversight).
+        # sbom.found/sbom_cyclonedx.cdx_supported_version deliberately NOT included below
+        # (Phase 3 item 8.7) - a real, disclosed, unresolved conflict was found live:
+        # once generate-sbom.yaml's real cosign-attest SBOM attestation is attached to an
+        # image, cosign's OWN verify-attestation call above (checking the unrelated SLSA
+        # provenance attestation) starts failing with a certificate-identity mismatch
+        # citing the SBOM attestation's identity (platform-cicd-demo/pipeline-runner)
+        # instead of the expected tekton-chains-controller one - confirmed this is NOT
+        # caused by this config.include list (the failure happens in cosign's own
+        # attestation-discovery/identity-matching, well before Conforma/ec ever runs;
+        # reproduced identically with and without these two entries present). Root cause
+        # not fully diagnosed - looks like a real cosign 3.x behavior where the presence
+        # of a "new bundle format" attestation on an image affects identity verification
+        # for OTHER, differently-typed attestations on that same image, not just a --type
+        # filtering issue (an explicit full predicate-type URI didn't change the outcome
+        # either). Until resolved, do not enable both governance.sbom and
+        # governance.policyCheck for the same app - see docs/provenance-policy.md.
+        #
+        # NOTE for future editors: this explanation lives here, not inside the jq
+        # program string below, on purpose - a real bug hit live once already, an
+        # apostrophe inside an inline jq comment (a contraction like "attestation's")
+        # prematurely closed the surrounding bash single-quoted string, corrupting the
+        # whole command. Keep prose like this outside single-quoted jq/script bodies.
         policy_file="${workdir}/policy.yaml"
         jq -n --argjson emails "${allowed_emails_json:-[]}" --arg data_dir "${data_dir}/" '{
           sources: [{

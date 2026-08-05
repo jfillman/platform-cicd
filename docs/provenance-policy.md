@@ -536,3 +536,53 @@ assuming the VM itself needs a bigger disk allocation - the disk may already be 
   fails closed with `no matching attestations`.
 - RBAC check: `pipeline-runner` can `get` `fulcio-root-ca` (public) but not `fulcio-secret`
   (private key) - confirmed via `kubectl auth can-i`.
+
+## Phase 3 item 8.7 fallout: cosign's `--ca-roots` deprecation, and an unresolved SBOM/provenance conflict
+
+Building real SBOM generation (`catalog/tasks/generate-sbom.yaml`, Trivy + a real
+keyless cosign attestation) surfaced two real issues in this Task's own
+`verify-attestation` call, one fixed, one genuinely still open.
+
+**Fixed: `--ca-roots` is deprecated and stopped working outright.** The moment
+`generate-sbom.yaml`'s attestation (signed via cosign 3.x's newer `--signing-config`/
+`--trusted-root`-based flow, since `attest` has no `--fulcio-url`/`--rekor-url`/
+`--oidc-issuer` flags at all anymore - confirmed live via `--help`, not assumed from
+older cosign docs) lands on an image, this file's own `cosign verify-attestation --ca-
+roots <pem>` call - checking the *unrelated* SLSA provenance attestation - started
+failing outright: `unsupported: CA roots/intermediates must be provided using
+--trusted-root when using --new-bundle-format`. Fixed by switching this call to the same
+`cosign trusted-root create` + `--trusted-root <json>` mechanism `generate-sbom.yaml`
+already uses for its own signing side, built from the same `fulcio-root-ca` ConfigMap.
+Re-verified end to end afterward with a genuinely clean, real chain (`policy-check4x5ch`):
+`success-count: 22`, zero violations, same as before this fix - this migration is a real
+improvement independent of the SBOM conflict below, worth keeping regardless of how that
+gets resolved.
+
+**Still open: a real, disclosed conflict between the two attestation types.** Even with
+`--trusted-root` in place, once `generate-sbom.yaml`'s attestation actually coexists on
+an image alongside Chains' SLSA provenance attestation, this file's
+`--type slsaprovenance --certificate-identity-regexp <chains-controller-regex>` call
+started failing with `no matching attestations: failed to verify certificate identity: no
+matching CertificateIdentity found, last error: expected SAN value to match regex ...,
+got ".../platform-cicd-demo/serviceaccounts/pipeline-runner"` - i.e. cosign appears to be
+checking the SBOM attestation's identity against the regex meant for the *provenance*
+attestation, despite `--type` supposedly scoping the lookup to `slsaprovenance` only.
+Confirmed this is not caused by `verify-image-provenance.yaml`'s own `config.include`
+list (the failure happens inside cosign's own attestation discovery/identity matching,
+before `ec`/Conforma ever runs - reproduced identically with and without the SBOM rule
+packages included) and not caused by `--type` shorthand ambiguity (an explicit full
+predicate-type URI, `https://slsa.dev/provenance/v0.2`, produced the identical error).
+Root cause not fully diagnosed - looks like a genuine cosign 3.x behavior where any
+"new bundle format" attestation present on an image affects identity verification for
+*other*, differently-typed attestations on that same image, not a simple `--type`
+filtering bug.
+
+**Current state, until this is resolved**: `sbom.found`/`sbom_cyclonedx.cdx_supported_
+version` are deliberately left out of `verify-image-provenance.yaml`'s `config.include`
+(see that file's own comment), and `nodejs-demo-app/cicd.yaml` has `governance.sbom` back
+to `false` - do not enable both `governance.sbom` and `governance.policyCheck` for the
+same app until this conflict is actually fixed. SBOM generation itself works correctly
+and independently (verified live: a real, discoverable CycloneDX attestation via `cosign
+tree`/`cosign download attestation` against a real freshly-built image, in both the
+`build.yaml` and gitops-repo PR-check call sites) - it's specifically the *coexistence*
+with provenance verification that's broken, not the SBOM feature on its own.

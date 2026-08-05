@@ -1,16 +1,16 @@
 # .tekton/pull-request-sast.yaml
 #
-# BOILERPLATE - one of four near-identical PR-check files (see also
-# pull-request-image-scan.yaml, pull-request-policy-check.yaml, pull-request-sbom.yaml).
-# Each references platform-cicd's shared governance-check Pipeline (which just runs the
-# governance-gate-stub Task) with a different gate-name, so each reports as its own
-# independently-required, independently-re-triggerable GitHub Check on this repo's PRs -
-# see platform-cicd's docs/release.md. All four are currently stubs (governance.stub=true
-# in the resulting trace/dashboard) - see platform-cicd's docs/governance-stubs.md for
-# why that's a structural, loud fact rather than silently theater.
+# BOILERPLATE - real (not stub) as of Phase 3 item 8.4. See also
+# pull-request-image-scan.yaml, pull-request-policy-check.yaml, pull-request-sbom.yaml -
+# still stubs (governance-check Pipeline, governance-gate-stub Task) until 8.5/8.7 land.
+# References platform-cicd's dedicated sast-check Pipeline, which resolves the promoted
+# app-repo commit (via the X-App-Repo/X-App-Commit trailers open-release-pr.yaml embeds)
+# and runs a real Semgrep scan against it - see platform-cicd's docs/cicd-yaml-
+# reference.md and catalog/tasks/sast-scan.yaml's own header for the full design.
 #
-# No <TENANT>/<APP_NAME> substitution needed - unlike pull-request-policy-check.yaml,
-# this file is fully generic as-is.
+# No <TENANT>/<APP_NAME> substitution needed - repo-url/revision come from PaC's own
+# template vars, and the app-repo is resolved dynamically from the commit trailers, not
+# hand-substituted per tenant.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -24,10 +24,19 @@ spec:
     resolver: cluster
     params:
       - { name: kind, value: pipeline }
-      - { name: name, value: governance-check }
+      - { name: name, value: sast-check }
       - { name: namespace, value: platform-catalog }
   params:
-    - { name: gate-name, value: sast }
+    - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: revision, value: "{{ revision }}" }
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:

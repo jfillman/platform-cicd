@@ -58,6 +58,7 @@ ARG KUBECTL_VERSION=1.30.4
 ARG GITSIGN_VERSION=0.17.0
 ARG EC_VERSION=0.9.88
 ARG COSIGN_VERSION=3.1.2
+ARG TRIVY_VERSION=0.73.0
 
 RUN apk add --no-cache bash curl jq git openssl ca-certificates util-linux coreutils
 
@@ -86,7 +87,13 @@ RUN set -euo pipefail; \
     && chmod +x /usr/local/bin/ec \
     && curl -fsSL -o /usr/local/bin/cosign \
       "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${ARCH}" \
-    && chmod +x /usr/local/bin/cosign
+    && chmod +x /usr/local/bin/cosign \
+    && case "$(uname -m)" in x86_64) TRIVY_ARCH=64bit ;; aarch64|arm64) TRIVY_ARCH=ARM64 ;; esac \
+    && curl -fsSL -o /tmp/trivy.tar.gz \
+      "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" \
+    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+    && chmod +x /usr/local/bin/trivy \
+    && rm /tmp/trivy.tar.gz
 
 COPY --from=yajsv-build /go/bin/yajsv /usr/local/bin/yajsv
 

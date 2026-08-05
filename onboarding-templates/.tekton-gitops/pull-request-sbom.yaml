@@ -1,5 +1,14 @@
-# .tekton/pull-request-sbom.yaml - see pull-request-sast.yaml for the full explanation.
-# No <TENANT>/<APP_NAME> substitution needed - fully generic as-is.
+# .tekton/pull-request-sbom.yaml
+#
+# BOILERPLATE - real (not stub) as of Phase 3 item 8.7. See pull-request-sast.yaml for
+# the full pattern explanation. References platform-cicd's dedicated sbom-check
+# Pipeline, which resolves the promoted image from the gitops PR's own staging manifest
+# and generates+attests a real SBOM for it - see catalog/tasks/generate-sbom.yaml's own
+# header.
+#
+# No <TENANT>/<APP_NAME> substitution and no workspace needed - same as
+# pull-request-image-scan.yaml, which this mirrors exactly (both resolve the promoted
+# image the same way, then do something different with it).
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -13,10 +22,11 @@ spec:
     resolver: cluster
     params:
       - { name: kind, value: pipeline }
-      - { name: name, value: governance-check }
+      - { name: name, value: sbom-check }
       - { name: namespace, value: platform-catalog }
   params:
-    - { name: gate-name, value: sbom }
+    - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: revision, value: "{{ revision }}" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:

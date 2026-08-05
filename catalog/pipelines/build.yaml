@@ -148,7 +148,7 @@ spec:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
 
     - name: unit-test
-      runAfter: [resolve-agent-image]
+      runAfter: [resolve-agent-image, start-build-stage-span]
       taskRef:
         resolver: cluster
         params:
@@ -160,9 +160,47 @@ spec:
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
+    # Optional, runs concurrently with unit-test (Phase 3 item 8.1) - confirmed live
+    # they're independent: run-tests.yaml runs test.sh directly against checked-out
+    # source, sharing no build output with this Task. Skipped entirely for teams doing
+    # the whole build inside a multi-stage Dockerfile instead - see
+    # validate-cicd-config.yaml's has-build-script result and build-source.yaml's own
+    # header. build-image still waits for BOTH this and unit-test below (real or
+    # skipped) before kaniko builds+pushes - nothing gets published to the registry
+    # unless tests pass, same fail-fast guarantee as before this split, just with the
+    # independent compile step no longer serialized behind tests.
+    - name: build-source
+      runAfter: [resolve-agent-image, start-build-stage-span]
+      when:
+        - { input: $(tasks.validate-config.results.has-build-script), operator: in, values: ["true"] }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: build-source }
+          - { name: namespace, value: platform-catalog }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
+
+    # sast-scan is included here too (Phase 3 item 8.4), same fail-fast principle as
+    # unit-test above: sast-scan starts early/concurrently for speed (runAfter clone-repo,
+    # not build-image), but build-image still waits for it to finish before publishing -
+    # a real, live-confirmed gap otherwise (a deliberately-failing sast-scan still let a
+    # prior test push the image, since nothing downstream depended on it). When sast is
+    # disabled in cicd.yaml, sast-scan's when: clause skips it, which Tekton treats as
+    # satisfied for this runAfter - build-image proceeds exactly as before, no behavior
+    # change for tenants who haven't enabled it.
     - name: build-image
-      runAfter: [unit-test, start-build-stage-span]
+      runAfter: [build-source, unit-test, sast-scan, start-build-stage-span]
       taskRef:
         resolver: cluster
         params:
@@ -175,23 +213,41 @@ spec:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: image-repo, value: $(params.image-repo) }
         - { name: git-revision, value: $(params.git-revision) }
-        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
+    # Real (not stub) SAST as of Phase 3 item 8.4 - runAfter deliberately does NOT
+    # include build-image: sast-scan reads source, not the built image, so it doesn't
+    # need to wait for build-source/unit-test/build-image at all - only clone-repo.
+    # Runs concurrently with resolve-agent-image/unit-test/build-source instead of
+    # serialized behind the whole compile+test+publish sequence, a real speed win now
+    # that this is a real scan (previously irrelevant for the stub, which did no work).
+    # Reads the SAME shared `source` workspace those concurrent tasks also touch or
+    # write to - accepted as safe, not just assumed: Semgrep's default rulesets already
+    # exclude node_modules/vendor-style dependency directories, so a build.script that's
+    # mid-`npm ci` on this same tree doesn't change what actually gets scanned.
     - name: sast-scan
-      runAfter: [build-image]
+      runAfter: [clone-repo, start-build-stage-span]
       when:
         - { input: $(tasks.extract-governance-flags.results.sast), operator: in, values: ["true"] }
       taskRef:
         resolver: cluster
         params:
           - { name: kind, value: task }
-          - { name: name, value: governance-gate-stub }
+          - { name: name, value: sast-scan }
           - { name: namespace, value: platform-catalog }
+      workspaces:
+        - { name: source, workspace: source }
       params:
-        - { name: gate-name, value: sast }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
+    # Real (not stub) as of Phase 3 item 8.5. runAfter stays build-image, unlike
+    # sast-scan - there's no image to scan until kaniko has actually pushed one, so
+    # this can't start any earlier. A failing scan can't retroactively "unpublish" the
+    # dev-tagged image build-image already pushed, but it still fails this Task, which
+    # (Tekton's normal semantics, no extra wiring needed) fails the whole PipelineRun -
+    # a red build the developer sees immediately, same as sast-scan's own failure mode.
     - name: image-scan
       runAfter: [build-image]
       when:
@@ -200,13 +256,15 @@ spec:
         resolver: cluster
         params:
           - { name: kind, value: task }
-          - { name: name, value: governance-gate-stub }
+          - { name: name, value: image-scan }
           - { name: namespace, value: platform-catalog }
       params:
-        - { name: gate-name, value: image-scan }
+        - { name: image-ref, value: $(tasks.build-image.results.image-ref) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
+    # Real (not stub) as of Phase 3 item 8.7. runAfter stays build-image, same reasoning
+    # as image-scan - nothing to attest until the image is pushed.
     - name: generate-sbom
       runAfter: [build-image]
       when:
@@ -215,10 +273,10 @@ spec:
         resolver: cluster
         params:
           - { name: kind, value: task }
-          - { name: name, value: governance-gate-stub }
+          - { name: name, value: generate-sbom }
           - { name: namespace, value: platform-catalog }
       params:
-        - { name: gate-name, value: sbom }
+        - { name: image-ref, value: $(tasks.build-image.results.image-ref) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 

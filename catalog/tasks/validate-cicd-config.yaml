@@ -22,6 +22,8 @@ spec:
   results:
     - name: config-json
       description: cicd.yaml converted to JSON, so downstream Tasks read it with jq instead of re-parsing YAML.
+    - name: has-build-script
+      description: "'true'/'false' - whether build.script is present in cicd.yaml. Drives build.yaml's when: gate on the build-source Task, for teams doing the whole build inside a multi-stage Dockerfile instead. See docs/cicd-yaml-reference.md."
   steps:
     - name: validate
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -47,4 +49,8 @@ spec:
         fi
 
         cp /tmp/cicd.json "$(results.config-json.path)"
+
+        HAS_BUILD_SCRIPT="$(jq -r 'if .build.script != null and .build.script != "" then "true" else "false" end' /tmp/cicd.json)"
+        echo -n "${HAS_BUILD_SCRIPT}" | tee "$(results.has-build-script.path)" > /dev/null
+
         echo "cicd.yaml is valid."

@@ -1,0 +1,38 @@
+# .tekton/pull-request-merged.yaml
+#
+# BOILERPLATE - break-glass audit trigger, Phase 3 item 8.6. Unlike the four governance
+# check files (pull-request-sast.yaml etc.), this doesn't report a GitHub Check at all -
+# it fires once a PR is CLOSED (merged or not) and hands off to detect-bypass-merge.yaml,
+# which decides whether anything actually needs alerting.
+#
+# on-cel-expression (not just on-event) is what makes this fire only on close, not on
+# every PR open/sync too - PaC's on-event alone can't distinguish those. NOT fully
+# live-verified yet: this is the one piece of Phase 3 item 8.6 that needs a real PR
+# close/merge event to confirm the CEL expression and body.pull_request.* field access
+# both resolve exactly as written - everything else in this file's own Pipeline
+# (detect-bypass-merge.yaml's own logic) was verified independently against a real
+# already-merged PR's check-run data, but the trigger's own firing behavior could not be
+# exercised without an actual close event. Flagged explicitly, not silently assumed.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: bypass-check
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[pull_request]"
+    pipelinesascode.tekton.dev/on-cel-expression: 'body.action == "closed"'
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: bypass-merge-check }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: pr-number, value: "{{ body.pull_request.number }}" }
+    - { name: merged, value: "{{ body.pull_request.merged }}" }
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "10m"

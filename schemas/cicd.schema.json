@@ -13,17 +13,16 @@
     "build": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["agent", "script"],
+      "required": ["agent"],
       "properties": {
         "agent": {
           "type": "string",
           "enum": ["nodejs-18", "nodejs-20", "nodejs-22", "openjdk-17", "openjdk-21", "python-3.11", "go-1.22"],
-          "description": "Named build agent image from the platform catalog. Not a raw image reference - keeps step code portable and centrally patchable."
+          "description": "Named build agent image from the platform catalog. Not a raw image reference - keeps step code portable and centrally patchable. Still required even when `script` is omitted, since unit tests always run inside this image regardless of build strategy."
         },
         "script": {
           "type": "string",
-          "default": "./build.sh",
-          "description": "Build script the platform runs inside the agent image. Must be bash."
+          "description": "Build script the platform runs inside the agent image before packaging. Must be bash. Omit entirely for teams doing the whole build inside a multi-stage Dockerfile - the separate build-source stage is skipped and kaniko builds `dockerfile` directly. No default: presence/absence is the switch, so it can't silently mean 'skip' via an unrelated typo."
         },
         "dockerfile": { "type": "string", "default": "./Dockerfile" },
         "unitTest": {
@@ -34,7 +33,24 @@
             "command": { "type": "string", "default": "./test.sh" }
           }
         },
-        "sonar": { "type": "boolean", "default": false }
+        "sonar": { "type": "boolean", "default": false },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Persistent dependency-download cache for build-source (npm's package cache / Maven's local repository, not node_modules/target itself - see docs/cicd-yaml-reference.md). No `type` field: derived from `agent`'s prefix (nodejs-* -> npm, openjdk-* -> maven), not a second, redundantly-declarable field. Keyed by a hash of the relevant lockfile (package-lock.json/pom.xml) so a dependency change invalidates the cache automatically. A no-op (logged, not an error) for agents without cache support yet (python-*/go-1.22). Teams with no build.script (whole build inside a multi-stage Dockerfile) get layer caching for free from kaniko instead."
+            },
+            "size": {
+              "type": "string",
+              "enum": ["small", "medium", "large", "xlarge"],
+              "default": "small",
+              "description": "T-shirt size for this app's own cache PVC (small=1Gi, medium=2.5Gi, large=5Gi, xlarge=8Gi - same dictionary as the old cd-pipelines-user Helm chart's buildSpec.cacheSize). One PVC per app, not shared across a tenant's apps, specifically so this can vary per app. Chosen at onboarding time, not resizable live afterward - kind-observe's default storage class has allowVolumeExpansion: false, so changing this later means recreating the PVC (and losing its cached content), not a live resize."
+            }
+          }
+        }
       }
     },
 

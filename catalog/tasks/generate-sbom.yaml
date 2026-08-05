@@ -1,0 +1,157 @@
+# catalog/tasks/generate-sbom.yaml
+#
+# Real (not stub) SBOM generation via Trivy - Phase 3 item 8.7. Replaces
+# governance-gate-stub for the `sbom` gate in build.yaml. Real payoff beyond the gate
+# itself: Conforma's sbom/sbom_cyclonedx/sbom_spdx rule packages (confirmed live against
+# the real policy source, github.com/conforma/policy) check for a real SBOM
+# *attestation* attached to the image - `count(sboms) == 0` denies otherwise - not just
+# that an SBOM file exists somewhere. This Task both generates the SBOM (Trivy,
+# CycloneDX format) and attaches it as a real, keyless-signed in-toto attestation
+# (cosign), so verify-image-provenance.yaml's policy can eventually include those rule
+# packages for real (tracked as a follow-up, see that Task's own `config.include`).
+#
+# Signing identity is deliberately NOT tekton-chains-controller's (the identity that
+# signs the SLSA provenance attestation, platform/sigstore/chains-config-patch.yaml) -
+# this Task runs as a normal step in a normal TaskRun under pipeline-runner, so it signs
+# as pipeline-runner's own Kubernetes identity instead, against the SAME self-hosted
+# Fulcio (`type: kubernetes` issuer trusts any valid in-cluster projected SA token, not
+# one specific SA - see docs/image-signing.md). No Rekor upload, matching this
+# platform's existing transparency.enabled=false choice for Chains' own signing
+# (docs/provenance-policy.md) - consistent, not a new posture. Conforma's sbom.rego
+# rules (confirmed by reading the real source) don't check the SBOM attestation's
+# signing identity the way the SLSA provenance rules check allowed_builder_ids, so no
+# separate identity-matching config is needed on the verification side for this.
+#
+# cosign 3.x has no --fulcio-url/--rekor-url/--oidc-issuer flags on `attest` at all
+# (confirmed live via --help, not assumed from older cosign docs/memory - the CLI moved
+# to a "signing-config" protobuf/JSON document instead). Two small local documents are
+# generated at runtime, both via real cosign subcommands rather than hand-built JSON:
+# `cosign signing-config create` (which Fulcio to talk TO when signing - no rekor/tsa
+# entries, so cosign skips both automatically, matching the no-transparency-log choice
+# above) and `cosign trusted-root create` (which CA to trust when validating the cert
+# Fulcio hands back - without this, cosign correctly rejects its own self-hosted-Fulcio-
+# issued cert as untrusted, since it isn't in the public Sigstore TUF root; confirmed
+# live, this was the actual failure on the first real attempt: "failed to verify leaf
+# certificate"). fulcio-root-ca is the same ConfigMap verify-image-provenance.yaml
+# already reads for the identical purpose on the verification side.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: generate-sbom
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Generates a CycloneDX SBOM (Trivy) for the given image and attaches it as a real, keyless-signed cosign attestation.
+  params:
+    - name: image-ref
+      type: string
+      description: Full image reference (repo:tag) to generate an SBOM for and attest - must already be pushed.
+    - name: flow-traceparent
+      type: string
+      default: ""
+      description: Leave empty when there's no flow/stage context (e.g. a PR-triggered GitOps-repo check) - see governance-stub.yaml for the same convention.
+    - name: stage-span-id
+      type: string
+      default: ""
+      description: The calling stage's own span id - this step's span is parented to it. Ignored when flow-traceparent is empty.
+  results:
+    - name: outcome
+      description: "'passed'/'failed' - a real result, never 'stub'. Fails only on a genuine generation/signing/push error, not on SBOM content - there's no security verdict to gate on here, unlike sast-scan/image-scan."
+  # Registry push credentials for cosign's attestation upload - same Secret/key mapping
+  # kaniko already uses in build-image.yaml, mounted at a different path and consumed via
+  # DOCKER_CONFIG (cosign's own standard credential-resolution env var, not a kaniko-
+  # specific convention) rather than kaniko's hardcoded default lookup path.
+  volumes:
+    - name: registry-credentials
+      secret:
+        secretName: registry-credentials
+        items:
+          - key: .dockerconfigjson
+            path: config.json
+    # Audience "sigstore" matches Fulcio's own configured client-id (see
+    # platform/sigstore/fulcio-config.yaml) - the same audience Tekton Chains' own
+    # controller uses for its identical-shaped token, just requested here for
+    # pipeline-runner's identity instead.
+    - name: sigstore-identity-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: sigstore-token
+              audience: sigstore
+              expirationSeconds: 600
+  steps:
+    - name: generate-and-attest
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      volumeMounts:
+        - name: registry-credentials
+          mountPath: /var/run/secrets/registry
+          readOnly: true
+        - name: sigstore-identity-token
+          mountPath: /var/run/secrets/sigstore
+          readOnly: true
+      env:
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+        - name: DOCKER_CONFIG
+          value: /var/run/secrets/registry
+        - name: FLOW_TRACEPARENT
+          value: $(params.flow-traceparent)
+        - name: STAGE_SPAN_ID
+          value: $(params.stage-span-id)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+      script: |
+        #!/usr/bin/env bash
+        set -uo pipefail
+        source "${PLATFORM_LIB}/otel.sh"
+
+        trivy image --format cyclonedx --output /tmp/sbom.json "${IMAGE_REF}"
+        if [[ $? -ne 0 ]]; then
+          echo "generate-sbom: trivy SBOM generation failed" >&2
+          echo -n "failed" | tee "$(results.outcome.path)"
+          exit 1
+        fi
+
+        kubectl get configmap fulcio-root-ca -n platform-catalog \
+          -o jsonpath='{.data.cert\.pem}' > /tmp/fulcio-root.pem
+
+        cosign signing-config create \
+          --fulcio="url=http://fulcio-server.fulcio-system.svc,api-version=1,start-time=2020-01-01T00:00:00Z,operator=platform-cicd" \
+          --oidc-provider="url=https://kubernetes.default.svc.cluster.local,api-version=1,start-time=2020-01-01T00:00:00Z,operator=platform-cicd" \
+          --no-default-rekor --no-default-tsa \
+          --out /tmp/signing-config.json
+
+        cosign trusted-root create \
+          --fulcio="url=http://fulcio-server.fulcio-system.svc,certificate-chain=/tmp/fulcio-root.pem" \
+          --no-default-ctfe --no-default-rekor --no-default-tsa \
+          --out /tmp/trusted-root.json
+
+        cosign_attest() {
+          cosign attest \
+            --predicate /tmp/sbom.json \
+            --type cyclonedx \
+            --signing-config /tmp/signing-config.json \
+            --trusted-root /tmp/trusted-root.json \
+            --identity-token /var/run/secrets/sigstore/sigstore-token \
+            --yes \
+            "${IMAGE_REF}"
+        }
+        export -f cosign_attest
+
+        if [[ -n "${FLOW_TRACEPARENT}" ]]; then
+          otel_child_span "generate-sbom" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" "image=${IMAGE_REF}" -- \
+            bash -c cosign_attest
+        else
+          echo "no flow-traceparent provided - skipping span emission (expected for PR-triggered GitOps-repo checks)" >&2
+          cosign_attest
+        fi
+        EXIT_CODE=$?
+
+        if [[ "${EXIT_CODE}" -eq 0 ]]; then
+          echo -n "passed" | tee "$(results.outcome.path)"
+        else
+          echo "generate-sbom: cosign attest failed (exit ${EXIT_CODE})" >&2
+          echo -n "failed" | tee "$(results.outcome.path)"
+          exit 1
+        fi
