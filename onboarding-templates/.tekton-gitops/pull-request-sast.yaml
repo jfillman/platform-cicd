@@ -1,16 +1,19 @@
 # .tekton/pull-request-sast.yaml
 #
-# BOILERPLATE - real (not stub) as of Phase 3 item 8.4. See also
-# pull-request-image-scan.yaml, pull-request-policy-check.yaml, pull-request-sbom.yaml -
-# still stubs (governance-check Pipeline, governance-gate-stub Task) until 8.5/8.7 land.
+# BOILERPLATE - real (not stub), shift-left redesign. See also
+# pull-request-image-scan.yaml, pull-request-policy-check.yaml, pull-request-sbom.yaml.
 # References platform-cicd's dedicated sast-check Pipeline, which resolves the promoted
-# app-repo commit (via the X-App-Repo/X-App-Commit trailers open-release-pr.yaml embeds)
-# and runs a real Semgrep scan against it - see platform-cicd's docs/cicd-yaml-
-# reference.md and catalog/tasks/sast-scan.yaml's own header for the full design.
+# image (same manifest-based resolution pull-request-image-scan.yaml uses) and looks up
+# whether sast-scan passed at build time from that image's own SLSA provenance
+# attestation - not a re-scan. See platform-cicd's catalog/tasks/verify-sast-
+# attestation.yaml for the full design and why re-scanning source at a fixed commit was
+# genuinely redundant (caught by the user, not something this design started with).
 #
-# No <TENANT>/<APP_NAME> substitution needed - repo-url/revision come from PaC's own
-# template vars, and the app-repo is resolved dynamically from the commit trailers, not
-# hand-substituted per tenant.
+# No <TENANT>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
+# from PaC's own template vars; extract-promoted-image.yaml and verify-sast-
+# attestation.yaml both clone/query in their own scratch space, no shared Pipeline
+# workspace required (unlike this file's own pre-redesign version, which needed one to
+# hand source off to a re-scan step).
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -29,14 +32,6 @@ spec:
   params:
     - { name: repo-url, value: "{{ repo_url }}" }
     - { name: revision, value: "{{ revision }}" }
-  workspaces:
-    - name: source
-      volumeClaimTemplate:
-        spec:
-          accessModes: ["ReadWriteOnce"]
-          resources:
-            requests:
-              storage: 1Gi
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:

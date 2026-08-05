@@ -241,6 +241,10 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
 
     # Real (not stub) as of Phase 3 item 8.5. runAfter stays build-image, unlike
     # sast-scan - there's no image to scan until kaniko has actually pushed one, so
@@ -262,6 +266,10 @@ spec:
         - { name: image-ref, value: $(tasks.build-image.results.image-ref) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
 
     # Real (not stub) as of Phase 3 item 8.7. runAfter stays build-image, same reasoning
     # as image-scan - nothing to attest until the image is pushed.

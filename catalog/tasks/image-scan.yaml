@@ -37,11 +37,42 @@ spec:
       type: string
       default: ""
       description: The calling stage's own span id - this scan's span is parented to it. Ignored when flow-traceparent is empty.
+    - name: config-json
+      type: string
+      default: ""
+      description: Output of validate-cicd-config's config-json result - read for notifications.slack.* only (same as notify-slack.yaml). Left empty in the gitops-repo PR-check context, same as flow-traceparent above.
+    - name: app-name
+      type: string
+      default: ""
+    - name: git-url
+      type: string
+      default: ""
+    - name: git-revision
+      type: string
+      default: ""
   results:
     - name: outcome
       description: "'passed'/'failed' - a real result, never 'stub' (this is a real implementation, not governance-gate-stub)."
+    - name: findings-summary
+      description: 'Trivy''s own "Total: N (HIGH: x, CRITICAL: y)" summary line(s), captured for the shift-left Slack notification below - not re-parsed/re-derived, just relayed.'
+  volumes:
+    - name: slack-webhook
+      secret:
+        secretName: slack-webhook-url
+        optional: true
   steps:
+    # onError: continue - a real bug found live: Tekton's DEFAULT behavior is to skip
+    # every subsequent step once one fails ("Skipping step because a previous step
+    # failed" in the pod logs), not run them regardless the way this file's own
+    # emit-span/notify-slack steps need to. The otel span still appeared on a failed
+    # scan before this fix, but only because that send happens *inside* this step
+    # (wrapping trivy directly), before its own exit 1 - a genuinely separate later
+    # step, like notify-slack, was never reached on failure until this was added. The
+    # notify-slack step below re-raises this step's real failure explicitly (reading the
+    # outcome result) - onError: continue means this step no longer fails the Task on
+    # its own, so something still has to.
     - name: scan
+      onError: continue
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       env:
@@ -60,17 +91,121 @@ spec:
 
         if [[ -n "${FLOW_TRACEPARENT}" ]]; then
           otel_child_span "image-scan" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" "image=${IMAGE_REF}" -- \
-            trivy image --severity HIGH,CRITICAL --exit-code 1 --scanners vuln "${IMAGE_REF}"
+            trivy image --severity HIGH,CRITICAL --exit-code 1 --scanners vuln "${IMAGE_REF}" 2>&1 | tee /tmp/scan-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
         else
           echo "no flow-traceparent provided - skipping span emission (expected for PR-triggered GitOps-repo checks)" >&2
-          trivy image --severity HIGH,CRITICAL --exit-code 1 --scanners vuln "${IMAGE_REF}"
+          trivy image --severity HIGH,CRITICAL --exit-code 1 --scanners vuln "${IMAGE_REF}" 2>&1 | tee /tmp/scan-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
         fi
-        EXIT_CODE=$?
+
+        # Trivy's own human-readable "Total: N (HIGH: x, CRITICAL: y)" summary line(s) -
+        # one per scanned target, relayed as-is for the shift-left Slack notification
+        # below, not re-derived. Joined with "; " since there can be more than one.
+        grep '^Total:' /tmp/scan-output.txt | paste -sd';' - | sed 's/;/; /g' | tee "$(results.findings-summary.path)"
 
         if [[ "${EXIT_CODE}" -eq 0 ]]; then
           echo -n "passed" | tee "$(results.outcome.path)"
         else
           echo "image-scan: trivy found HIGH/CRITICAL vulnerabilities (exit ${EXIT_CODE})" >&2
           echo -n "failed" | tee "$(results.outcome.path)"
+          exit 1
+        fi
+
+    # Shift-left visibility (prompted directly by the user, same as sast-scan.yaml's own
+    # notify-slack step - see that file's header for the full reasoning on why this
+    # lives inside the Task rather than as a separate pipeline-level notify step).
+    - name: notify-slack
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      volumeMounts:
+        - name: slack-webhook
+          mountPath: /var/run/secrets/platform
+          readOnly: true
+      env:
+        - name: APP_NAME
+          value: $(params.app-name)
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: GIT_REVISION
+          value: $(params.git-revision)
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        # Read this first, and re-check it at the very end regardless of what happens
+        # in between - scan (above) has onError: continue, so a real failure there no
+        # longer fails this Task on its own; every early-exit path below must fall
+        # through to that final check rather than `exit 0` directly, or a real scan
+        # failure would silently report as a passing Task.
+        OUTCOME_VALUE="$(cat /tekton/results/outcome 2>/dev/null || echo unknown)"
+
+        CFG='$(params.config-json)'
+        if [[ -z "${CFG}" ]]; then
+          echo "no config-json provided - skipping notification (expected for PR-triggered GitOps-repo checks, this Task isn't called there)" >&2
+        elif [[ "$(jq -r '.notifications.slack.enabled // false' <<< "${CFG}")" != "true" ]]; then
+          echo "slack notifications disabled in cicd.yaml, skipping"
+        else
+          CHANNEL="$(jq -r '.notifications.slack.channel // empty' <<< "${CFG}")"
+          WEBHOOK_URL="$(cat /var/run/secrets/platform/slack-webhook-url 2>/dev/null || true)"
+          if [[ -z "${WEBHOOK_URL}" ]]; then
+            echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this tenant - skipping, not failing the pipeline" >&2
+          else
+            FINDINGS="$(cat /tekton/results/findings-summary 2>/dev/null || echo "")"
+
+            if [[ "${OUTCOME_VALUE}" == "passed" ]]; then
+              COLOR="#2563EB"
+              HEADER_TEXT="${APP_NAME} · Image Scan Passed"
+            else
+              COLOR="#B91C1C"
+              HEADER_TEXT="⚠ ${APP_NAME} · Image Scan Failed"
+            fi
+            REPO_SHORT="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
+            SHORT_SHA="${GIT_REVISION:0:12}"
+            COMMIT_URL="${GIT_URL}/commit/${GIT_REVISION}"
+
+            payload="$(jq -n \
+              --arg channel "${CHANNEL}" \
+              --arg color "${COLOR}" \
+              --arg headerText "${HEADER_TEXT}" \
+              --arg app "${APP_NAME}" \
+              --arg repoShort "${REPO_SHORT}" \
+              --arg repoUrl "${GIT_URL}" \
+              --arg shortSha "${SHORT_SHA}" \
+              --arg commitUrl "${COMMIT_URL}" \
+              --arg image "${IMAGE_REF}" \
+              --arg findings "${FINDINGS:-no summary available}" \
+              --arg footer "platform-cicd · $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '
+              def field(fieldLabel; fieldValue): {type: "mrkdwn", text: ("*" + fieldLabel + "*\n" + fieldValue)};
+              {
+                channel: $channel,
+                attachments: [{
+                  color: $color,
+                  blocks: [
+                    {type: "header", text: {type: "plain_text", text: $headerText, emoji: true}},
+                    {type: "section", fields: [
+                      field("App"; $app),
+                      field("Repo"; "<" + $repoUrl + "|" + $repoShort + ">"),
+                      field("Commit"; "<" + $commitUrl + "|" + $shortSha + ">"),
+                      field("Image"; "`" + $image + "`"),
+                      field("Findings"; $findings)
+                    ]},
+                    {type: "context", elements: [{type: "mrkdwn", text: $footer}]}
+                  ]
+                }]
+              }
+              ')"
+
+            curl --fail --silent --show-error --max-time 10 \
+              -X POST "${WEBHOOK_URL}" \
+              -H 'Content-Type: application/json' \
+              -d "${payload}"
+          fi
+        fi
+
+        # Re-raise scan's own real failure - see that step's onError: continue comment.
+        if [[ "${OUTCOME_VALUE}" != "passed" ]]; then
           exit 1
         fi

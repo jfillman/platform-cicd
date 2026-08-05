@@ -1,15 +1,21 @@
 # catalog/pipelines/sast-check.yaml
 #
-# Real (not stub) SAST governance check - Phase 3 item 8.4. Runs as a PR-triggered Check
-# on a tenant's gitops repo (see docs/release.md for the general governance-check
-# pattern), scanning the promoted app-repo commit's actual source rather than the gitops
-# repo's own manifests.
+# Real (not stub) SAST governance check - Phase 3 item 8.4, redesigned into a shift-left
+# shape after a real, user-caught redundancy: this originally re-ran Semgrep against the
+# promoted commit's source at release time, duplicating work build.yaml's own sast-scan
+# Task already did (and already gated the build on - Phase 3 item 8.4's DAG fix makes
+# build-image wait on it). The commit's source never changes, so a re-scan could only
+# ever reproduce the same result at real cost (both wall-clock time and Semgrep's own
+# registry-fetch overhead), not catch anything new the way image-scan-check.yaml's
+# re-scan legitimately can (vulnerability databases update continuously; source code at
+# a fixed commit does not).
 #
-# No flow/stage context here (unlike build.yaml's own sast-scan usage) - this is a
-# PR-triggered, human-paced review check, not part of the CDEvents-chained PipelineRun
-# sequence. flow-traceparent/stage-span-id are left at their default "" on sast-scan's
-# own params, so span emission is skipped entirely (real scan work still happens) - same
-# convention governance-stub.yaml already established.
+# Now resolves the promoted image (same mechanism image-scan-check.yaml uses - both need
+# "which image is this PR promoting", just do different things with it) and looks up
+# whether that image's own SLSA provenance attestation shows sast-scan passed at build
+# time - a real, cryptographically-verified fact, not a re-run. See
+# verify-sast-attestation.yaml's own header for the full design and the
+# not-configured-means-pass handling for tenants with governance.sast: false.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -17,35 +23,31 @@ metadata:
   labels:
     platform.io/catalog: "true"
 spec:
-  description: Resolves the promoted app-repo commit from a gitops PR, then runs a real Semgrep SAST scan against it.
+  description: Resolves the promoted image from a gitops PR's staging manifest, then verifies sast-scan's real, attested build-time outcome for it.
   params:
     - name: repo-url
       type: string
     - name: revision
       type: string
-  workspaces:
-    - name: source
   tasks:
-    - name: resolve-app-commit
+    - name: extract-promoted-image
       taskRef:
         resolver: cluster
         params:
           - { name: kind, value: task }
-          - { name: name, value: resolve-app-commit }
+          - { name: name, value: extract-promoted-image }
           - { name: namespace, value: platform-catalog }
-      workspaces:
-        - { name: source, workspace: source }
       params:
         - { name: repo-url, value: $(params.repo-url) }
         - { name: revision, value: $(params.revision) }
 
-    - name: sast-scan
-      runAfter: [resolve-app-commit]
+    - name: verify-sast-attestation
+      runAfter: [extract-promoted-image]
       taskRef:
         resolver: cluster
         params:
           - { name: kind, value: task }
-          - { name: name, value: sast-scan }
+          - { name: name, value: verify-sast-attestation }
           - { name: namespace, value: platform-catalog }
-      workspaces:
-        - { name: source, workspace: source }
+      params:
+        - { name: image-ref, value: $(tasks.extract-promoted-image.results.image-ref) }

@@ -84,6 +84,47 @@ governance-stub spans) is not the right tool for sub-second in-step instrumentat
 `resolve-build-config`-style config-parsing steps deliberately skip span wrapping for
 exactly this reason, see the comment in `catalog/tasks/build-image.yaml`.
 
+## Task-level spans, and a real non-toolbox-image bug found live
+
+Phase 3 item 8.2 added task-level spans (nested under the current stage span) to the
+build pipeline's variable-duration tasks: `unit-test`, `build-source`, `build-image`,
+and - once real, items 8.4/8.5/8.7 - `sast-scan`, `image-scan`, `generate-sbom`.
+Deliberately NOT instrumented: `validate-config`, `start-flow`, `start`/`end-*-stage-
+span`, `pipelinerun-started`/`finished`, `extract-governance-flags`, `notify`,
+`send-cdevent` - all low-single-digit-second tasks where otel-cli's own per-invocation
+overhead isn't worth it, and `clone-repo` (a third-party hub-resolved catalog Task with
+no step of ours to instrument).
+
+Tasks that do real work inside a non-toolbox image (the resolved `build.agent` image for
+`build-source`/`unit-test`, or `sast-scan`'s own `semgrep/semgrep` step) can't call
+`otel_child_span` directly - neither otel-cli nor `$PLATFORM_LIB` exist there. The
+pattern: stamp start/end timestamps as plain `date` output inside that step, hand them
+off as Task-level results, then send the real span later from a toolbox step that does
+have otel-cli.
+
+**Real bug, found live via the user noticing missing spans in Grafana (not caught by
+design/code review)**: `sast-scan.yaml`'s `scan` step used the same `date -u +"%Y-%m-
+%dT%H:%M:%S.%NZ"` (nanosecond precision) pattern `build-source.yaml`/`run-tests.yaml`
+already use successfully - but `semgrep/semgrep` is Alpine *without* GNU coreutils
+(every build-agent image in `build-agents.env` is deliberately full/Debian-based instead,
+specifically because Alpine lacks bash - a constraint that happens to also mean they all
+ship real GNU `date`). Alpine's default `date` is BusyBox's, which doesn't support `%N`
+and - confirmed live, not assumed - silently truncates the *entire rest* of the format
+string the moment it hits `%N`, rather than erroring or printing it literally:
+`date -u +"%Y-%m-%dT%H:%M:%S.%NZ"` produced `"2026-08-05T18:57:11."` - missing the
+fractional seconds *and* the trailing `Z`. That malformed timestamp reached otel-cli's
+`--start`/`--end` flags with no visible error, and the span simply never appeared in
+Tempo. Fixed by dropping to whole-second precision (`%Y-%m-%dT%H:%M:%SZ`, no `%N`) for
+this one Task - a real Semgrep scan takes seconds, so second-level precision loses
+nothing meaningful. `image-scan.yaml`/`generate-sbom.yaml` were never exposed to this:
+both run entirely inside the toolbox image and call `otel_child_span` directly around
+the live command, no cross-image timestamp handoff at all.
+
+Verified live afterward: a real build with `sast`/`imageScan`/`sbom` all enabled showed
+all six task spans (including `image-scan`, which failed on real pre-existing CVEs -
+confirming spans emit on failure too, not just success) correctly nested under
+`stage:build` in a real Tempo trace.
+
 ## Reliability gap, not yet closed
 
 CDEvents delivery to the broker is at-least-once (plain HTTP POST with retries - see

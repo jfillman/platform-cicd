@@ -1,0 +1,121 @@
+# catalog/tasks/verify-sast-attestation.yaml
+#
+# Real (not a re-scan) SAST governance check. Originally sast-check.yaml re-ran Semgrep
+# against the promoted commit's source at release time - genuinely redundant, caught by
+# the user: the source at a fixed commit never changes, and a real build-time Semgrep
+# run (build.yaml's own sast-scan Task, Phase 3 item 8.4) already produced a real,
+# cryptographically-attested result. This Task looks that result up from the image's own
+# SLSA provenance attestation (predicate.buildConfig.tasks[], the same field
+# verify-image-provenance.yaml already reads for git-clone's url/commit) instead of
+# redoing the work - genuine shift-left: SAST already blocked the BUILD if it failed
+# (8.4's DAG fix makes build-image wait on sast-scan), so this is about *proving* that
+# gate held for the real image being promoted, not re-running it.
+#
+# A missing sast-scan entry in buildConfig.tasks means the task was skipped - Tekton
+# never creates a TaskRun for a when:-gated skip, and Chains' provenance only records
+# real TaskRuns, so this can only mean governance.sast was false for this build. Treated
+# as a pass, not a failure: cicd.yaml's own toggle is the tenant's explicit choice, and
+# this gate shouldn't silently override it by demanding evidence of something the tenant
+# never asked to run. A PRESENT task with any outcome other than "passed" fails closed.
+#
+# cosign/trusted-root/digest-resolution mechanism duplicated from verify-image-
+# provenance.yaml rather than shared/refactored - same "a little duplication is safer
+# than re-touching an already-verified, security-sensitive Task" precedent already used
+# for resolve-app-commit.yaml vs. verify-commit-signature.yaml.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: verify-sast-attestation
+  labels:
+    platform.io/catalog: "true"
+spec:
+  description: Looks up the sast-scan task's real outcome from the promoted image's own SLSA provenance attestation, rather than re-running Semgrep.
+  params:
+    - name: image-ref
+      type: string
+      description: Full image reference (repo:tag) whose build attestation records the sast-scan outcome to check.
+  steps:
+    - name: verify
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      env:
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        workdir="$(mktemp -d)"
+
+        # Tag -> digest resolution, identical to verify-image-provenance.yaml's own -
+        # cosign's attestation lookup is digest-keyed, a plain tag genuinely fails with
+        # "no signatures found" even when real attestations exist.
+        registry="${IMAGE_REF%%/*}"
+        rest="${IMAGE_REF#*/}"
+        repo="${rest%:*}"
+        tag="${rest##*:}"
+        token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+        digest="$(curl -fsSL -D - -o /dev/null \
+          -H "Authorization: Bearer ${token}" \
+          -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+          "https://${registry}/v2/${repo}/manifests/${tag}" \
+          | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
+        if [[ -z "${digest}" ]]; then
+          echo "FAIL: could not resolve digest for ${IMAGE_REF}" >&2
+          exit 1
+        fi
+        image_ref="${registry}/${repo}@${digest}"
+        echo "Checking sast-scan outcome in provenance for ${image_ref}"
+
+        kubectl get configmap fulcio-root-ca -n platform-catalog \
+          -o jsonpath='{.data.cert\.pem}' > "${workdir}/fulcio-root.pem"
+        cosign trusted-root create \
+          --fulcio="url=http://fulcio-server.fulcio-system.svc,certificate-chain=${workdir}/fulcio-root.pem" \
+          --no-default-ctfe --no-default-rekor --no-default-tsa \
+          --out "${workdir}/trusted-root.json"
+
+        att_dir="${workdir}/attestations"
+        mkdir -p "${att_dir}"
+        cosign verify-attestation \
+          --insecure-ignore-tlog=true \
+          --insecure-ignore-sct=true \
+          --type slsaprovenance \
+          --trusted-root "${workdir}/trusted-root.json" \
+          --certificate-identity-regexp "^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$" \
+          --certificate-oidc-issuer "https://kubernetes.default.svc.cluster.local" \
+          "${image_ref}" > "${att_dir}/attestations.jsonl"
+
+        if [[ ! -s "${att_dir}/attestations.jsonl" ]]; then
+          echo "FAIL: no provenance attestations found for ${image_ref}" >&2
+          exit 1
+        fi
+
+        i=0
+        provenance_files=()
+        while IFS= read -r line; do
+          payload_file="${att_dir}/provenance-${i}.json"
+          jq -r '.payload' <<<"${line}" | base64 -d > "${payload_file}"
+          provenance_files+=("${payload_file}")
+          i=$((i + 1))
+        done < "${att_dir}/attestations.jsonl"
+
+        # Same task-name field verify-image-provenance.yaml already matches git-clone
+        # against - the underlying Task CRD name (Tekton's "tekton.dev/task" label),
+        # which for sast-scan is identical to its pipelineTask instance name in
+        # build.yaml (no ambiguity the way git-clone's hub-resolved name could have had).
+        outcome="$(jq -sr '[.[] | .predicate.buildConfig.tasks[]?
+          | select(.invocation.environment.labels["tekton.dev/task"] == "sast-scan")
+          | .results[] | select(.name == "outcome") | .value][0] // "not-configured"' \
+          "${provenance_files[@]}")"
+
+        case "${outcome}" in
+          passed)
+            echo "sast-scan passed at build time (verified via provenance attestation)."
+            ;;
+          not-configured)
+            echo "sast-scan was not present in this build's provenance - governance.sast was false for this build. Treated as a pass (tenant's own choice, not overridden here)."
+            ;;
+          *)
+            echo "FAIL: sast-scan's attested outcome was '${outcome}', not 'passed'." >&2
+            exit 1
+            ;;
+        esac
