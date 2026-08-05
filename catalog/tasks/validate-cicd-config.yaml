@@ -24,8 +24,8 @@ spec:
       description: cicd.yaml converted to JSON, so downstream Tasks read it with jq instead of re-parsing YAML.
   steps:
     - name: validate
-      image: ghcr.io/platform-cicd/toolbox:latest
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       script: |
         #!/usr/bin/env bash
         set -euo pipefail

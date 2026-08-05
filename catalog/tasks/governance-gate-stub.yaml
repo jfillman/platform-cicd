@@ -35,7 +35,7 @@ spec:
           - { name: kind, value: stepaction }
           - { name: name, value: governance-stub }
           - { name: namespace, value: platform-catalog }
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       params:
         - { name: gate-name, value: $(params.gate-name) }
         - { name: flow-traceparent, value: $(params.flow-traceparent) }

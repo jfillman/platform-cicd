@@ -34,8 +34,8 @@ spec:
       description: Used to find <app-name>-policy-config in this tenant's own namespace (platform/governance/tenant-policy-config-template.yaml).
   steps:
     - name: verify
-      image: ghcr.io/platform-cicd/toolbox:latest
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       env:
         - name: REPO_URL
           value: $(params.repo-url)

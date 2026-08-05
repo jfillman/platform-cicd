@@ -52,8 +52,8 @@ spec:
               expirationSeconds: 600
   steps:
     - name: open-pr
-      image: ghcr.io/platform-cicd/toolbox:latest
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       volumeMounts:
         - name: github-token-broker-token
           mountPath: /var/run/secrets/platform

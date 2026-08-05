@@ -21,6 +21,16 @@ kind: ServiceAccount
 metadata:
   name: pipeline-runner
   namespace: <TENANT>
+# imagePullSecrets reuses the same registry-credentials Secret kaniko already pushes
+# with (docs/onboarding.md) - needed so every TaskRun's pod can actually pull the shared
+# platform-cicd-toolbox image from ghcr.io/jfillman, which defaults to PRIVATE on GHCR
+# (confirmed live: a fresh package push gets a 401 on anonymous pull, unlike
+# nodejs-demo-app's own image, which had its visibility flipped to public separately at
+# some point). Reusing this Secret rather than asking to flip toolbox to public too -
+# narrower, and this Secret is already proven present in every onboarded tenant
+# namespace, no new credential to manage.
+imagePullSecrets:
+  - name: registry-credentials
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

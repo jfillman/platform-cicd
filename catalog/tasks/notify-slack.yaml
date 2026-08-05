@@ -73,8 +73,8 @@ spec:
         optional: true
   steps:
     - name: notify
-      image: ghcr.io/platform-cicd/toolbox:latest
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       volumeMounts:
         - name: slack-webhook
           mountPath: /var/run/secrets/platform

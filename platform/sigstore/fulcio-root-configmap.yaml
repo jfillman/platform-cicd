@@ -1,0 +1,58 @@
+# platform/sigstore/fulcio-root-configmap.yaml
+#
+# The PUBLIC half of fulcio-secret (platform/sigstore/fulcio-deployment.yaml), split out
+# on purpose - not a duplicate for convenience. fulcio-secret holds cert.pem AND key.pem
+# together; Kubernetes RBAC can't scope access to one key within a Secret, only to the
+# whole object, so granting any tenant `get` on fulcio-secret to read the public cert
+# would also hand them the private signing key - a real regression from the "fulcio-secret
+# readable only by Fulcio's own pod" property verified live in sub-item 2. This ConfigMap
+# holds only the public cert (genuinely public information - it's embedded in every cert
+# Fulcio issues, discoverable via Fulcio's own /api/v2/configuration endpoint already),
+# so it's safe to expose broadly.
+#
+# Consumed by catalog/tasks/verify-image-provenance.yaml as the --ca-roots trust anchor
+# for `cosign verify`/`verify-attestation` - see docs/provenance-policy.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fulcio-root-ca
+  namespace: platform-catalog
+data:
+  cert.pem: |
+    -----BEGIN CERTIFICATE-----
+    MIIBXzCCARGgAwIBAgIULS2gqk6EzoP+WqAugl3RUrr2i4gwBQYDK2VwMCQxIjAg
+    BgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVsY2lvLXJvb3QwIBcNMjYwODA0MDY1ODQx
+    WhgPMjEyNjA3MTEwNjU4NDFaMCQxIjAgBgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVs
+    Y2lvLXJvb3QwKjAFBgMrZXADIQAbzMlKYjHr/ds4pGno6IteM+L80JJAB6qcdZfv
+    cCOb2KNTMFEwHQYDVR0OBBYEFPs94gvZdJ0dtgeUbmtiF3GsnUIoMB8GA1UdIwQY
+    MBaAFPs94gvZdJ0dtgeUbmtiF3GsnUIoMA8GA1UdEwEB/wQFMAMBAf8wBQYDK2Vw
+    A0EA2qc3Z5SVC3pdT+WEEmg4lvArc3PkG79DR1Xq7zAuJGlEn8YZba2lglK+cnZX
+    VnT16fgLxASFZZatQBE7PoyzDg==
+    -----END CERTIFICATE-----
+---
+# Broad, but deliberately so and narrowly-scoped by resource: this ConfigMap holds
+# genuinely public data (same trust level as Fulcio's own public API), so granting read
+# access to every ServiceAccount cluster-wide (rather than enumerating each tenant's
+# pipeline-runner individually) is a reasonable trade - not a blanket grant on
+# configmaps in general, resourceNames-scoped to exactly this one object.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-fulcio-root-ca-read
+  namespace: platform-catalog
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["fulcio-root-ca"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-fulcio-root-ca-read
+  namespace: platform-catalog
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-fulcio-root-ca-read }
+subjects:
+  - kind: Group
+    name: system:serviceaccounts
+    apiGroup: rbac.authorization.k8s.io

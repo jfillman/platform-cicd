@@ -21,8 +21,8 @@ spec:
       value: $(steps.generate-chain-id.results.chain-id)
   steps:
     - name: generate-chain-id
-      image: ghcr.io/platform-cicd/toolbox:latest
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       results:
         - name: chain-id
       script: |
@@ -46,4 +46,4 @@ spec:
       # imagePullPolicy isn't a valid field on StepAction itself (only on Task steps -
       # caught as a "strict decoding error: unknown field" applying it there directly),
       # but it IS settable here, on the step that `ref`s the StepAction into this Task.
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6

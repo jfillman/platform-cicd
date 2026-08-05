@@ -1,0 +1,64 @@
+# platform/sigstore/rekor-helm-values.yaml
+#
+# Overrides for the official sigstore/rekor Helm chart (Phase 3 item 2, sub-item 3 - see
+# docs/provenance-policy.md). The chart pulls in Trillian (log server + log signer + its
+# own bundled MySQL) and Redis as dependencies, and auto-creates the Trillian Merkle tree
+# via a createtree Job - confirmed live from the chart's own real values.yaml, not
+# assumed. No manual tree-ID creation, no separate MySQL setup needed.
+#
+# Only ingress is overridden here - kind-observe has no ingress controller/LoadBalancer
+# (confirmed, an already-documented gap elsewhere in this platform), and nothing outside
+# the cluster needs to reach Rekor anyway, matching Fulcio's own ClusterIP-only pattern.
+#
+# Resource limits below were added after the first deploy attempt genuinely destabilized
+# the cluster twice - live-confirmed via `docker stats`, not guessed: MySQL + Trillian's
+# log server + log signer all doing simultaneous first-boot initialization drove the
+# podman VM to 41.04GB/41.96GB memory used (97.81%) with 337.8GB of block I/O, which is
+# what actually caused the second storm (the first was a separate, already-fixed nested
+# cgroup PID limit issue - see docs/provenance-policy.md for the full incident writeup).
+# These caps, combined with a staged rollout (MySQL up and healthy before Trillian's log
+# server/signer are scaled up, matching how the deploy is actually driven this time - see
+# docs/provenance-policy.md), are the two mitigations for that, not just one.
+server:
+  ingress:
+    enabled: false
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+trillian:
+  mysql:
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      # No memory limit, deliberately - both 1Gi and 2Gi genuinely OOMKilled MySQL
+      # during first-boot schema init (confirmed live both times, not guessed), and the
+      # VM has plenty of real headroom (30Gi+ available) whenever this happened - the
+      # ceiling was the problem, not actual VM memory pressure. The staged rollout
+      # (nothing else heavy running concurrently while this starts) is the real safety
+      # mechanism here, not a per-container cap MySQL's own bootstrap keeps blowing
+      # through.
+  logServer:
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+  logSigner:
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+redis:
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"

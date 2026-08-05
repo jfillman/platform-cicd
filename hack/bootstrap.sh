@@ -126,20 +126,31 @@ kubectl apply -n platform-catalog -f catalog/tasks/
 kubectl apply -n platform-catalog -f catalog/pipelines/
 kubectl apply -f catalog/rbac/catalog-read-only.yaml
 
-log "4/6 - build + load local images (toolbox, token-review-interceptor)"
-docker build -f catalog/toolbox/Dockerfile -t "ghcr.io/platform-cicd/toolbox:${CATALOG_IMAGE_TAG}" .
+log "4/6 - build + publish toolbox; build + load token-review-interceptor"
+# The toolbox image is `docker push`ed to a real registry (ghcr.io/jfillman, the same
+# public GHCR namespace nodejs-demo-app's own image already pulls from with zero
+# imagePullSecrets configured anywhere - confirmed live) rather than `kind load`ed, unlike
+# token-review-interceptor below. This is a real bug fix, not a style choice: a
+# kind-loaded/`ctr images import`ed image has no registry-qualified name, so every Tekton
+# step's containerStatus.imageID for it comes back as a bare `sha256:<digest>` (confirmed
+# live via `kubectl get taskrun ... -o json | jq '.status.steps[].imageID'`) instead of
+# `repo@sha256:<digest>`. Tekton Chains' PipelineRun-level SLSA materials-gathering walks
+# every constituent TaskRun's step imageIDs, and chokes hard on the bare one ("expected
+# imageID sha256:... to be separable by @"), breaking signing for the ENTIRE PipelineRun -
+# not just skipping that one material. Since the toolbox image is used by nearly every
+# step in every pipeline, this broke Chains signing for every real build. Reproduced
+# identically across two independent real builds before finding the root cause - see
+# platform/sigstore/chains-config-patch.yaml's artifacts.taskrun.storage comment for the
+# full incident note. token-review-interceptor isn't referenced as a step image by any
+# Tekton Task, so it never triggers this bug and is left on the simpler kind-load path.
+docker build -f catalog/toolbox/Dockerfile -t "ghcr.io/jfillman/platform-cicd-toolbox:${CATALOG_IMAGE_TAG}" .
+docker push "ghcr.io/jfillman/platform-cicd-toolbox:${CATALOG_IMAGE_TAG}"
 docker build -f platform/broker/cmd/token-review-interceptor/Dockerfile \
   -t "ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}" platform/broker
 if command -v kind >/dev/null 2>&1; then
-  if ! kind load docker-image "ghcr.io/platform-cicd/toolbox:${CATALOG_IMAGE_TAG}" --name "${KIND_CLUSTER_NAME}"; then
-    warn "kind load docker-image failed - known issue with kind's podman provider detection"
-    warn "on this machine (see docs/bootstrap.md 'kind + podman'). Fallback: podman save the"
-    warn "image and 'kind load image-archive', or push to a registry the cluster can pull from."
-  fi
   kind load docker-image "ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}" --name "${KIND_CLUSTER_NAME}" || true
 else
-  warn "kind CLI not found or unusable - load these images into the cluster manually:"
-  warn "  ghcr.io/platform-cicd/toolbox:${CATALOG_IMAGE_TAG}"
+  warn "kind CLI not found or unusable - load this image into the cluster manually:"
   warn "  ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}"
 fi
 

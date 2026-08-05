@@ -1,0 +1,280 @@
+# catalog/tasks/verify-image-provenance.yaml
+#
+# Second half of the real (not stub) policy-check gate, Phase 3 item 2 sub-item 3 - see
+# docs/provenance-policy.md. Runs alongside verify-commit-signature.yaml (sub-item 1,
+# which checks the human's gitsign commit signature) as a second, independent gate in the
+# same policy-check Pipeline: this one checks the promoted *image*'s own signature and
+# SLSA provenance attestation (both produced by Tekton Chains, sub-item 2), evaluated
+# against Conforma's pre-configured base policy concatenated with this tenant's own
+# policy data.
+#
+# Deliberately split into two tools doing what each is actually good at, not one
+# `ec validate image` call - see docs/provenance-policy.md for the full story, in short:
+# `ec validate image`'s own built-in signature verification needs a TUF-distributed trust
+# root, and constructing a valid self-hosted TUF repository by hand for just our own
+# Fulcio (no public trust, no live TUF mirror) turned out to be genuinely heavy
+# infrastructure for what should be a simple local trust anchor. `cosign verify`/
+# `verify-attestation --ca-roots <pem>` (already proven working in sub-item 2's own
+# verification) does the same cryptographic job without needing TUF at all. `ec validate
+# input` then runs Conforma's real Rego policy engine against the already-verified,
+# decoded provenance JSON - also no TUF involved, since it's pure policy evaluation, not
+# signature verification. Same 3-stage design `ec validate image` itself documents
+# (signature, then attestation signature, then policy) - just stages 1-2 via cosign,
+# stage 3 via ec.
+#
+# --insecure-ignore-tlog on both cosign calls (no --rekor-url / --ignore-rekor split like
+# `ec` has, cosign is either checking a transparency log or explicitly told not to) -
+# Rekor is deliberately deferred, not a self-hosted instance here (see
+# docs/provenance-policy.md for the live-incident-driven reasoning: two separate
+# cluster-destabilizing storms during real deploy attempts of Rekor+Trillian+MySQL on
+# this environment). --insecure-ignore-sct likewise - no CT log either (sub-item 2's own
+# scope decision, unchanged).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: verify-image-provenance
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: repo-url
+      type: string
+      description: The gitops repo's own URL - PaC's {{ repo_url }}.
+    - name: revision
+      type: string
+      description: The gitops PR's head commit - PaC's {{ revision }}.
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+      description: Used to find <app-name>/staging/deployment.yaml in the gitops repo, and <app-name>-policy-config in this tenant's own namespace.
+  steps:
+    - name: verify
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      env:
+        - name: REPO_URL
+          value: $(params.repo-url)
+        - name: REVISION
+          value: $(params.revision)
+        - name: TENANT
+          value: $(params.tenant)
+        - name: APP_NAME
+          value: $(params.app-name)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        workdir="$(mktemp -d)"
+        git clone --quiet "${REPO_URL}" "${workdir}/gitops"
+        cd "${workdir}/gitops"
+        git checkout --quiet "${REVISION}"
+
+        # The promoted image ref, straight from the same manifest open-release-pr.yaml
+        # itself patches - no new trailer needed, this is already the authoritative
+        # record of what's actually being promoted by this PR.
+        manifest="${APP_NAME}/staging/deployment.yaml"
+        image_ref="$(yq '.spec.template.spec.containers[0].image' "${manifest}")"
+        if [[ -z "${image_ref}" || "${image_ref}" == "null" ]]; then
+          echo "FAIL: could not read image ref from ${manifest}" >&2
+          exit 1
+        fi
+
+        # Resolve the tag to its digest - cosign's signature/attestation lookup is
+        # digest-keyed (the .sig/.att OCI tags are derived from the digest), so a plain
+        # tag reference genuinely fails with "no signatures found" even when real
+        # signatures exist (confirmed live, not assumed) - it's not resolving the tag
+        # to a digest internally the way a plain image pull would. Registry API used
+        # directly (GHCR's own token-endpoint convention, matching how this platform
+        # already talks to GHCR elsewhere - not a generic OCI discovery flow, a
+        # deliberate, explicit scope decision for this GHCR-specific platform).
+        registry="${image_ref%%/*}"
+        rest="${image_ref#*/}"
+        repo="${rest%:*}"
+        tag="${rest##*:}"
+        token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+        # Accept both Docker v2 and OCI manifest media types - kaniko (build-image.yaml)
+        # pushes OCI-format manifests, and requesting only the older Docker v2 type gets
+        # a real, confirmed-live 404 ("OCI manifest found, but Accept header does not
+        # support OCI manifests") even though the manifest genuinely exists.
+        digest="$(curl -fsSL -D - -o /dev/null \
+          -H "Authorization: Bearer ${token}" \
+          -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+          "https://${registry}/v2/${repo}/manifests/${tag}" \
+          | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
+        if [[ -z "${digest}" ]]; then
+          echo "FAIL: could not resolve digest for ${image_ref}" >&2
+          exit 1
+        fi
+        image_ref="${registry}/${repo}@${digest}"
+        echo "Verifying provenance for ${image_ref}"
+
+        # Public half of Fulcio's root CA - see fulcio-root-configmap.yaml's own comment
+        # on why this is a separate ConfigMap from fulcio-secret, not the same object.
+        kubectl get configmap fulcio-root-ca -n platform-catalog \
+          -o jsonpath='{.data.cert\.pem}' > "${workdir}/fulcio-root.pem"
+
+        identity_regexp="^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$"
+        issuer="https://kubernetes.default.svc.cluster.local"
+
+        # No separate bare-image `cosign verify` step, deliberately - confirmed live
+        # this platform's Chains config produces attestations (.att, via
+        # artifacts.taskrun.storage/artifacts.pipelinerun.storage) but not a standalone
+        # image signature (.sig, a distinct Chains feature keyed off a *TaskRun-level*
+        # IMAGE_URL/IMAGE_DIGEST type hint we never added, only a Pipeline-level one).
+        # Not a gap worth closing: the attestation's own signed statement already
+        # records the exact subject digest inside the cryptographically-signed payload
+        # (confirmed by inspecting a real one), so `verify-attestation`'s signature
+        # check alone already proves "this identity vouches for exactly this image
+        # digest" - a separate bare-image signature would rely on the same trust
+        # anchor and wouldn't meaningfully extend what's already verified here.
+
+        # Attestation signature + extract the verified provenance payload.
+        # `cosign download attestation` returns one DSSE-signed line per attestation
+        # (Tekton Chains pushes both a TaskRun-level and a PipelineRun-level one, see
+        # sub-item 2) - verify each and decode its payload for stage 3.
+        att_dir="${workdir}/attestations"
+        mkdir -p "${att_dir}"
+        cosign verify-attestation \
+          --insecure-ignore-tlog=true \
+          --insecure-ignore-sct=true \
+          --type slsaprovenance \
+          --ca-roots "${workdir}/fulcio-root.pem" \
+          --certificate-identity-regexp "${identity_regexp}" \
+          --certificate-oidc-issuer "${issuer}" \
+          "${image_ref}" > "${att_dir}/attestations.jsonl"
+
+        i=0
+        provenance_files=()
+        while IFS= read -r line; do
+          payload_file="${att_dir}/provenance-${i}.json"
+          jq -r '.payload' <<<"${line}" | base64 -d > "${payload_file}"
+          provenance_files+=("${payload_file}")
+          i=$((i + 1))
+        done < "${att_dir}/attestations.jsonl"
+
+        if [[ ${#provenance_files[@]} -eq 0 ]]; then
+          echo "FAIL: no provenance attestations found for ${image_ref}" >&2
+          exit 1
+        fi
+
+        # Wrap the decoded, already-signature-verified payload(s) as
+        # {"attestations": [{"statement": <payload>}, ...]} before handing to `ec` -
+        # NOT a cosmetic choice. Conforma's `lib.pipelinerun_attestations` (which nearly
+        # every slsa3-collection rule, including tasks.*, depends on) reads
+        # `input.attestations[].statement`, not a bare in-toto Statement as `input`
+        # itself - confirmed live the hard way: without this wrapping, `input.attestations`
+        # doesn't exist at all, so `lib.pipelinerun_attestations` silently resolves to an
+        # EMPTY list and every rule built on it (tasks.pipeline_has_tasks,
+        # tasks.successful_pipeline_tasks, tasks.required_tasks_found,
+        # slsa_build_scripted_build.*, slsa_build_build_service.*, etc.) reports a vacuous
+        # "Pass" - not because the check ran and succeeded, but because it had nothing to
+        # iterate. This wrapping is `ec validate image`'s own internal job normally (it
+        # assembles this shape from a real image's attestations before handing off to
+        # policy) - `ec validate input` is a raw file validator and does no such wrapping,
+        # so it's done by hand here. See docs/provenance-policy.md for the full
+        # live-debugging story (this was found while chasing an unrelated, seemingly
+        # working required-tasks check that turned out to be vacuously passing too).
+        wrapped_provenance_file="${workdir}/wrapped-provenance.json"
+        jq -s '{attestations: map({statement: .})}' "${provenance_files[@]}" > "${wrapped_provenance_file}"
+
+        # Tenant's own policy data - the same ConfigMap verify-commit-signature.yaml
+        # already reads, no new template. Exposed to Conforma as ruleData so it's
+        # structurally available for a future rule to consume, even though no current
+        # base-policy rule checks it - see docs/provenance-policy.md for why this
+        # platform deliberately isn't duplicating gitsign's own email check here.
+        allowed_emails_json="$(kubectl get configmap "${APP_NAME}-policy-config" -n "${TENANT}" \
+          -o jsonpath='{.data.allowed-commit-signers}' 2>/dev/null \
+          | grep -vE '^\s*(#.*)?$' | sed -E 's/^\s+|\s+$//g' \
+          | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+
+        # Platform-wide required-tasks list - NOT per-tenant (unlike allowed-commit-
+        # signers): this describes an invariant of catalog/pipelines/build.yaml itself,
+        # the same for every tenant, not a tenant preference. Names are the underlying
+        # Task CRD names (Tekton's own "tekton.dev/task" label - confirmed live this is
+        # what Conforma's tasks.required_tasks_found actually matches against, NOT the
+        # per-step pipelineTask name like "clone-repo").
+        #
+        # Derived LIVE from the real `build` Pipeline object in platform-catalog, not
+        # hardcoded - matching this platform's existing "read fresh from the source of
+        # truth" precedent (cicd.yaml is read fresh from the triggering commit every run,
+        # never synced to a side copy - see the architecture doc's explicit rejection of a
+        # sync-to-ConfigMap mechanism). A hardcoded list was tried first and already proved
+        # the risk live: a hand-written first pass silently missed the two tasks living in
+        # `spec.finally` (a separate array from `spec.tasks`) - exactly the kind of drift
+        # a static copy invites every time build.yaml changes. `pipeline-runner` already
+        # has cluster-wide get/list/watch on `pipelines.tekton.dev` in platform-catalog
+        # (catalog/rbac/catalog-read-only.yaml, needed for the cluster resolver anyway) -
+        # no new RBAC required.
+        #
+        # `select(.when == null)` excludes the three `when:`-gated governance-stub tasks
+        # (sast-scan/image-scan/generate-sbom) - they're legitimately skipped when a
+        # tenant's cicd.yaml disables that gate, so requiring them would fail policy-check
+        # for any tenant who's turned SAST/image-scan/SBOM off.
+        #
+        # `git-clone[sslVerify=true]` demonstrates Conforma's task-parameter-matching
+        # syntax (confirmed live: `name[PARAM=val]` requires that specific invocation
+        # parameter, not just that the task ran) - pins the clone to have run with TLS
+        # verification enabled, not just that a task named git-clone appeared somewhere.
+        #
+        # Known limitation, not currently hit: this only recognizes resolver types that
+        # put the target name in a `name` param (`cluster` and `hub`, everything
+        # build.yaml currently uses) - a task added via the `git` resolver (params
+        # url/revision/pathInRepo, no `name`) would be silently dropped from the derived
+        # list rather than erroring. Revisit if build.yaml ever adopts the git resolver.
+        data_dir="${workdir}/data"
+        mkdir -p "${data_dir}"
+        required_tasks_json="$(kubectl get pipeline build -n platform-catalog -o json | jq -c '
+          [(.spec.tasks // [])[], (.spec.finally // [])[] | select(.when == null) |
+           (.taskRef.params[] | select(.name=="name") | .value)] | unique |
+          map(if . == "git-clone" then "git-clone[sslVerify=true]" else . end)
+        ')"
+        jq -n --argjson tasks "${required_tasks_json}" '{
+          "required-tasks": [{ "effective_on": "2020-01-01T00:00:00Z", "tasks": $tasks }]
+        }' > "${data_dir}/data.json"
+
+        # Concatenation: Conforma's own pre-configured base policy (policy/lib for the
+        # shared helper functions the release rules import, policy/release for the
+        # rules themselves - confirmed live these are two separate required sources,
+        # not one) plus this tenant's own data, in one EnterpriseContractPolicy spec.
+        # @slsa3 matches this item's original ambition ("try and achieve a high SLSA
+        # level") - a deliberate, not-the-safest choice, see docs/provenance-policy.md
+        # for what that surfaces against this platform's current real provenance shape.
+        # allowed_builder_ids pins provenance to exactly this platform's own Chains
+        # controller identity - confirmed live this rule's default already matches
+        # (https://tekton.dev/chains/v2), so this makes an already-correct implicit
+        # default explicit rather than closing a live gap.
+        # tasks.required_tasks_found (+ its two supporting "was data provided" rules)
+        # aren't in the @slsa3 collection - confirmed live via the real rule source
+        # (they're tagged redhat/redhat_security, not slsa3) - included individually by
+        # rule code rather than pulling in the whole @redhat collection, which would also
+        # drag in trusted_task's OCI-bundle-resolver trust model (a real architectural
+        # mismatch for this platform's cluster/hub-resolved catalog Tasks - see
+        # docs/provenance-policy.md for why that's deliberately excluded, not an
+        # oversight).
+        policy_file="${workdir}/policy.yaml"
+        jq -n --argjson emails "${allowed_emails_json:-[]}" --arg data_dir "${data_dir}/" '{
+          sources: [{
+            policy: [
+              "github.com/conforma/policy//policy/lib?ref=main",
+              "github.com/conforma/policy//policy/release?ref=main"
+            ],
+            data: [$data_dir],
+            config: {
+              include: [
+                "@slsa3",
+                "tasks.required_tasks_found",
+                "tasks.required_tasks_list_provided",
+                "tasks.data_provided"
+              ]
+            },
+            ruleData: {
+              allowed_commit_signers: $emails,
+              allowed_builder_ids: ["https://tekton.dev/chains/v2"]
+            }
+          }]
+        }' > "${policy_file}"
+
+        # Stage 3: policy evaluation against the already-verified, correctly-wrapped
+        # provenance. Real pass/fail via ec's own exit code (--strict defaults true).
+        ec validate input "${wrapped_provenance_file}" --policy "${policy_file}" --output json

@@ -14,7 +14,7 @@ metadata:
   labels:
     platform.io/catalog: "true"
 spec:
-  image: ghcr.io/platform-cicd/toolbox:latest
+  image: ghcr.io/jfillman/platform-cicd-toolbox:latest
   results:
     - name: traceparent
       description: W3C traceparent of the flow-root span. Thread through every subsequent Task param and into the CDEvent payload - see docs/tracing.md.

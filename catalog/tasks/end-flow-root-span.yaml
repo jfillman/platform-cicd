@@ -34,7 +34,7 @@ spec:
           - { name: kind, value: stepaction }
           - { name: name, value: otel-span-send }
           - { name: namespace, value: platform-catalog }
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       params:
         - { name: name, value: $(params.flow-name) }
         - { name: flow-traceparent, value: $(params.flow-traceparent) }

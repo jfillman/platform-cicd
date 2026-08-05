@@ -16,7 +16,7 @@ metadata:
   labels:
     platform.io/catalog: "true"
 spec:
-  image: ghcr.io/platform-cicd/toolbox:latest
+  image: ghcr.io/jfillman/platform-cicd-toolbox:latest
   params:
     - name: flow-traceparent
       type: string

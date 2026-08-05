@@ -25,8 +25,20 @@
 # action, see docs/commit-signing.md). Real linux_amd64/linux_arm64 asset names confirmed
 # against the actual v0.17.0 release (checked live via the GitHub API), not guessed.
 #
+# ec (Conforma CLI, Phase 3 item 2 sub-item 3, docs/provenance-policy.md) - used by
+# catalog/tasks/verify-image-provenance.yaml. Deliberately the GitHub-release binary
+# (github.com/conforma/cli), not the quay.io/enterprise-contract/ec-cli container image -
+# that image is amd64-only and genuinely crashes under this node's arm64 emulation with a
+# real Go-runtime panic (confirmed live, not assumed), while a real native
+# ec_linux_arm64 release asset exists and runs natively.
+#
+# cosign - also used by verify-image-provenance.yaml, for the actual signature/attestation
+# cryptographic verification (ec's own built-in verification needs a TUF-distributed trust
+# root; cosign's --ca-roots flag verifies against a local file directly, no TUF needed -
+# see that Task's own header comment for the full reasoning).
+#
 # Build context MUST be the repo root (paths below are repo-root-relative):
-#   docker build -f catalog/toolbox/Dockerfile -t ghcr.io/platform-cicd/toolbox:latest .
+#   docker build -f catalog/toolbox/Dockerfile -t ghcr.io/jfillman/platform-cicd-toolbox:latest .
 #
 # schemas/cicd.schema.json is baked in here rather than mounted from a ConfigMap, which
 # means a schema change requires a toolbox image rebuild + catalog version bump, not a
@@ -44,6 +56,8 @@ ARG OTEL_CLI_VERSION=0.4.5
 ARG YQ_VERSION=4.44.3
 ARG KUBECTL_VERSION=1.30.4
 ARG GITSIGN_VERSION=0.17.0
+ARG EC_VERSION=0.9.88
+ARG COSIGN_VERSION=3.1.2
 
 RUN apk add --no-cache bash curl jq git openssl ca-certificates util-linux coreutils
 
@@ -66,7 +80,13 @@ RUN set -euo pipefail; \
     && chmod +x /usr/local/bin/kubectl \
     && curl -fsSL -o /usr/local/bin/gitsign \
       "https://github.com/sigstore/gitsign/releases/download/v${GITSIGN_VERSION}/gitsign_${GITSIGN_VERSION}_linux_${ARCH}" \
-    && chmod +x /usr/local/bin/gitsign
+    && chmod +x /usr/local/bin/gitsign \
+    && curl -fsSL -o /usr/local/bin/ec \
+      "https://github.com/conforma/cli/releases/download/v${EC_VERSION}/ec_linux_${ARCH}" \
+    && chmod +x /usr/local/bin/ec \
+    && curl -fsSL -o /usr/local/bin/cosign \
+      "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${ARCH}" \
+    && chmod +x /usr/local/bin/cosign
 
 COPY --from=yajsv-build /go/bin/yajsv /usr/local/bin/yajsv
 

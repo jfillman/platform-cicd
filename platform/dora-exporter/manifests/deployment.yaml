@@ -68,7 +68,7 @@ spec:
       containers:
         - name: exporter
           image: ghcr.io/platform-cicd/dora-exporter:latest
-          imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io - see token-review-interceptor's identical note
+          imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6 - see token-review-interceptor's identical note
           ports: [{ containerPort: 8080, name: metrics }]
           securityContext:
             allowPrivilegeEscalation: false

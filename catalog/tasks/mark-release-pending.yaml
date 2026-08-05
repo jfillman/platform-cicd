@@ -39,8 +39,8 @@ spec:
       description: The flow's original start time (from build's start-flow-root-span), threaded through as the Lead Time start anchor.
   steps:
     - name: mark-pending
-      image: ghcr.io/platform-cicd/toolbox:latest
-      imagePullPolicy: IfNotPresent  # kind-loaded locally, not actually pushed to ghcr.io
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       env:
         - name: TENANT
           value: $(params.tenant)

@@ -116,7 +116,7 @@ This machine's `kind` CLI fails to talk to its container provider
 (`kind get clusters` / `kind load docker-image` error out against podman - a tooling
 bug, not a platform-cicd issue). `hack/bootstrap.sh` treats `kind load docker-image`
 failures as non-fatal and warns rather than aborting; if it fails for you too, load the
-`ghcr.io/platform-cicd/toolbox` and `ghcr.io/platform-cicd/token-review-interceptor`
+`ghcr.io/jfillman/platform-cicd-toolbox` and `ghcr.io/platform-cicd/token-review-interceptor`
 images into the cluster manually (`podman save` + `kind load image-archive`, or push to
 a registry the cluster can pull from) before continuing.
 
