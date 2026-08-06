@@ -24,7 +24,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [
-        { "query": "$traceId", "queryType": "traceId" }
+        { "refId": "A", "query": "$traceId", "queryType": "traceId", "limit": 20, "tableType": "traces", "metricsQueryType": "range", "filters": [ { "id": "1", "operator": "=", "scope": "span", "tag": "" } ], "serviceMapQuery": "", "serviceMapUseNativeHistograms": false }
       ]
     },
     {
