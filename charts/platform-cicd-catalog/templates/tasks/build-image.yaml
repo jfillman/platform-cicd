@@ -42,7 +42,7 @@ spec:
       type: string
     - name: flow-traceparent
       type: string
-      description: Root traceparent for the whole flow (from start-flow-root-span) - gives the kaniko-duration span its trace id. See emit-image-ref-result's own span-emission comment for why this Task can't wrap kaniko directly.
+      description: Root traceparent for the whole flow (from start-flow-root-span) - gives the kaniko-duration span its trace id. See emit-image-ref-and-span's own span-emission comment for why this Task can't wrap kaniko directly.
     - name: stage-span-id
       type: string
       description: The current stage's own span id (from start-stage-span) - the kaniko-duration span is parented to it.
@@ -74,7 +74,7 @@ spec:
         - name: dockerfile-path
         - name: image-ref
         - name: span-start-time
-          description: Stamped immediately before kaniko starts - see emit-image-ref-result's span-emission comment for why the actual span is sent from there instead of here.
+          description: Stamped immediately before kaniko starts - see emit-image-ref-and-span's span-emission comment for why the actual span is sent from there instead of here.
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -85,7 +85,7 @@ spec:
         echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"
         echo -n "${IMAGE_REF}" | tee "$(step.results.image-ref.path)"
         # -n here matters, unlike the two lines above it's not just style: this result is
-        # read back by emit-image-ref-result via a cross-step env var substitution, not a
+        # read back by emit-image-ref-and-span via a cross-step env var substitution, not a
         # `cat`-based one - command substitution strips a trailing newline automatically,
         # a raw env var substitution doesn't. A bare `date | tee` here left one in, which
         # otel-cli's --start flag received literally - a real bug, found live: the span
@@ -117,7 +117,7 @@ spec:
     # would reintroduce the exact problem this exception avoids. Only reached if kaniko
     # succeeded (a failed build-and-push halts the TaskRun before this step runs) - same
     # honest, documented gap as build-source.yaml/run-tests.yaml's own emit-span steps.
-    - name: emit-image-ref-result
+    - name: emit-image-ref-and-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       env:

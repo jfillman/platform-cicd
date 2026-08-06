@@ -47,12 +47,17 @@ credentials).
 
    ```yaml
    platformIdentity:
-     tenantNamespace: <tenant>
+     tenantNamespace: app-<app-name>-cicd  # or infra-<app-name>-cicd - see docs/naming-conventions.md
      appName: <app-name>
      gitopsRepoUrl: https://github.com/<org>/gitops-<app-name>  # only needed if pipeline: declares a release stage
      appRepoUrl: https://github.com/<org>/<app-name>            # only needed if ephemeralEnvironments.pullRequest.enabled
      githubOwner: <org>
    ```
+
+   `tenantNamespace` follows `<type>-<app-name>-cicd` (`type` is `app` for a regular
+   application tenant, `infra` for a shared/platform-adjacent service onboarded with its
+   own pipeline) - see [naming-conventions.md](naming-conventions.md) for the full
+   convention, including how deploy/staging/PR namespaces build on this same base.
 
    `platformIdentity` is not a key `schemas/cicd.schema.json` permits - its
    `additionalProperties: false` already rejects any `cicd.yaml` that tries to define it,
@@ -62,8 +67,8 @@ credentials).
 4. **Install the tenant chart:**
 
    ```
-   helm upgrade --install <tenant> charts/platform-cicd-tenant \
-     --namespace <tenant> --create-namespace \
+   helm upgrade --install <type>-<app-name>-cicd charts/platform-cicd-tenant \
+     --namespace <type>-<app-name>-cicd --create-namespace \
      -f <app-repo>/cicd.yaml -f platform-identity.yaml --wait
    ```
 
