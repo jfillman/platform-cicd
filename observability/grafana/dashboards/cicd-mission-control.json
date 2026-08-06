@@ -143,20 +143,20 @@
                         "properties": [
                             { "id": "mappings", "value": [
                                 { "type": "value", "options": {
-                                    "stage:build": { "text": "▸ build" },
-                                    "stage:test": { "text": "▸ test" },
-                                    "stage:deploy": { "text": "▸ deploy" },
-                                    "stage:release": { "text": "▸ release" },
-                                    "sast-scan": { "text": "        ↳ sast-scan" },
-                                    "image-scan": { "text": "        ↳ image-scan" },
-                                    "generate-sbom": { "text": "        ↳ generate-sbom" },
-                                    "unit-test": { "text": "        ↳ unit-test" },
-                                    "build-source": { "text": "        ↳ build-source" },
-                                    "build-image": { "text": "        ↳ build-image" },
-                                    "governance:sast": { "text": "        ↳ governance:sast" },
-                                    "governance:image-scan": { "text": "        ↳ governance:image-scan" },
-                                    "governance:sbom": { "text": "        ↳ governance:sbom" },
-                                    "governance:policy-check": { "text": "        ↳ governance:policy-check" }
+                                    "stage:build": { "text": "■ BUILD" },
+                                    "stage:test": { "text": "■ TEST" },
+                                    "stage:deploy": { "text": "■ DEPLOY" },
+                                    "stage:release": { "text": "■ RELEASE" },
+                                    "sast-scan": { "text": "↳ sast-scan" },
+                                    "image-scan": { "text": "↳ image-scan" },
+                                    "generate-sbom": { "text": "↳ generate-sbom" },
+                                    "unit-test": { "text": "↳ unit-test" },
+                                    "build-source": { "text": "↳ build-source" },
+                                    "build-image": { "text": "↳ build-image" },
+                                    "governance:sast": { "text": "↳ governance:sast" },
+                                    "governance:image-scan": { "text": "↳ governance:image-scan" },
+                                    "governance:sbom": { "text": "↳ governance:sbom" },
+                                    "governance:policy-check": { "text": "↳ governance:policy-check" }
                                 } }
                             ] }
                         ]
