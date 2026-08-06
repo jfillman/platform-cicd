@@ -93,13 +93,17 @@ governance-check trigger files (`sast`, `policy-check`, `image-scan`, `sbom`,
 `pr-validate-`, `onboarding-resync-`) already had it right. **Fixed** - all eight
 `generateName` values in `onboarding-templates/.tekton*/` now end in `-`.
 
-One open item, flagged rather than assumed: Pipelines-as-Code derives the GitHub Check
-context name from the same `generateName` value, and the check names being clean
-(`sast`, not `sast-`) is explicitly liked and worth preserving. Whether PaC strips a
-trailing `-` when computing the check name needs confirming against a real PR - not
-verified yet as of this doc being written. If PaC does *not* strip it, the fix is a
-distinct `pipelinesascode.tekton.dev/task` (or equivalent) annotation to set the check
-name explicitly, decoupled from `generateName` - not reverting the dash.
+**Confirmed live, and this is a genuine, unavoidable trade-off, not an oversight**:
+Pipelines-as-Code derives the GitHub Check context name directly from
+`metadata.generateName`, verbatim - no trailing-dash trimming (confirmed via a real test
+PR against `gitops-nodejs-demo-app`: adding the dash produced a real PipelineRun name
+like `sast-gdn8r`, but the check name became `sast-` too, not `sast`). No annotation to
+decouple the two was found after a real search of PaC's docs. Since the clean check name
+(`sast`, not `sast-`) is the explicitly stronger preference, the five gitops-repo
+governance-check files **keep their dash-free `generateName`** - the resulting
+`sastgdn8r`-style PipelineRun name is the accepted cost of the cleaner, more visible
+check name. Don't "fix" this again without a real mechanism to set the check name
+independently of `generateName` - reverting this exact change was itself the fix.
 
 Deterministic (non-`generateName`) PipelineRun names fired by the broker
 (`test-$(body.context.id)`, `deploy-...`, `release-...`) already use a real separator -
