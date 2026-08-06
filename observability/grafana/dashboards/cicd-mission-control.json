@@ -21,8 +21,9 @@
                 "name": "traceId",
                 "type": "textbox",
                 "label": "Selected flow (click a row in the pipeline visualizer)",
-                "description": "Populated automatically when you click a Trace ID link in the table below - loads that flow's real waterfall into the panel underneath it. Can also be pasted directly.",
-                "current": { "text": "", "value": "" }
+                "description": "Populated automatically when you click a Trace ID link in the table below - loads that flow's real waterfall into the panel underneath it. Can also be pasted directly. Defaults to a real trace so the panel below is never blank on first load.",
+                "current": { "text": "a2d4ac5979f7d1030b7a27a136668782", "value": "a2d4ac5979f7d1030b7a27a136668782" },
+                "query": "a2d4ac5979f7d1030b7a27a136668782"
             }
         ]
     },
@@ -79,7 +80,7 @@
                             { "id": "displayName", "value": "Trace" },
                             { "id": "custom.width", "value": 160 },
                             { "id": "links", "value": [
-                                { "title": "Load waterfall below", "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}", "targetBlank": false },
+                                { "title": "Load waterfall below", "url": "?var-traceId=${__value.raw}", "targetBlank": false },
                                 { "title": "Open full detail (governance + logs)", "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}", "targetBlank": false }
                             ] }
                         ]
