@@ -117,8 +117,8 @@
                             { "id": "displayName", "value": "Trace ID" },
                             { "id": "custom.width", "value": 140 },
                             { "id": "links", "value": [
-                                { "title": "Load waterfall below", "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}&from=now-24h&to=now", "targetBlank": false },
-                                { "title": "Open full detail (governance + logs)", "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}&from=now-24h&to=now", "targetBlank": false }
+                                { "title": "Load waterfall below", "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}", "targetBlank": false },
+                                { "title": "Open full detail (governance + logs)", "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}", "targetBlank": false }
                             ] }
                         ]
                     }
