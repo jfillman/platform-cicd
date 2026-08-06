@@ -136,7 +136,32 @@
                 { "id": "organize", "options": { "renameByName": { "operationName": "Span", "duration": "Duration" } } }
             ],
             "options": { "orientation": "horizontal", "xTickLabelSpacing": 0, "showValue": "always", "legend": { "showLegend": false } },
-            "fieldConfig": { "defaults": { "unit": "ns", "custom": { "lineWidth": 0, "fillOpacity": 80 } } }
+            "fieldConfig": { "defaults": { "unit": "ns", "custom": { "lineWidth": 0, "fillOpacity": 80 } },
+                "overrides": [
+                    {
+                        "matcher": { "id": "byName", "options": "Span" },
+                        "properties": [
+                            { "id": "mappings", "value": [
+                                { "type": "value", "options": {
+                                    "stage:build": { "text": "▸ build" },
+                                    "stage:test": { "text": "▸ test" },
+                                    "stage:deploy": { "text": "▸ deploy" },
+                                    "stage:release": { "text": "▸ release" },
+                                    "sast-scan": { "text": "        ↳ sast-scan" },
+                                    "image-scan": { "text": "        ↳ image-scan" },
+                                    "generate-sbom": { "text": "        ↳ generate-sbom" },
+                                    "unit-test": { "text": "        ↳ unit-test" },
+                                    "build-source": { "text": "        ↳ build-source" },
+                                    "build-image": { "text": "        ↳ build-image" },
+                                    "governance:sast": { "text": "        ↳ governance:sast" },
+                                    "governance:image-scan": { "text": "        ↳ governance:image-scan" },
+                                    "governance:sbom": { "text": "        ↳ governance:sbom" },
+                                    "governance:policy-check": { "text": "        ↳ governance:policy-check" }
+                                } }
+                            ] }
+                        ]
+                    }
+                ] }
         },
         {
             "id": 21, "type": "traces", "title": "Selected flow waterfall - full detail (each bar is one span, width = real duration)",
