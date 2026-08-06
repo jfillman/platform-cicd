@@ -6,7 +6,7 @@
     "schemaVersion": 39,
     "editable": true,
     "time": { "from": "now-3h", "to": "now" },
-    "refresh": "10s",
+    "refresh": "30s",
     "templating": {
         "list": [
             {
@@ -67,27 +67,22 @@
         { "id": 104, "type": "row", "title": "Pipeline visualizer", "gridPos": { "x": 0, "y": 7, "w": 24, "h": 1 } },
         {
             "id": 20, "type": "table", "title": "Flow board - every build->test->deploy->release run, real time",
-            "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: this platform's flow-root span is only sent once, from deploy's finally block, as the LAST thing that happens in a healthy flow (see docs/tracing.md) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before deploy finished. Click the small expand arrow on any row to see each stage span Tempo has recorded so far, with its own real duration and status (ok/error) - Tempo's native nested-span view, not a custom build. Click a Trace ID link to load that flow's full waterfall in the panel below.",
+            "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: this platform's flow-root span is only sent once, from deploy's finally block, as the LAST thing that happens in a healthy flow (see docs/tracing.md) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before deploy finished. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below.",
             "gridPos": { "x": 0, "y": 8, "w": 24, "h": 11 },
             "datasource": { "type": "tempo", "uid": "tempo" },
             "targets": [ { "queryType": "traceql", "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" } | select(status)", "limit": 20 } ],
+            "transformations": [
+                { "id": "organize", "options": {
+                    "excludeByName": { "nested": true },
+                    "indexByName": { "traceName": 0, "traceService": 1, "startTime": 2, "traceDuration": 3, "traceID": 4 }
+                } }
+            ],
             "fieldConfig": {
                 "defaults": {},
                 "overrides": [
                     {
-                        "matcher": { "id": "byName", "options": "traceID" },
-                        "properties": [
-                            { "id": "displayName", "value": "Trace" },
-                            { "id": "custom.width", "value": 160 },
-                            { "id": "links", "value": [
-                                { "title": "Load waterfall below", "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}&from=now-24h&to=now", "targetBlank": false },
-                                { "title": "Open full detail (governance + logs)", "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}&from=now-24h&to=now", "targetBlank": false }
-                            ] }
-                        ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "startTime" },
-                        "properties": [ { "id": "displayName", "value": "Started" }, { "id": "custom.width", "value": 200 } ]
+                        "matcher": { "id": "byName", "options": "traceName" },
+                        "properties": [ { "id": "displayName", "value": "Tenant / App" }, { "id": "custom.width", "value": 300 } ]
                     },
                     {
                         "matcher": { "id": "byName", "options": "traceService" },
@@ -102,8 +97,8 @@
                         ]
                     },
                     {
-                        "matcher": { "id": "byName", "options": "traceName" },
-                        "properties": [ { "id": "displayName", "value": "Tenant / App" }, { "id": "custom.width", "value": 260 } ]
+                        "matcher": { "id": "byName", "options": "startTime" },
+                        "properties": [ { "id": "displayName", "value": "Started" }, { "id": "custom.width", "value": 200 } ]
                     },
                     {
                         "matcher": { "id": "byName", "options": "traceDuration" },
@@ -115,6 +110,17 @@
                             { "id": "max", "value": 300000 },
                             { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "blue" }, { "value": 120000, "color": "yellow" }, { "value": 240000, "color": "red" } ] } }
                         ]
+                    },
+                    {
+                        "matcher": { "id": "byName", "options": "traceID" },
+                        "properties": [
+                            { "id": "displayName", "value": "Trace ID" },
+                            { "id": "custom.width", "value": 140 },
+                            { "id": "links", "value": [
+                                { "title": "Load waterfall below", "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}&from=now-24h&to=now", "targetBlank": false },
+                                { "title": "Open full detail (governance + logs)", "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}&from=now-24h&to=now", "targetBlank": false }
+                            ] }
+                        ]
                     }
                 ]
             }
@@ -124,13 +130,20 @@
             "description": "The closest thing to a live 'progress bar' this platform's telemetry can honestly give: spans are only sent once a stage finishes (see docs/tracing.md - there is no true mid-stage percent-complete signal), so this waterfall shows real, completed stages as they land, not a simulated animation. Click a Trace ID above to load it here.",
             "gridPos": { "x": 0, "y": 19, "w": 24, "h": 11 },
             "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "query": "${traceId}", "queryType": "traceId" } ]
+            "targets": [ { "query": "{ trace:id = \"${traceId}\" }", "queryType": "traceql" } ]
         },
-        { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 } },
+        {
+            "id": 22, "type": "traces", "title": "DEBUG - hardcoded trace ID, no variable (delete once diagnosed)",
+            "description": "Diagnostic only: same trace ID as the panel above, but typed directly into the query with no $traceId variable involved at all. If THIS panel also shows no data, the bug is in the traces panel/Tempo query itself, not variable interpolation. If THIS one works and the panel above doesn't, it confirms the bug is specifically in how the variable's value reaches the query.",
+            "gridPos": { "x": 0, "y": 30, "w": 24, "h": 11 },
+            "datasource": { "type": "tempo", "uid": "tempo" },
+            "targets": [ { "query": "{ trace:id = \"a2d4ac5979f7d1030b7a27a136668782\" }", "queryType": "traceql" } ]
+        },
+        { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 41, "w": 24, "h": 1 } },
         {
             "id": 5, "type": "bargauge", "title": "Runs per tenant (15m)",
             "description": "Every onboarded tenant as one bar - built to stay readable whether there are 3 tenants or 300. Sorted by volume.",
-            "gridPos": { "x": 0, "y": 31, "w": 12, "h": 9 },
+            "gridPos": { "x": 0, "y": 42, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
@@ -140,42 +153,42 @@
         {
             "id": 6, "type": "bargauge", "title": "Slowest tasks right now (p95, 1h)",
             "description": "Every catalog Task's p95 duration over the last hour, across all tenants and pipelines - the bottleneck leaderboard.",
-            "gridPos": { "x": 12, "y": 31, "w": 12, "h": 9 },
+            "gridPos": { "x": 12, "y": 42, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "s", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } },
             "targets": [ { "expr": "topk(10, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[1h]))))", "legendFormat": "{{task}}" } ]
         },
-        { "id": 102, "type": "row", "title": "Stage funnel, last 24h", "gridPos": { "x": 0, "y": 40, "w": 24, "h": 1 } },
+        { "id": 102, "type": "row", "title": "Stage funnel, last 24h", "gridPos": { "x": 0, "y": 51, "w": 24, "h": 1 } },
         {
             "id": 7, "type": "bargauge", "title": "Runs by stage (24h)",
             "description": "Volume through each stage of the fixed superset DAG plus the release-governance checks. A big drop between adjacent stages is worth investigating (either real attrition or a stalled chain - see the stalled-pipeline detector).",
-            "gridPos": { "x": 0, "y": 41, "w": 24, "h": 7 },
+            "gridPos": { "x": 0, "y": 52, "w": 24, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "lcd", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
             "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))", "legendFormat": "{{pipeline}}" } ]
         },
-        { "id": 103, "type": "row", "title": "Controller health", "gridPos": { "x": 0, "y": 48, "w": 24, "h": 1 } },
+        { "id": 103, "type": "row", "title": "Controller health", "gridPos": { "x": 0, "y": 59, "w": 24, "h": 1 } },
         {
             "id": 9, "type": "timeseries", "title": "Reconcile p99 latency by reconciler",
-            "gridPos": { "x": 0, "y": 49, "w": 8, "h": 7 },
+            "gridPos": { "x": 0, "y": 60, "w": 8, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "s" } },
             "targets": [ { "expr": "histogram_quantile(0.99, sum by (le, reconciler) (rate(tekton_pipelines_controller_reconcile_latency_bucket[5m])))", "legendFormat": "{{reconciler}}" } ]
         },
         {
             "id": 10, "type": "timeseries", "title": "Workqueue depth over time",
-            "gridPos": { "x": 8, "y": 49, "w": 8, "h": 7 },
+            "gridPos": { "x": 8, "y": 60, "w": 8, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short" } },
             "targets": [ { "expr": "sum by (name) (tekton_pipelines_controller_workqueue_depth)", "legendFormat": "{{name}}" } ]
         },
         {
             "id": 11, "type": "timeseries", "title": "Running PipelineRuns / TaskRuns over time",
-            "gridPos": { "x": 16, "y": 49, "w": 8, "h": 7 },
+            "gridPos": { "x": 16, "y": 60, "w": 8, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short" } },
             "targets": [

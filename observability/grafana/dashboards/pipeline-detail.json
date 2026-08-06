@@ -24,7 +24,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
       "datasource": { "type": "tempo", "uid": "tempo" },
       "targets": [
-        { "query": "${traceId}", "queryType": "traceId" }
+        { "query": "{ trace:id = \"${traceId}\" }", "queryType": "traceql" }
       ]
     },
     {
