@@ -124,7 +124,7 @@
             "description": "The closest thing to a live 'progress bar' this platform's telemetry can honestly give: spans are only sent once a stage finishes (see docs/tracing.md - there is no true mid-stage percent-complete signal), so this waterfall shows real, completed stages as they land, not a simulated animation. Click a Trace ID above to load it here.",
             "gridPos": { "x": 0, "y": 19, "w": 24, "h": 11 },
             "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "query": "$traceId", "queryType": "traceId" } ]
+            "targets": [ { "query": "${traceId}", "queryType": "traceId" } ]
         },
         { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 } },
         {
