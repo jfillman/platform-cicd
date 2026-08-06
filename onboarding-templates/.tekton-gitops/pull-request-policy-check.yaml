@@ -4,13 +4,14 @@
 # real (Phase 3 item 2) policy-check gate - repointed from the shared governance-check
 # stub Pipeline to the dedicated policy-check Pipeline
 # (platform-cicd's catalog/pipelines/policy-check.yaml), which verifies the app-repo
-# commit's gitsign signature against this tenant's allowed-signers list. See
+# commit's gitsign signature against this Application's allowed-signers list. See
 # platform-cicd's docs/commit-signing.md.
 #
 # repo-url/revision are PaC's own {{ repo_url }}/{{ revision }} template variables for
 # THIS gitops repo's PR - already a proven, real pattern in this platform (used the same
-# way in nodejs-demo-app's own .tekton/*.yaml files). tenant/app-name are static, plain
-# values for this one app - generated once at onboarding (substitute <TENANT>/<APP_NAME>
+# way in nodejs-demo-app's own .tekton/*.yaml files). app-namespace/app-name are static,
+# plain values for this one app - generated once at onboarding (substitute
+# <APP_NAMESPACE>/<APP_NAME>
 # below), not something a developer hand-edits.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
@@ -30,7 +31,7 @@ spec:
   params:
     - { name: repo-url, value: "{{ repo_url }}" }
     - { name: revision, value: "{{ revision }}" }
-    - { name: tenant, value: "<TENANT>" }
+    - { name: app-namespace, value: "<APP_NAMESPACE>" }
     - { name: app-name, value: "<APP_NAME>" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner

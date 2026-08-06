@@ -10,7 +10,7 @@ downstream to notice a PR sat unbuilt) - this closes that gap with an automated 
 
 The architecture plan originally bundled this with "CDEvents idempotency/dedup." Live
 code inspection found the dedup half was already built during Phase 1:
-`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)` names every triggered
+`charts/platform-cicd-app/templates/triggers/*.yaml` names every triggered
 PipelineRun deterministically (`test-$(body.context.id)`, etc.), and that `id` is itself
 `sha256(emitting-PipelineRun-name:event-type)[:20]`, computed in
 `catalog/lib/cdevents.sh`'s `cdevent_send()`. At-least-once redelivery of the same
@@ -49,7 +49,7 @@ it - flagged explicitly in both files' comments.
 ## Scan scope, threshold, and dedup
 
 Scans **cluster-wide** (`pipelineruns.tekton.dev` across every namespace) rather than
-discovering tenant namespaces via a label, because no such label convention exists
+discovering Application namespaces via a label, because no such label convention exists
 anywhere in this platform yet - the broker's own `EventListener` already takes the same
 `namespaceSelector: {matchNames: ["*"]}` approach (`eventlistener.yaml`), relying on
 RBAC/Trigger-CR scoping rather than a namespace allowlist. This follows that precedent.
@@ -62,31 +62,31 @@ Once alerted, the detector labels the *stalled* (predecessor) PipelineRun
 `platform.io/stall-alerted: "true"` and skips already-labeled runs on future scans -
 state lives on the object itself, no new datastore.
 
-## Alerting - deliberately not the per-tenant Slack webhook
+## Alerting - deliberately not the per-app Slack webhook
 
-`notify-slack.yaml` reads each tenant's own `slack-webhook-url` Secret, mounted into that
-tenant's own pipeline pods. Reusing it here would mean granting this cluster-scoped
-detector `get` on Secrets across *every* tenant namespace just to fetch webhook URLs - a
+`notify-slack.yaml` reads each Application's own `slack-webhook-url` Secret, mounted into that
+Application's own pipeline pods. Reusing it here would mean granting this cluster-scoped
+detector `get` on Secrets across *every* Application's namespace just to fetch webhook URLs - a
 real, avoidable widening of blast radius this platform has been careful about everywhere
-else (TokenReview-scoped brokering, per-tenant impersonation, read-only Dashboard RBAC),
+else (TokenReview-scoped brokering, per-app impersonation, read-only Dashboard RBAC),
 for a payoff that isn't worth that cost.
 
 Instead, a genuine stall produces:
 1. A plain Kubernetes `Event` (core `v1`, `involvedObject` pointing at the stalled
    PipelineRun) - visible directly via `kubectl describe pipelinerun <name>` and
-   `kubectl get events -n <tenant>`.
+   `kubectl get events -n <app-namespace>`.
 2. A structured `STALL DETECTED` log line to stdout, which the platform's existing Loki
    collection already ingests - e.g. `{namespace="platform-system", pod=~"stalled-
-   pipeline-detector.*"} |= "STALL DETECTED"` surfaces every stall across every tenant in
+   pipeline-detector.*"} |= "STALL DETECTED"` surfaces every stall across every Application in
    one Grafana Explore query, with no new wiring.
 
-Piping this into a tenant's Slack channel is a small, clearly separable follow-up (e.g. a
+Piping this into an Application's Slack channel is a small, clearly separable follow-up (e.g. a
 Grafana Loki alert rule) - not built now, since it would reopen the Secrets-RBAC question
 above for a feature nobody's asked for yet.
 
 ## RBAC
 
-Cluster-scoped by necessity (PipelineRuns live in every tenant namespace, same
+Cluster-scoped by necessity (PipelineRuns live in every Application's namespace, same
 unavoidable exception as the TTL sweep's namespace access), narrow by verb: `get`/`list`/
 `patch` on `pipelineruns.tekton.dev` (patch only for the dedup label), `create` on
 `events`. Nothing else - no Secrets, no other resource types, no write access to a
@@ -95,7 +95,7 @@ PipelineRun's actual spec/status.
 ## Verification
 
 - Live-tested by temporarily appending `&& false` to the `on-build-success` Trigger's CEL
-  filter in a tenant namespace (not by scaling the shared `EventListener` to zero -
+  filter in an Application namespace (not by scaling the shared `EventListener` to zero -
   that would make `send-cdevent`'s own `curl` fail, which by Tekton's default
   `finally`-task semantics flips the *whole* PipelineRun to `Failed`, which this detector
   correctly excludes as an already-visible condition, not a silent stall - so that

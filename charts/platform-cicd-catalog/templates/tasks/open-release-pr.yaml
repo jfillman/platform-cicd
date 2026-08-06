@@ -1,6 +1,6 @@
 # catalog/tasks/open-release-pr.yaml
 #
-# Opens a PR against the tenant's GitOps repo, promoting the already-built (never
+# Opens a PR against the Application's GitOps repo, promoting the already-built (never
 # rebuilt) image to staging - the actual GitOps-repo->cluster deploy happens later,
 # driven entirely by ArgoCD once the PR merges (see platform/argocd/ manifests). This
 # Task never touches the cluster directly.
@@ -16,8 +16,8 @@
 #
 # GitOps repo is resolved by convention - gitops-<app-name>, same GitHub org as the
 # app's own git-url - rather than a new cicd.yaml field, deliberately not assuming
-# tenant-namespace == org (see tenant-triggers-template.yaml's git-url comment for why
-# that assumption already broke once in this platform).
+# app-namespace == org (see charts/platform-cicd-app/templates/triggers/fire-test.yaml's
+# git-url comment for why that assumption already broke once in this platform).
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:

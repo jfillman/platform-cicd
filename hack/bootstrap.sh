@@ -84,8 +84,9 @@ kubectl apply -f observability/kind-observe/tekton-servicemonitor.yaml
 # is that developers configure pipelines via cicd.yaml and never hand-author or manually
 # trigger Tekton resources - a write-enabled dashboard would be a standing bypass around
 # that, and would grant its own ServiceAccount create/delete on PipelineRuns/TaskRuns
-# across every tenant namespace, which cuts against the "no elevated identity anywhere"
-# posture the rest of this platform holds to (see tenant-triggers-template.yaml's
+# across every Application's namespace, which cuts against the "no elevated identity
+# anywhere" posture the rest of this platform holds to (see
+# charts/platform-cicd-app/templates/identity/pipeline-runner.yaml's
 # impersonation-scoping comment). Confirmed by inspecting the manifest directly (not
 # assumed from the filename): its RBAC only binds to Tekton's own *-aggregate-view
 # ClusterRoles (read on pipelines/pipelineruns/tasks/taskruns/triggers resources) plus
@@ -119,7 +120,7 @@ echo "        running on kind-observe. See docs/bootstrap.md for what got reused
 echo "        The shared OTel Collector there was patched (additively) with a spanmetrics"
 echo "        connector - see observability/kind-observe/otel-collector-values-patch.yaml."
 
-log "3/6 - platform catalog (Tasks/Pipelines/StepActions, read-only for tenants)"
+log "3/6 - platform catalog (Tasks/Pipelines/StepActions, read-only for Applications)"
 # Phase 3 item 7: was bare `kubectl apply -n platform-catalog -f catalog/...` - now a
 # real Helm release, giving this the same version/rollback story as everything else this
 # platform owns (see docs/catalog-versioning.md). Chart version bumps happen in

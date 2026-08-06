@@ -178,12 +178,12 @@ spec:
         elif [[ "$(jq -r '.notifications.slack.enabled // false' <<< "${CFG}")" != "true" ]]; then
           echo "slack notifications disabled in cicd.yaml, skipping"
         elif [[ "$(jq -r 'if .notifications.slack.scanResults == false then "false" else "true" end' <<< "${CFG}")" != "true" ]]; then
-          echo "notifications.slack.scanResults is false in cicd.yaml - shift-left scan notifications disabled for this tenant (general per-stage notifications are unaffected), skipping"
+          echo "notifications.slack.scanResults is false in cicd.yaml - shift-left scan notifications disabled for this Application (general per-stage notifications are unaffected), skipping"
         else
           CHANNEL="$(jq -r '.notifications.slack.channel // empty' <<< "${CFG}")"
           WEBHOOK_URL="$(cat /var/run/secrets/platform/slack-webhook-url 2>/dev/null || true)"
           if [[ -z "${WEBHOOK_URL}" ]]; then
-            echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this tenant - skipping, not failing the pipeline" >&2
+            echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this Application - skipping, not failing the pipeline" >&2
           else
             FINDINGS="$(cat /tekton/results/findings-summary 2>/dev/null || echo "")"
 

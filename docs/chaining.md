@@ -19,10 +19,10 @@ the top-level [README.md](../README.md) architecture summary.
 ## The shared broker
 
 One Tekton Triggers `EventListener` (`charts/platform-cicd-control-plane/templates/broker/eventlistener.yaml`,
-2-3 replicas, stateless), shared across every tenant - **not** one EventListener per
-tenant. An earlier draft of this design had per-tenant EventListener pods; design review
-rejected that as an unnecessary ongoing operational tax (patch/cert/config drift
-multiplied by tenant count) that bought no real isolation the shared-broker-plus-RBAC
+2-3 replicas, stateless), shared across every Application - **not** one EventListener per
+Application. An earlier draft of this design had per-app EventListener pods; design
+review rejected that as an unnecessary ongoing operational tax (patch/cert/config drift
+multiplied by app count) that bought no real isolation the shared-broker-plus-RBAC
 approach doesn't already provide.
 
 **Authentication**: each pipeline pod's own cluster-issued, audience-bound projected
@@ -34,11 +34,11 @@ API. There is no platform-minted credential anywhere in this path - this is what
 replaces the old platform's JWT-minting server, its rotation CronJob, and the GitHub-
 secret-publishing step entirely.
 
-**Tenant isolation**: the interceptor sets `extensions.tenant_namespace` to the calling
+**App isolation**: the interceptor sets `extensions.app_namespace` to the calling
 SA's own namespace (verified by Kubernetes itself, not asserted by the caller). Every
-tenant's own `Trigger` CEL filter checks that against the CDEvent's declared
+Application's own `Trigger` CEL filter checks that against the CDEvent's declared
 `context.source` namespace before matching - this, not NetworkPolicy, is the real trust
-boundary on a broker every tenant's traffic passes through. NetworkPolicy
+boundary on a broker every Application's traffic passes through. NetworkPolicy
 (default-deny + allow-from-same-namespace) is defense-in-depth on top of it, not a
 substitute for it - and only works at all if the cluster's CNI actually enforces
 NetworkPolicy (see [bootstrap.md](bootstrap.md) on why Calico is a hard prerequisite,
@@ -46,51 +46,59 @@ not a nice-to-have, in `hack/kind-config.yaml`).
 
 **PipelineRun creation identity**: when a `Trigger` fires, Tekton Triggers creates the
 resulting `PipelineRun` using *that Trigger's own* `spec.serviceAccountName` - each
-tenant's own least-privilege, namespace-scoped `pipeline-runner` SA (see
-`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`), never the broker's own
+Application's own least-privilege, namespace-scoped `pipeline-runner` SA (see
+`charts/platform-cicd-app/templates/triggers/` (+ `templates/identity/pipeline-runner.yaml`)), never the broker's own
 identity. The broker's ServiceAccount holds no rights to create PipelineRuns anywhere;
 it can only watch `Trigger`/`TriggerBinding`/`TriggerTemplate` objects cluster-wide.
 
-The hand-off from "broker validated the caller" to "tenant's own SA creates the
-PipelineRun" is implemented via **scoped Kubernetes impersonation**: each tenant's
-onboarding grants the broker's SA `impersonate` on exactly that tenant's one named
+The hand-off from "broker validated the caller" to "the Application's own SA creates the
+PipelineRun" is implemented via **scoped Kubernetes impersonation**: each Application's
+onboarding grants the broker's SA `impersonate` on exactly that Application's one named
 `pipeline-runner` SA, in that one namespace only (a namespaced `Role`+`RoleBinding`
-living in the tenant's own namespace - see the "Scoped impersonation grant" block in
-`tenant-triggers-template.yaml`). Compare this to the old platform's single cluster-wide
-`impersonate` on *every* ServiceAccount plus an unrelated `cluster-admin`
-`ClusterRoleBinding` bound to the same identity: this is the same underlying Kubernetes
-mechanism, narrowed to one explicit, auditable, individually-revocable grant per tenant,
-with no cluster-admin anywhere in the picture.
+living in the Application's own namespace - see the "Scoped impersonation grant" block in
+`charts/platform-cicd-app/templates/identity/pipeline-runner.yaml`). Compare this to the
+old platform's single cluster-wide `impersonate` on *every* ServiceAccount plus an
+unrelated `cluster-admin` `ClusterRoleBinding` bound to the same identity: this is the
+same underlying Kubernetes mechanism, narrowed to one explicit, auditable,
+individually-revocable grant per Application, with no cluster-admin anywhere in the
+picture.
 
 **Verify in Phase 0**: the exact mechanism Tekton Triggers uses to hand off to a
 Trigger's named ServiceAccount (impersonation vs. some other token-based approach) is
 documented above based on how Tekton Triggers has historically implemented
 `serviceAccountName`, but was not independently re-verified against a specific pinned
-release while writing this. Confirm it before treating `tenant-triggers-template.yaml`'s
-RBAC block as correct in a real cluster - if the mechanism differs, this file (and this
-doc) is the one place that needs to change, not any Task or Pipeline.
+release while writing this. Confirm it before treating
+`charts/platform-cicd-app/templates/identity/pipeline-runner.yaml`'s RBAC block as
+correct in a real cluster - if the mechanism differs, this file (and this doc) is the
+one place that needs to change, not any Task or Pipeline.
 
-## Why a tenant is two namespaces, not one
+## Why an Application is (at least) two namespaces, not one
 
-`<TENANT>` (e.g. `platform-cicd-demo`) and `<TENANT>-<ENV>` (e.g.
-`platform-cicd-demo-dev`) are deliberately separate namespaces with different jobs:
+Every namespace an Application gets follows the same flat `<type>-<app-name>-<env>`
+pattern (see docs/concepts.md) - `<type>-<app-name>-cicd` (e.g. `app-platform-cicd-demo-
+cicd`) and `<type>-<app-name>-<env>` (e.g. `app-platform-cicd-demo-dev`) are deliberately
+separate, PEER namespaces with different jobs, not a base-plus-suffix pair:
 
-- `<TENANT>` is the tenant's *CI control plane* - where `pipeline-runner` and its RBAC
-  live, where PaC actually creates build/test PipelineRuns (that's where the
-  `Repository` CR and the chaining `Trigger` CRs from `tenant-triggers-template.yaml`
-  live), where kaniko's registry push credentials sit. Pipelines *execute* here.
-- `<TENANT>-<ENV>` is where the *deployed application* actually runs - the long-lived
-  `Deployment`/`Service` serving traffic. `deploy-manifests.yaml` derives this name as
-  `<tenant>-<env>` specifically so each environment (`dev`, and later `staging`/`prod`
+- `<type>-<app-name>-cicd` is the Application's *CI control plane* - where
+  `pipeline-runner` and its RBAC live, where PaC actually creates build/test
+  PipelineRuns (that's where the `Repository` CR and the chaining `Trigger` CRs from
+  `charts/platform-cicd-app/templates/triggers/*.yaml` live), where kaniko's registry
+  push credentials sit. Pipelines *execute* here.
+- `<type>-<app-name>-<env>` is where the *deployed application* actually runs - the
+  long-lived `Deployment`/`Service` serving traffic. `deploy-manifests.yaml` derives
+  this name directly from `app-type`/`app-name`/`env` params (never by suffixing the
+  cicd namespace) specifically so each environment (`dev`, and later `staging`/`prod`
   per `cicd.yaml`'s `deploy.upperEnvironments`) gets its own isolated namespace, rather
   than every environment's Deployment colliding in one namespace.
 
 The split matters for RBAC, not just tidiness: `pipeline-runner`'s Role in
-`tenant-triggers-template.yaml` only grants rights inside `<TENANT>` - a namespace-
-scoped `Role` never extends into a different namespace. Deploying into `<TENANT>-<ENV>`
-needs its own, separate grant - see `tenant-env-rbac-template.yaml`, applied once per
-environment (a real gap caught the same way most of this doc's caveats were: by
-reasoning through what actually calls what, not by running it and hoping).
+`charts/platform-cicd-app/templates/identity/pipeline-runner.yaml` only grants rights
+inside the Application's own `<type>-<app-name>-cicd` namespace - a namespace-scoped
+`Role` never extends into a different namespace. Deploying into `<type>-<app-name>-<env>`
+needs its own, separate grant - see
+`charts/platform-cicd-app/templates/env/deploy-rbac.yaml`, applied once per environment
+(a real gap caught the same way most of this doc's caveats were: by reasoning through
+what actually calls what, not by running it and hoping).
 
 ## What flows through the broker (Phase 1)
 
@@ -132,7 +140,7 @@ already used), each with three predicates - `queued`, `started`, `finished`.
   outside), which is separable infrastructure, not a natural extension of the existing
   `send-cdevent` pattern every other event here uses.
 - **No changes to the existing domain events or the broker's chaining Triggers.** Every
-  Trigger's CEL filter (`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`) checks
+  Trigger's CEL filter (`charts/platform-cicd-app/templates/triggers/*.yaml`) checks
   an exact `body.context.type` string - a new type the filter doesn't check for simply
   never matches, so this is safely additive to the real chaining mechanism.
 

@@ -6,7 +6,7 @@
 # and generates+attests a real SBOM for it - see catalog/tasks/generate-sbom.yaml's own
 # header.
 #
-# No <TENANT>/<APP_NAME> substitution and no workspace needed - same as
+# No <APP_NAMESPACE>/<APP_NAME> substitution and no workspace needed - same as
 # pull-request-image-scan.yaml, which this mirrors exactly (both resolve the promoted
 # image the same way, then do something different with it).
 apiVersion: tekton.dev/v1

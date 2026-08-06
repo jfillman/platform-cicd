@@ -36,7 +36,7 @@ Same labels, same order, everywhere a message has room for them:
 | Field | Content | Notes |
 |---|---|---|
 | App | app name | |
-| Tenant | tenant namespace | omitted where the audience is external (e.g. the PR body - a GitHub reviewer doesn't care about internal tenant naming) |
+| App Namespace | app namespace | omitted where the audience is external (e.g. the PR body - a GitHub reviewer doesn't care about internal namespace naming) |
 | Repo | linked `owner/repo` | derived from `git-url` the same way `open-release-pr.yaml` already derives its owner segment - not reimplemented differently |
 | Commit | linked 12-char SHA | 12 chars matches this platform's existing truncation convention from `charts/platform-cicd-catalog/templates/tasks/build-image.yaml`, not a new one |
 | Image | code-formatted image ref | |
@@ -69,7 +69,7 @@ consistent signature, not a decoration.
 ## Why this isn't hardcoded per-message
 
 Every value in every field above was already flowing through the pipeline as an existing
-param or task result (`git-url`/`git-revision`/`app-name`/`tenant`/`image-ref` are
+param or task result (`git-url`/`git-revision`/`app-name`/`app-namespace`/`image-ref` are
 already Pipeline params on every stage; `open-release-pr`'s `pr-url` result already
 existed) - implementing this was entirely about threading already-available data into
 `notify-slack.yaml`'s params, not inventing new upstream plumbing.

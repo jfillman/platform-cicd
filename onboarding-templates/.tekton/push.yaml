@@ -7,9 +7,9 @@
 # `build` Pipeline" - the Pipeline itself is resolved from the shared catalog via
 # Tekton's cluster resolver, never duplicated per repo.
 #
-# <TENANT>, <APP_NAME> and <IMAGE_REPO> below are filled in by the onboarding process
+# <APP_NAMESPACE>, <APP_NAME> and <IMAGE_REPO> below are filled in by the onboarding process
 # (hand-substituted for Phase 1 pilots; a small script/Crossplane composition in later
-# phases - see docs/onboarding.md) from the tenant's Application registration. If the
+# phases - see docs/onboarding.md) from the Application's own registration. If the
 # platform catalog changes what params the `build` Pipeline requires, this template -
 # and every already-onboarded repo's copy of it - needs a re-sync; see
 # docs/cicd-yaml-reference.md "staleness" note.
@@ -32,7 +32,7 @@ spec:
     - { name: git-url, value: "{{ repo_url }}" }
     - { name: git-revision, value: "{{ revision }}" }
     - { name: image-repo, value: "<IMAGE_REPO>" }
-    - { name: tenant, value: "<TENANT>" }
+    - { name: app-namespace, value: "<APP_NAMESPACE>" }
     - { name: app-name, value: "<APP_NAME>" }
   workspaces:
     - name: source

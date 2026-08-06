@@ -28,7 +28,7 @@ spec:
     - { name: git-url, value: "{{ repo_url }}" }
     - { name: git-revision, value: "{{ revision }}" }
     - { name: image-repo, value: "<IMAGE_REPO>-pr" }
-    - { name: tenant, value: "<TENANT>" }
+    - { name: app-namespace, value: "<APP_NAMESPACE>" }
     - { name: app-name, value: "<APP_NAME>" }
   workspaces:
     - name: source

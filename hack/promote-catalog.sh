@@ -14,9 +14,9 @@
 #   hack/promote-catalog.sh canary   - install/upgrade the canary release only
 #   hack/promote-catalog.sh promote  - install/upgrade the real production release
 #
-# Canary testing itself (pointing one dedicated tenant's platformIdentity.catalogNamespace
+# Canary testing itself (pointing one dedicated Application's platformIdentity.catalogNamespace
 # at platform-catalog-canary and running a real build->test->deploy) is a manual step -
-# this script only handles the two Helm operations, not picking/running a canary tenant.
+# this script only handles the two Helm operations, not picking/running a canary Application.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -38,7 +38,7 @@ case "$1" in
     kubectl create namespace platform-catalog-canary --dry-run=client -o yaml | kubectl apply -f -
     helm upgrade --install platform-cicd-catalog-canary "${CHART}" \
       --namespace platform-catalog-canary --wait
-    echo "==> Done. Point one dedicated canary tenant's platformIdentity.catalogNamespace"
+    echo "==> Done. Point one dedicated canary Application's platformIdentity.catalogNamespace"
     echo "    at platform-catalog-canary and run a real build->test->deploy before promoting."
     ;;
   promote)
@@ -47,7 +47,7 @@ case "$1" in
     echo "==> Installing/upgrading production release into platform-catalog"
     helm upgrade --install platform-cicd-catalog "${CHART}" \
       --namespace platform-catalog --wait
-    echo "==> Done. Every tenant pointed at platform-catalog (the default) now sees this"
+    echo "==> Done. Every Application pointed at platform-catalog (the default) now sees this"
     echo "    version. Roll back with: helm rollback platform-cicd-catalog -n platform-catalog"
     ;;
   *)

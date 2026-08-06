@@ -6,9 +6,9 @@
 # (cluster-scoped by necessity - that API has no namespaced form), and - since this
 # service also mints scoped GitHub App installation tokens for the release stage, see
 # docs/release.md - list/get PaC Repository CRs cluster-wide (read-only, used only to
-# check a caller's own tenant namespace actually owns the gitops repo it's asking a
-# token for). It cannot read/write PipelineRuns, Secrets, or anything else in any tenant
-# namespace, and cannot write Repository CRs either.
+# check a caller's own Application namespace actually owns the gitops repo it's asking a
+# token for). It cannot read/write PipelineRuns, Secrets, or anything else in any
+# Application's namespace, and cannot write Repository CRs either.
 #
 # github-app-creds (github-application-id/github-private-key) is a COPY of the same two
 # fields already in pipelines-as-code-secret (pipelines-as-code namespace) - Kubernetes

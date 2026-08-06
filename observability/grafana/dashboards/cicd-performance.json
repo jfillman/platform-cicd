@@ -1,7 +1,7 @@
 {
     "title": "CI/CD Variant 3 - Performance & Bottlenecks",
     "uid": "platform-cicd-performance",
-    "description": "Where does pipeline time actually go? Per-stage percentile durations, a task-level bottleneck leaderboard, duration trends, and a per-tenant/task drill-down table. Useful for judging the payoff of 8.1's build-source/unit-test parallelization and 8.3's dependency caching.",
+    "description": "Where does pipeline time actually go? Per-stage percentile durations, a task-level bottleneck leaderboard, duration trends, and a per-app/task drill-down table. Useful for judging the payoff of 8.1's build-source/unit-test parallelization and 8.3's dependency caching.",
     "tags": ["platform-cicd", "cicd-variant"],
     "schemaVersion": 39,
     "editable": true,
@@ -10,7 +10,7 @@
     "templating": {
         "list": [
             {
-                "name": "tenant",
+                "name": "app_namespace",
                 "type": "query",
                 "datasource": { "type": "prometheus", "uid": "prometheus" },
                 "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
@@ -28,8 +28,8 @@
             "fieldConfig": { "defaults": { "unit": "s" },
                 "overrides": [ { "matcher": { "id": "byRegexp", "options": "p95.*" }, "properties": [ { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } } ] } ] },
             "targets": [
-                { "expr": "histogram_quantile(0.5, sum by (le, pipeline) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[30m])))", "legendFormat": "p50 {{pipeline}}" },
-                { "expr": "histogram_quantile(0.95, sum by (le, pipeline) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[30m])))", "legendFormat": "p95 {{pipeline}}" }
+                { "expr": "histogram_quantile(0.5, sum by (le, pipeline) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[30m])))", "legendFormat": "p50 {{pipeline}}" },
+                { "expr": "histogram_quantile(0.95, sum by (le, pipeline) (rate(tekton_pipelines_controller_pipelinerun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[30m])))", "legendFormat": "p95 {{pipeline}}" }
             ]
         },
         { "id": 101, "type": "row", "title": "Task-level bottlenecks", "gridPos": { "x": 0, "y": 10, "w": 24, "h": 1 } },
@@ -41,7 +41,7 @@
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "s", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } },
-            "targets": [ { "expr": "topk(12, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[24h]))))", "legendFormat": "{{task}}" } ]
+            "targets": [ { "expr": "topk(12, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[24h]))))", "legendFormat": "{{task}}" } ]
         },
         {
             "id": 3, "type": "bargauge", "title": "Fastest tasks (p50, 24h)",
@@ -51,7 +51,7 @@
             "options": { "displayMode": "lcd", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "s", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "green" } ] } } },
-            "targets": [ { "expr": "bottomk(12, histogram_quantile(0.5, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[24h]))))", "legendFormat": "{{task}}" } ]
+            "targets": [ { "expr": "bottomk(12, histogram_quantile(0.5, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[24h]))))", "legendFormat": "{{task}}" } ]
         },
         { "id": 102, "type": "row", "title": "Trend and drill-down", "gridPos": { "x": 0, "y": 21, "w": 24, "h": 1 } },
         {
@@ -61,18 +61,18 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "s" } },
             "targets": [
-                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\",task=\"build-source\"}[1h])))", "legendFormat": "build-source p50" },
-                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\",task=\"unit-test\"}[1h])))", "legendFormat": "unit-test p50" },
-                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\",task=\"build-image\"}[1h])))", "legendFormat": "build-image p50" }
+                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\",task=\"build-source\"}[1h])))", "legendFormat": "build-source p50" },
+                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\",task=\"unit-test\"}[1h])))", "legendFormat": "unit-test p50" },
+                { "expr": "histogram_quantile(0.5, sum by (le) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\",task=\"build-image\"}[1h])))", "legendFormat": "build-image p50" }
             ]
         },
         {
-            "id": 5, "type": "table", "title": "Task duration by tenant (p95, 24h)",
-            "description": "Gradient-gauge cells turn the table into a scannable heat-map as tenant/task combinations multiply.",
+            "id": 5, "type": "table", "title": "Task duration by app (p95, 24h)",
+            "description": "Gradient-gauge cells turn the table into a scannable heat-map as app/task combinations multiply.",
             "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "targets": [ { "expr": "histogram_quantile(0.95, sum by (le, exported_namespace, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[24h])))", "format": "table", "instant": true } ],
-            "transformations": [ { "id": "organize", "options": { "renameByName": { "exported_namespace": "Tenant", "task": "Task", "Value": "p95 duration" } } } ],
+            "targets": [ { "expr": "histogram_quantile(0.95, sum by (le, exported_namespace, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[24h])))", "format": "table", "instant": true } ],
+            "transformations": [ { "id": "organize", "options": { "renameByName": { "exported_namespace": "App Namespace", "task": "Task", "Value": "p95 duration" } } } ],
             "fieldConfig": { "defaults": { "unit": "s", "min": 0, "max": 120,
                 "custom": { "cellOptions": { "type": "gauge", "mode": "gradient" } },
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } }

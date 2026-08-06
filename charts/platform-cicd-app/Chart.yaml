@@ -1,0 +1,15 @@
+apiVersion: v2
+name: platform-cicd-app
+description: >-
+  Installs/configures a new CI/CD execution environment for one Application - one Helm
+  release per Application. cicd.yaml (schemas/cicd.schema.json, unmodified) is passed
+  directly as a values file; every resource here conditionally renders off cicd.yaml's
+  actual declared pipeline: stages, governance toggles, and ephemeralEnvironments
+  settings - the direct fix for a live-confirmed gap where a release PipelineRun could
+  fire for an Application whose cicd.yaml never declared a release stage, because
+  nothing previously read pipeline: at all. See docs/onboarding.md for the full install
+  command (cicd.yaml plus a small platform-controlled platform-identity.yaml, namespaced
+  under one dedicated key the app-facing schema structurally cannot contain).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

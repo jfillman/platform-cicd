@@ -4,7 +4,7 @@
 # by design (see Chart.yaml). The only real values knob is which RBAC group gets read
 # access, kept as a value rather than hardcoded so a canary install (see
 # docs/catalog-versioning.md) can, if ever needed, bind a narrower group than
-# system:serviceaccounts instead of the cluster-wide default every tenant already relies on.
+# system:serviceaccounts instead of the cluster-wide default every Application already relies on.
 
 rbac:
   readOnlyGroup: system:serviceaccounts

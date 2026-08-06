@@ -21,7 +21,7 @@
 # way. A real, standalone child span (otel_child_span) fixes both problems at once.
 #
 # flow-traceparent/stage-span-id are optional (default "") because this same StepAction
-# is now also called from PR-triggered governance checks on a tenant's GitOps repo (see
+# is now also called from PR-triggered governance checks on an Application's GitOps repo (see
 # docs/release.md) - those checks have no flow/stage context at all, since they're not
 # part of the CDEvents-chained PipelineRun sequence, just an independent, human-paced PR
 # review. Emitting a span there would mean inventing a fake parent trace, which is worse

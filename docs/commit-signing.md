@@ -3,7 +3,7 @@
 Developers sign commits with `gitsign` - keyless, short-lived identity-bound certs via
 an interactive OIDC login, logged to Sigstore's public transparency log (Rekor). The
 release stage's `policy-check` governance gate verifies that signature and checks the
-signer's email against a per-tenant allowlist - the first of this platform's governance
+signer's email against a per-app allowlist - the first of this platform's governance
 gates to do real work instead of being a structurally-loud stub (see
 `docs/governance-stubs.md`).
 
@@ -93,10 +93,10 @@ gitsign *talks to* during login, but it federates to an upstream IdP (GitHub her
 it's the upstream connector's own issuer URL that ends up in the cert's issuer claim -
 verifying against the broker URL fails against every real cert.
 
-## Per-tenant allowed signers
+## Per-app allowed signers
 
-`charts/platform-cicd-tenant/templates/governance/policy-config.yaml` - a `ConfigMap`
-(`<app-name>-policy-config`, in the tenant's own namespace) with an
+`charts/platform-cicd-app/templates/governance/policy-config.yaml` - a `ConfigMap`
+(`<app-name>-policy-config`, in the Application's own namespace) with an
 `allowed-commit-signers` key: one email per line, `#` comments and blank lines ignored.
 The verify Task builds the regex from this list at runtime, escaping both `.` and `+`
 (both are regex metacharacters that show up in real addresses - `+` matters in practice,
@@ -105,15 +105,15 @@ github.com`) - onboarding or updating the allowed list is just editing plain ema
 never hand-written regex.
 
 **Remember GitHub's privacy setting affects what to list here** (see step 3 above) - a
-tenant's allowlist may need the developer's noreply address, their real email, or both,
+Application's allowlist may need the developer's noreply address, their real email, or both,
 depending on that developer's own GitHub account settings.
 
 ## Verification
 
 - Sign a real test commit as an allowed email, push it through the real chain, confirm
   `policy-check` passes as a real (not stub) GitHub Check.
-- Sign a commit as an email **not** on the tenant's allowed list (or leave a commit
+- Sign a commit as an email **not** on the Application's allowed list (or leave a commit
   unsigned entirely), confirm `policy-check` genuinely fails, and that branch protection
   (already configured to require this check, `docs/release.md`) actually blocks the
   merge - not just that the Task reports failure in isolation.
-- `kubectl auth can-i get configmaps/<app-name>-policy-config --as=system:serviceaccount:<tenant>:pipeline-runner -n <tenant>` confirms the RBAC addition is exactly as scoped - nothing broader.
+- `kubectl auth can-i get configmaps/<app-name>-policy-config --as=system:serviceaccount:<app-namespace>:pipeline-runner -n <app-namespace>` confirms the RBAC addition is exactly as scoped - nothing broader.

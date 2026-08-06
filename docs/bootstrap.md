@@ -15,7 +15,7 @@ kubectl -n tekton-pipelines port-forward svc/tekton-dashboard 9097:9097
 Grafana is for the platform's own dashboards (DORA-ish stats, trace-based durations - see
 `observability/grafana/dashboards/`). The Tekton Dashboard (`localhost:9097` above) is
 the complementary, lower-level view: live/historical PipelineRuns and TaskRuns across
-every tenant namespace, with step-by-step logs - useful for debugging a specific run
+every Application's namespace, with step-by-step logs - useful for debugging a specific run
 without `kubectl get/describe/logs`-ing it by hand. Installed **read-only**
 (`release.yaml`, not `release-full.yaml`) deliberately - see the comment in
 `hack/bootstrap.sh`'s Tekton install step for why a write-enabled dashboard would cut
@@ -70,7 +70,7 @@ services) - recreating the CNI on a running cluster isn't a clean operation, and
 repo will not do it as a side effect of a bootstrap script. Functionally, the platform's
 actual security boundary holds regardless: as documented in
 [chaining.md](chaining.md), TokenReview authentication on the broker - not
-NetworkPolicy - is what actually prevents cross-tenant traffic; NetworkPolicy was always
+NetworkPolicy - is what actually prevents cross-app traffic; NetworkPolicy was always
 meant as defense-in-depth layered on top of it. What's genuinely lost here is that
 second layer, on this cluster only. Don't extend that assumption to a real/production
 target without re-adding a NetworkPolicy-enforcing CNI there.

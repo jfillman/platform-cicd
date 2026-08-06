@@ -3,7 +3,7 @@
 External Secrets Operator (ESO) is platform infrastructure, not just a bootstrap-time
 install alongside Tekton/PaC/kube-prometheus-stack. Every chart in this platform consumes
 secret material via a real `ExternalSecret`, not a hand-applied raw `Secret` - see
-`charts/platform-cicd-tenant/templates/identity/registry-credentials-external-secret.yaml`
+`charts/platform-cicd-app/templates/identity/registry-credentials-external-secret.yaml`
 for the concrete example.
 
 ## The bridge: ESO's own `kubernetes` provider
@@ -32,7 +32,7 @@ narrowly-RBAC'd namespace (`platform-secrets`) into wherever an `ExternalSecret`
 references this store. **The user still runs `kubectl create secret` themselves, exactly
 as before** - this changes nothing about who creates real credential material or how,
 only where it needs to live (one shared namespace instead of scattered `kubectl create
-secret` invocations per-tenant) and how every other chart consumes it (a real,
+secret` invocations per-app) and how every other chart consumes it (a real,
 declarative `ExternalSecret` instead of assuming a Secret already exists). No credential
 is ever pasted through chat, committed to this repo, or embedded in any chart.
 
@@ -44,12 +44,12 @@ kubectl create secret docker-registry registry-credentials -n platform-secrets \
   --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
 ```
 
-Every tenant's `registry-credentials` `ExternalSecret` (rendered by the tenant chart)
-syncs from this one source - since every tenant currently pushes to the same
-`ghcr.io/jfillman` registry, one shared credential is correct, not a limitation. A tenant
+Every Application's `registry-credentials` `ExternalSecret` (rendered by the app chart)
+syncs from this one source - since every Application currently pushes to the same
+`ghcr.io/jfillman` registry, one shared credential is correct, not a limitation. An Application
 needing a genuinely different registry credential would get its own key in
 `platform-secrets` and its own `ExternalSecret` referencing that key - not built now,
-since no tenant needs it yet.
+since no Application needs it yet.
 
 ## What this deliberately is not
 

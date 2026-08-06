@@ -14,9 +14,10 @@
 # A missing sast-scan entry in buildConfig.tasks means the task was skipped - Tekton
 # never creates a TaskRun for a when:-gated skip, and Chains' provenance only records
 # real TaskRuns, so this can only mean governance.sast was false for this build. Treated
-# as a pass, not a failure: cicd.yaml's own toggle is the tenant's explicit choice, and
-# this gate shouldn't silently override it by demanding evidence of something the tenant
-# never asked to run. A PRESENT task with any outcome other than "passed" fails closed.
+# as a pass, not a failure: cicd.yaml's own toggle is the Application's explicit choice,
+# and this gate shouldn't silently override it by demanding evidence of something the
+# Application never asked to run. A PRESENT task with any outcome other than "passed"
+# fails closed.
 #
 # cosign/trusted-root/digest-resolution mechanism duplicated from verify-image-
 # provenance.yaml rather than shared/refactored - same "a little duplication is safer
@@ -113,7 +114,7 @@ spec:
             echo "sast-scan passed at build time (verified via provenance attestation)."
             ;;
           not-configured)
-            echo "sast-scan was not present in this build's provenance - governance.sast was false for this build. Treated as a pass (tenant's own choice, not overridden here)."
+            echo "sast-scan was not present in this build's provenance - governance.sast was false for this build. Treated as a pass (Application's own choice, not overridden here)."
             ;;
           *)
             echo "FAIL: sast-scan's attested outcome was '${outcome}', not 'passed'." >&2

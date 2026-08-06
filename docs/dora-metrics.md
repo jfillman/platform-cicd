@@ -57,7 +57,7 @@ Git revision doesn't work either: `open-release-pr.yaml` only knows the SHA of t
 it pushed, not the merge-commit SHA GitHub assigns on merge.
 
 Instead: **the release Pipeline stamps tracking annotations directly onto its own
-tenant's Application object**, and the exporter reads those back off the same object it's
+Application's ArgoCD Application object**, and the exporter reads those back off the same object it's
 already watching - no separate correlation store, no guessing. `charts/platform-cicd-catalog/templates/tasks/mark-
 release-pending.yaml`, wired into `release.yaml` right after `open-release-pr` succeeds
 (`runAfter: [open-release-pr]` - only runs if the PR was actually opened, via standard
@@ -71,7 +71,7 @@ kubectl annotate application.argoproj.io "${app}" -n argocd \
   platform.io/dora-pending=true \
   platform.io/dora-flow-start-time="${FLOW_START_TIME}" \
   platform.io/dora-baseline-started-at="${baseline}" \
-  platform.io/dora-tenant="${TENANT}" \
+  platform.io/dora-app-namespace="${APP_NAMESPACE}" \
   platform.io/dora-app="${APP_NAME}" \
   --overwrite
 ```
@@ -102,15 +102,15 @@ terminal:
   `platform.io/dora-last-failure-time` to `status.operationState.finishedAt` (consumed by
   the *next* confirmed success, for MTTR).
 
-RBAC for `mark-release-pending` is `pipeline-runner` (the tenant's own SA) granted
+RBAC for `mark-release-pending` is `pipeline-runner` (the Application's own SA) granted
 `get`+`patch` on exactly its own `<app-name>-staging` Application, `resourceNames`-
-scoped, added to `charts/platform-cicd-tenant/templates/argocd/release-application.yaml` (the file that
-already sets up this tenant's release-stage ArgoCD RBAC) rather than a new template file.
+scoped, added to `charts/platform-cicd-app/templates/argocd/release-application.yaml` (the file that
+already sets up this Application's release-stage ArgoCD RBAC) rather than a new template file.
 That same file also adds `platform.io/dora-track: "true"` to the `Application` resource
 itself - a stable, explicit marker the exporter's informer filters on
 (`LabelSelector: "platform.io/dora-track=true"`), so it never processes unrelated
 Applications in the `argocd` namespace (e.g. the pre-existing `podinfo-demo-app`
-Application, which isn't part of this platform's tenant model at all).
+Application, which isn't part of this platform's Application model at all).
 
 Separately, and **not load-bearing for any of this**: `release.yaml` also now sends a
 `dev.cdevents.change.created.0.3.0` event (CDEvents' actual vocabulary for "a change/PR
@@ -123,7 +123,7 @@ never get conflated.
 ## How each of the 4 metrics is actually computed
 
 **1. Deployment Frequency** - "how often does this app successfully deploy." Every
-confirmed `Succeeded` outcome increments `dora_deployments_total{tenant, app}`, a plain
+confirmed `Succeeded` outcome increments `dora_deployments_total{app_namespace, app}`, a plain
 Counter. The exporter does no rate/frequency math itself - Grafana computes actual
 frequency via `increase(dora_deployments_total[...])` over whatever window a panel picks
 (the dashboard uses daily buckets over a 30-day window), which is the normal way a
@@ -136,14 +136,14 @@ through every CDEvent's `customData.platform.flow_start_time` since -
 `mark-release-pending` just copies a value that already exists all the way from
 `release.yaml`'s own `$(params.flow-start-time)`, no new plumbing needed to compute it.
 The end anchor is `status.operationState.finishedAt` at the moment of confirmed
-`Succeeded`. Sampled into `dora_lead_time_seconds{tenant, app}`, a **Histogram** (not a
+`Succeeded`. Sampled into `dora_lead_time_seconds{app_namespace, app}`, a **Histogram** (not a
 gauge or summary) with bucket boundaries deliberately aligned to DORA's own published
 elite/high/medium/low bands, so `histogram_quantile()` in Grafana directly shows which
 band most changes fall into: `3600` (1h), `86400` (1d), `604800` (1w), `2592000` (1mo).
 
 **3. Change Failure Rate** - "what fraction of releases require remediation." Every
 confirmed terminal outcome (both branches above) increments
-`dora_releases_total{tenant, app, outcome="succeeded"|"failed"}` - one counter with an
+`dora_releases_total{app_namespace, app, outcome="succeeded"|"failed"}` - one counter with an
 `outcome` label, rather than two separately-named counters that would need summing
 anyway. Grafana computes the percentage:
 `sum(increase(dora_releases_total{outcome="failed"}[...])) /
@@ -162,7 +162,7 @@ run. What it *can* see: the gap between a confirmed `Failed` release for an app 
 *next* confirmed `Succeeded` one for that same app - a real, if approximate, "time to
 next green" proxy. Implemented via the `dora-last-failure-time` annotation: on a
 confirmed success, if that annotation is present, `finishedAt - dora-last-failure-time`
-is sampled into `dora_time_to_restore_seconds_experimental{tenant, app}` before the
+is sampled into `dora_time_to_restore_seconds_experimental{app_namespace, app}` before the
 annotation is cleared. The `_experimental` suffix is deliberate and structural, not just
 a dashboard note - matches this platform's existing "make reduced-confidence data loud in
 the data itself, not just in code comments" precedent (the `governance.stub=true` span
@@ -175,23 +175,23 @@ scale: `300` (5m), `1800` (30m), `3600` (1h), `14400` (4h), `86400` (1d), `60480
 shared platform-level components live) gets a namespaced `Role` in `argocd` - not a
 `ClusterRole` - genuinely narrower than the stalled-pipeline detector's necessarily
 cluster-scoped RBAC, since every tracked Application lives in that single namespace
-regardless of tenant: `get`/`list`/`watch`/`patch` on `applications.argoproj.io`. `patch`
+regardless of which Application it belongs to: `get`/`list`/`watch`/`patch` on `applications.argoproj.io`. `patch`
 is the one deliberate widening beyond read-only, same honest framing as the stalled-
 pipeline detector's own dedup-label `patch` grant (`docs/stalled-pipeline-detector.md`):
 Kubernetes RBAC can't scope `patch` down to "only annotations," so this identity can
 technically modify any field on any Application in `argocd` - narrow by namespace and
 resource type, not by field.
 
-`pipeline-runner` (each tenant's own SA) additionally gets `get`+`patch` on exactly its
+`pipeline-runner` (each Application's own SA) additionally gets `get`+`patch` on exactly its
 own `<app-name>-staging` Application via `resourceNames` - nothing else, no other
-tenant's Application, no other resource type.
+Application's ArgoCD Application object, no other resource type.
 
 ## Accessing the metrics and dashboard
 
 - `kubectl port-forward -n platform-system svc/dora-exporter 8080:8080` then `curl
   localhost:8080/metrics` for the raw Prometheus exposition.
 - Grafana: "CI/CD Platform - DORA Metrics" dashboard (`dora.json`), same
-  `$tenant`/`$app` template-variable pattern as `pipelines-overview.json`.
+  `$app_namespace`/`$app` template-variable pattern as `pipelines-overview.json`.
 - A standalone `ServiceMonitor` (`charts/platform-cicd-control-plane/templates/dora-exporter/servicemonitor.yaml`)
   registers the scrape target - no Helm-chart wiring needed, since kind-observe's
   existing Prometheus CR has empty `serviceMonitorSelector`/`serviceMonitorNamespaceSelector`
@@ -228,5 +228,5 @@ tenant's Application, no other resource type.
 - RBAC check: `kubectl auth can-i --list
   --as=system:serviceaccount:platform-system:dora-exporter -n argocd` shows exactly
   `get`/`list`/`watch`/`patch` on `applications.argoproj.io`, and confirm
-  `pipeline-runner` still cannot touch any Application other than its own tenant's
+  `pipeline-runner` still cannot touch any Application other than its own
   `<app-name>-staging`.

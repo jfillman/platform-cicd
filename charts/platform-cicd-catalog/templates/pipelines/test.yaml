@@ -20,7 +20,7 @@ spec:
       type: string
     - name: image-ref
       type: string
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -66,7 +66,7 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     - name: validate-config
@@ -145,7 +145,7 @@ spec:
         - { name: stage-name, value: test }
         - { name: status, value: $(tasks.status) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
@@ -167,7 +167,7 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
@@ -186,6 +186,6 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
         - { name: tekton-status, value: $(tasks.status) }

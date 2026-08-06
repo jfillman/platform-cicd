@@ -13,7 +13,7 @@ spec:
   params:
     - name: git-url
       type: string
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -32,7 +32,7 @@ spec:
           - { name: namespace, value: {{ .Release.Namespace }} }
       params:
         - { name: git-url, value: $(params.git-url) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: github-owner, value: $(params.github-owner) }
         - { name: gitops-repo-url, value: $(params.gitops-repo-url) }

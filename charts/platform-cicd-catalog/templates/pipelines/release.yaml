@@ -2,7 +2,7 @@
 #
 # Fourth stage of the flow, and the last automated one. Fired by the shared broker on
 # the deploy Pipeline's dev.cdevents.service.deployed event (previously unconsumed).
-# Opens a PR against the tenant's GitOps repo promoting the already-built image to
+# Opens a PR against the Application's GitOps repo promoting the already-built image to
 # staging - see catalog/tasks/open-release-pr.yaml and docs/release.md for the full
 # GitOps-PR-promotion design, ported from a real prior production pattern.
 #
@@ -35,7 +35,7 @@ spec:
       type: string
     - name: image-ref
       type: string
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -80,7 +80,7 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     - name: validate-config
@@ -122,7 +122,7 @@ spec:
     # Hands off to the DORA exporter (platform/dora-exporter) - only runs if
     # open-release-pr actually succeeded (standard Tekton DAG failure propagation, no
     # `when` guard needed). See docs/dora-metrics.md for the full mechanism: this stamps
-    # tracking annotations on the tenant's own ArgoCD Application that the exporter reads
+    # tracking annotations on the Application's own ArgoCD Application object that the exporter reads
     # back once ArgoCD confirms the sync succeeded or failed.
     - name: mark-release-pending
       runAfter: [open-release-pr]
@@ -133,7 +133,7 @@ spec:
           - { name: name, value: mark-release-pending }
           - { name: namespace, value: {{ .Release.Namespace }} }
       params:
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
 
@@ -165,7 +165,7 @@ spec:
           - { name: name, value: end-flow-root-span }
           - { name: namespace, value: {{ .Release.Namespace }} }
       params:
-        - { name: flow-name, value: "$(params.tenant)/$(params.app-name)" }
+        - { name: flow-name, value: "$(params.app-namespace)/$(params.app-name)" }
         - { name: flow-traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
         - { name: status, value: $(tasks.status) }
@@ -182,7 +182,7 @@ spec:
         - { name: stage-name, value: release }
         - { name: status, value: $(tasks.status) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
@@ -213,7 +213,7 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
@@ -232,6 +232,6 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
         - { name: tekton-status, value: $(tasks.status) }

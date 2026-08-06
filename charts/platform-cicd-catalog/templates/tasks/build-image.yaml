@@ -57,7 +57,7 @@ spec:
     - name: IMAGE_DIGEST
       description: Same value as image-digest, duplicated under Conforma's exact-cased Task-level type-hint name - see IMAGE_URL above.
   # Registry push credentials for kaniko. A `kubernetes.io/dockerconfigjson` Secret
-  # named registry-credentials must exist in the TENANT's own namespace (not -dev) -
+  # named registry-credentials must exist in the Application's own namespace (not -dev) -
   # see docs/onboarding.md. Mounted at kaniko's default docker-config lookup path so no
   # extra kaniko flag is needed.
   volumes:

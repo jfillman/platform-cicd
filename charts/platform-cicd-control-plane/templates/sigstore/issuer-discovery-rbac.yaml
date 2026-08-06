@@ -23,8 +23,8 @@
 # (binds system:anonymous specifically, not the broader system:unauthenticated group) and
 # doesn't touch a binding this platform doesn't own, matching this platform's consistent
 # "additive, not edits to shared/pre-existing bindings" RBAC discipline used everywhere
-# else (e.g. every tenant Role/RoleBinding is its own new object, never a patch onto
-# something pre-existing).
+# else (e.g. every Application's Role/RoleBinding is its own new object, never a patch
+# onto something pre-existing).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

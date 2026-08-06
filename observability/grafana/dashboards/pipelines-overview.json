@@ -9,7 +9,7 @@
   "templating": {
     "list": [
       {
-        "name": "tenant",
+        "name": "app_namespace",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
         "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
@@ -26,7 +26,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "sum(tekton_pipelines_controller_running_pipelineruns_count{exported_namespace=~\"$tenant\"})", "legendFormat": "running" }
+        { "expr": "sum(tekton_pipelines_controller_running_pipelineruns_count{exported_namespace=~\"$app_namespace\"})", "legendFormat": "running" }
       ]
     },
     {
@@ -37,7 +37,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
       "targets": [
-        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"success\"}[24h]))", "legendFormat": "succeeded" }
+        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",status=\"success\"}[24h]))", "legendFormat": "succeeded" }
       ]
     },
     {
@@ -48,7 +48,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } },
       "targets": [
-        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"failed\"}[24h]))", "legendFormat": "failed" }
+        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",status=\"failed\"}[24h]))", "legendFormat": "failed" }
       ]
     },
     {
@@ -61,7 +61,7 @@
         { "value": 0, "color": "red" }, { "value": 0.8, "color": "yellow" }, { "value": 0.95, "color": "green" }
       ] } } },
       "targets": [
-        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))" }
+        { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",status=\"success\"}[24h])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[24h]))" }
       ]
     },
     {

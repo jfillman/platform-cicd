@@ -91,9 +91,9 @@ What's actually cached is the build tool's own *download* cache (npm's tarball c
 `node_modules` from scratch on every run by design, so caching that directory would do
 nothing; what actually avoids re-downloading is the tool's own cache, backed here by a
 real, persistent, **per-app** PVC (`build-cache-<app-name>`, provisioned at onboarding -
-see `charts/platform-cicd-tenant/templates/env/build-cache-pvc.yaml`) that survives across
+see `charts/platform-cicd-app/templates/env/build-cache-pvc.yaml`) that survives across
 runs, unlike the ephemeral per-run `source` workspace. Per-app rather than shared across
-a tenant's apps specifically so `size` above can vary per app.
+an Application's apps specifically so `size` above can vary per app.
 
 The cache is keyed by a hash of the relevant lockfile (`package-lock.json` for npm,
 `pom.xml` for Maven), scoped under `<cache-type>/<hash>` on the PVC - a dependency
@@ -137,7 +137,7 @@ Phase 3 item 8.1), which only supports one PVC-backed workspace per TaskRun pod
 `build.unitTest.enabled` and `test.enabled` both used to be read via `jq -r '.path.enabled
 // true'` - a genuine, previously-undiscovered bug: jq's `//` alternative operator treats
 `false` the same as `null`/missing and falls through to the right-hand default, so an
-explicit `enabled: false` was silently overridden back to `"true"`. **No tenant had ever
+explicit `enabled: false` was silently overridden back to `"true"`. **No Application had ever
 actually been able to disable unit tests or the integration-test stage via `cicd.yaml`**
 until this was found and fixed (`run-tests.yaml`/`run-integration-tests.yaml`, now
 `jq -r 'if .path.enabled == false then "false" else "true" end'`). Found as a side effect
@@ -163,7 +163,7 @@ catalog changed - now automated via `onboarding-templates/.tekton/onboarding-res
 a PR with regenerated files, skipping the PR entirely when nothing actually changed) -
 see [onboarding.md](onboarding.md#keeping-onboarding-boilerplate-in-sync). Re-running
 that same Pipeline manually is also how a platform-side onboarding-template change gets
-pushed out to already-onboarded repos, not just a tenant-side `cicd.yaml` edit.
+pushed out to already-onboarded repos, not just a app-side `cicd.yaml` edit.
 
 ## Local validation before pushing
 

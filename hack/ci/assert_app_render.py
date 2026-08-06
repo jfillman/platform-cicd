@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Fixture-matrix assertions for charts/platform-cicd-tenant's `helm template` output.
+"""Fixture-matrix assertions for charts/platform-cicd-app's `helm template` output.
 
-Used by .github/workflows/tenant-chart-ci.yaml to verify the conditional-rendering
-logic (platform-cicd-tenant.hasStage in templates/_helpers.tpl) actually gates
+Used by .github/workflows/app-chart-ci.yaml to verify the conditional-rendering
+logic (platform-cicd-app.hasStage in templates/_helpers.tpl) actually gates
 resources on cicd.yaml's declared pipeline stages - the direct regression test for the
-live-confirmed bug this whole chart exists to fix (a release PipelineRun firing for a
-tenant that never declared a release stage).
+live-confirmed bug this whole chart exists to fix (a release PipelineRun firing for an
+Application that never declared a release stage).
 
-Usage: assert_tenant_render.py <rendered.yaml> [--present KIND[:NAME] ...]
+Usage: assert_app_render.py <rendered.yaml> [--present KIND[:NAME] ...]
        [--absent KIND[:NAME] ...] [--count KIND:NAME N] [--pvc-size KIND:NAME SIZE]
 
 KIND[:NAME] with no NAME matches any resource of that kind (at least one, for

@@ -27,7 +27,7 @@ spec:
     - name: git-url
       type: string
       description: The app repo's own git-url - only its GitHub org/owner is used.
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -37,13 +37,13 @@ spec:
       type: string
       default: ""
       description: >-
-        Optional - only needed if this tenant's pipeline declares a release stage (see
-        the tenant chart's own conditional rendering). Empty skips the gitops-repo
+        Optional - only needed if this Application's pipeline declares a release stage
+        (see the app chart's own conditional rendering). Empty skips the gitops-repo
         delivery half entirely, not an error.
   # Same audience-bound projected-ServiceAccount-token volume shape already proven in
   # send-cdevent.yaml/open-release-pr.yaml/pr-token-refresher-cronjob.yaml - no new
   # identity, no new RBAC (talking to the broker isn't RBAC-gated). This Task is meant to
-  # run as the tenant's own existing pipeline-runner SA, not a new one.
+  # run as the Application's own existing pipeline-runner SA, not a new one.
   volumes:
     - name: github-token-broker-token
       projected:
@@ -65,8 +65,8 @@ spec:
           value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
         - name: GIT_URL
           value: $(params.git-url)
-        - name: TENANT
-          value: $(params.tenant)
+        - name: APP_NAMESPACE
+          value: $(params.app-namespace)
         - name: APP_NAME
           value: $(params.app-name)
         - name: GITHUB_OWNER
@@ -94,7 +94,7 @@ spec:
         # cicd.yaml changes, kept in sync exactly like push.yaml/pull-request.yaml.
         for f in push.yaml pull-request.yaml onboarding-resync.yaml; do
           sed \
-            -e "s|<TENANT>|${TENANT}|g" \
+            -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
             -e "s|<APP_NAME>|${APP_NAME}|g" \
             -e "s|<IMAGE_REPO>|${image_repo}|g" \
             -e "s|<GITHUB_OWNER>|${GITHUB_OWNER}|g" \
@@ -112,7 +112,7 @@ spec:
           git push --quiet "${clone_url}" "${branch}"
           pr_body="$(jq -n \
             --arg title "Onboarding: re-sync .tekton boilerplate" \
-            --arg body "Regenerated push.yaml/pull-request.yaml from the platform catalog's onboarding-templates/.tekton/ - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this tenant's files went stale." \
+            --arg body "Regenerated push.yaml/pull-request.yaml from the platform catalog's onboarding-templates/.tekton/ - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
             --arg head "${branch}" --arg base "main" \
             '{title: $title, body: $body, head: $head, base: $base}')"
           curl --fail --silent --show-error \
@@ -136,8 +136,8 @@ spec:
           value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
         - name: GITOPS_REPO_URL
           value: $(params.gitops-repo-url)
-        - name: TENANT
-          value: $(params.tenant)
+        - name: APP_NAMESPACE
+          value: $(params.app-namespace)
         - name: APP_NAME
           value: $(params.app-name)
       script: |
@@ -163,7 +163,7 @@ spec:
         for f in /opt/platform/onboarding-templates/.tekton-gitops/*.yaml; do
           base="$(basename "${f}")"
           sed \
-            -e "s|<TENANT>|${TENANT}|g" \
+            -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
             -e "s|<APP_NAME>|${APP_NAME}|g" \
             "${f}" > ".tekton/${base}"
         done

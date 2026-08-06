@@ -7,20 +7,25 @@ a few existing examples are exactly the inconsistencies this doc fixes.
 
 ## Namespaces
 
-**Tenant pipeline-execution namespace**: `<type>-<app-name>-cicd`, where `type` is
-`app` (a regular application tenant) or `infra` (a shared/platform-adjacent service
-onboarded with its own pipeline - e.g. a future shared DB operator) - more types added
-as real cases show up, not invented speculatively. Examples: `app-nodejs-demo-app-cicd`,
-`infra-payments-db-cicd`. This is `platformIdentity.tenantNamespace`'s value - the tenant
-chart doesn't compute or enforce this pattern, it's a convention for what you set that
-value to, same as every other `platformIdentity` field.
+**One flat pattern: `<type>-<app-name>-<env>`.** `type` is `app` (a regular Application)
+or `infra` (a shared/platform-adjacent service onboarded with its own pipeline - e.g. a
+future shared DB operator) - more types added as real cases show up, not invented
+speculatively. `env` is whichever environment that particular namespace represents -
+`cicd` (the Application's own pipeline-execution namespace), `dev`, `staging`,
+`pr-<number>`, or any other declared deploy target. All of these are **siblings under
+the same pattern**, not a base-plus-suffix hierarchy - a deploy namespace has nothing to
+do with "cicd" conceptually (it's where the Application *runs*, not where its pipeline
+runs), so it is never `<type>-<app-name>-cicd-<env>`.
 
-Everything derived from the tenant namespace keeps its existing suffix pattern, just
-built on the new base:
+Examples, all structurally identical 3-part names: `app-nodejs-demo-app-cicd` (pipeline
+execution), `app-nodejs-demo-app-dev` (deploy target), `app-nodejs-demo-app-staging`
+(release staging), `app-nodejs-demo-app-pr-42` (PR ephemeral env),
+`infra-payments-db-cicd` (an `infra`-type Application's own pipeline execution).
 
-- Deploy target: `<type>-<app-name>-cicd-<env>` (e.g. `app-nodejs-demo-app-cicd-dev`)
-- Release staging: `<type>-<app-name>-cicd-staging`
-- PR ephemeral envs: `<type>-<app-name>-cicd-pr-<number>`
+`charts/platform-cicd-app`'s `platform-cicd-app.envNamespace` helper computes any of
+these from `platformIdentity.type` + `platformIdentity.appName` + a given `env` value -
+nothing is a separately-set, independently-typed field that could drift from the
+convention.
 
 Watch the 63-character Kubernetes namespace limit (a real DNS-1123 constraint, not a
 style preference) on longer app names combined with the `-pr-<number>` suffix.
@@ -34,7 +39,7 @@ not changing: `platform-system`, `platform-catalog`, `platform-catalog-canary`,
 whatever that tool's own install convention uses.
 
 **Helm release name = namespace name, exactly.** `helm install <type>-<app-name>-cicd
-charts/platform-cicd-tenant ...` - one less thing to keep in sync by hand.
+charts/platform-cicd-app ...` - one less thing to keep in sync by hand.
 
 ## Catalog Task names
 
@@ -117,7 +122,7 @@ Short, no trailing dash, matching the concept the file represents (`sast`,
 ## Helm chart and file naming
 
 - Chart names: `platform-cicd-<concern>` (`platform-cicd-catalog`,
-  `platform-cicd-control-plane`, `platform-cicd-tenant`).
+  `platform-cicd-control-plane`, `platform-cicd-app`).
 - Catalog Task/Pipeline/StepAction files: `<metadata.name>.yaml`, exactly - already the
   norm, keep it exact (a mismatch is a real "which file is this Task actually defined
   in" trap).
@@ -131,7 +136,7 @@ Short, no trailing dash, matching the concept the file represents (`sast`,
 
 `platform.io/*` is this platform's own label namespace. As of this pass, every resource
 across all three charts (116 total: 43 catalog, 38 control-plane, 35 in a full-fixture
-tenant render) carries a full, consistent label set via a per-chart `<chart>.labels`
+App render) carries a full, consistent label set via a per-chart `<chart>.labels`
 named template (`templates/_helpers.tpl`) - not just the handful of resources that
 happened to need a label for a real selector before now.
 
@@ -148,9 +153,9 @@ app.kubernetes.io/part-of: platform-cicd
 helm.sh/chart: <chart name>-<chart version>
 ```
 
-**`platform.io/component`**: `catalog` | `control-plane` | `tenant` - which of the three
+**`platform.io/component`**: `catalog` | `control-plane` | `app` - which of the three
 charts owns this resource. The single most useful selector for a cross-cutting audit,
-e.g. `kubectl get role -A -l platform.io/component=tenant`.
+e.g. `kubectl get role -A -l platform.io/component=app`.
 
 **`platform.io/subcomponent`**: which concern *within* that chart - matches the template
 subdirectory a resource's file lives in (`identity`, `triggers`, `env`, `argocd`,
@@ -158,12 +163,12 @@ subdirectory a resource's file lives in (`identity`, `triggers`, `env`, `argocd`
 narrow `platform.io/component=control-plane` down to just
 `platform.io/subcomponent=sigstore`, for example.
 
-**`platform.io/tenant` / `platform.io/app`** (tenant chart only, on every resource it
-creates): most valuable on the resources that live in a *shared* namespace with other
-tenants' resources (`argocd`'s AppProjects/Applications/ApplicationSets/Roles) - lets you
-`kubectl get application -n argocd -l platform.io/tenant=app-nodejs-demo-app-cicd`
-instead of relying on name-pattern matching. Applied to every tenant-chart resource, not
-just the shared-namespace ones, for consistency.
+**`platform.io/app`** (app chart only, on every resource it creates): most valuable on
+the resources that live in a *shared* namespace with other Applications' resources
+(`argocd`'s AppProjects/Applications/ApplicationSets/Roles) - lets you
+`kubectl get application -n argocd -l platform.io/app=nodejs-demo-app` instead of relying
+on name-pattern matching. Applied to every app-chart resource, not just the
+shared-namespace ones, for consistency.
 
 **`platform.io/stub`**: `"true"` on catalog resources that are still genuinely stub
 implementations - currently `governance-gate-stub` (Task), `governance-stub`
@@ -177,7 +182,7 @@ level too: `kubectl get task -n platform-catalog -l platform.io/stub=true` now a
 **Pre-existing `platform.io/*` labels/annotations** (kept exactly as-is, already
 consistent with this scheme): `platform.io/catalog: "true"` (catalog-resolvable
 resources), `platform.io/dora-track: "true"` (Applications the DORA exporter watches),
-`platform.io/dora-pending`/`-tenant`/`-app`/`-flow-start-time`/`-baseline-started-at`
+`platform.io/dora-pending`/`-app-namespace`/`-app`/`-flow-start-time`/`-baseline-started-at`
 (DORA tracking state annotations on Applications), `platform.io/stall-alerted` (dedup
 marker), `platform.io/ephemeral-env` (PR-namespace TTL sweep target marker),
 `platform.io/purpose` (free-text annotation, currently only on the ClusterSecretStore's

@@ -1,6 +1,6 @@
 # platform/broker/manifests/stalled-pipeline-detector-cronjob.yaml
 #
-# Shared, platform-level CronJob (applied once, not per tenant - same shape as
+# Shared, platform-level CronJob (applied once, not per Application - same shape as
 # platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml) - detects a stage that completed
 # successfully but whose expected next-stage PipelineRun never appeared, which means a
 # CDEvent got lost somewhere between this stage's `finally` block and the broker's
@@ -22,10 +22,10 @@
 # env vars this CronJob has no reason to set - if the algorithm in cdevents.sh ever
 # changes, this must change with it.
 #
-# RBAC is cluster-scoped by necessity (PipelineRuns live in every tenant namespace, and
-# no tenant-namespace-discovery label exists anywhere in this platform yet - the broker's
-# own EventListener already scans namespaceSelector: {matchNames: ["*"]} for the same
-# reason, see eventlistener.yaml) but narrow by verb: get/list/patch on
+# RBAC is cluster-scoped by necessity (PipelineRuns live in every Application's own
+# namespace, and no app-namespace-discovery label exists anywhere in this platform yet -
+# the broker's own EventListener already scans namespaceSelector: {matchNames: ["*"]}
+# for the same reason, see eventlistener.yaml) but narrow by verb: get/list/patch on
 # pipelineruns.tekton.dev (patch only to set the dedup label below), create on events.
 # Nothing else - deliberately no Secrets access, see the alerting note below.
 apiVersion: v1

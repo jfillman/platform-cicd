@@ -5,7 +5,7 @@
 # Pipeline, which resolves the promoted image from the gitops PR's own staging manifest
 # and runs a real Trivy scan against it - see catalog/tasks/image-scan.yaml's own header.
 #
-# No <TENANT>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
+# No <APP_NAMESPACE>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
 # from PaC's own template vars, and extract-promoted-image.yaml clones the gitops repo
 # into its own scratch dir internally rather than a shared Pipeline workspace.
 apiVersion: tekton.dev/v1

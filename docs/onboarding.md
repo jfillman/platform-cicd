@@ -1,16 +1,16 @@
 # Onboarding a repo
 
 Phase 3 item 7 replaced the fully-manual, five-separate-hand-`kubectl apply` onboarding
-process with three Helm charts. `cicd.yaml` itself is the tenant chart's values file -
-every resource the platform creates for a tenant conditionally renders off what
+process with three Helm charts. `cicd.yaml` itself is the app chart's values file -
+every resource the platform creates for an Application conditionally renders off what
 `cicd.yaml` actually declares (see
-[charts/platform-cicd-tenant/templates/_helpers.tpl](../charts/platform-cicd-tenant/templates/_helpers.tpl)'s
-`platform-cicd-tenant.hasStage`), which is the direct fix for a real, live-confirmed bug:
-a `release` PipelineRun once fired for a tenant whose `cicd.yaml` never declared a release
+[charts/platform-cicd-app/templates/_helpers.tpl](../charts/platform-cicd-app/templates/_helpers.tpl)'s
+`platform-cicd-app.hasStage`), which is the direct fix for a real, live-confirmed bug:
+a `release` PipelineRun once fired for an Application whose `cicd.yaml` never declared a release
 stage, because nothing previously read `pipeline:` at all.
 
 Full self-service (a developer onboards themselves by opening a PR) is a later, separate
-step - an ArgoCD ApplicationSet git generator scanning a `tenants/*.yaml` directory - not
+step - an ArgoCD ApplicationSet git generator scanning a `Applications/*.yaml` directory - not
 built yet. Today, onboarding is still admin-run, just versioned, testable, and prunable
 instead of five hand-substituted files nothing ever removes.
 
@@ -30,7 +30,7 @@ promoted afterward, and [secrets-management.md](secrets-management.md) for the o
 step this doesn't cover (populating the ClusterSecretStore's source namespace with real
 credentials).
 
-## Onboarding one tenant/app
+## Onboarding one Application
 
 1. **Register the repo with Pipelines-as-Code.** Create a PaC `Repository` CR pointing at
    the app's GitHub repo (requires the platform's GitHub App - see
@@ -47,27 +47,30 @@ credentials).
 
    ```yaml
    platformIdentity:
-     tenantNamespace: app-<app-name>-cicd  # or infra-<app-name>-cicd - see docs/naming-conventions.md
      appName: <app-name>
+     type: app  # or infra - see docs/naming-conventions.md
      gitopsRepoUrl: https://github.com/<org>/gitops-<app-name>  # only needed if pipeline: declares a release stage
      appRepoUrl: https://github.com/<org>/<app-name>            # only needed if ephemeralEnvironments.pullRequest.enabled
      githubOwner: <org>
    ```
 
-   `tenantNamespace` follows `<type>-<app-name>-cicd` (`type` is `app` for a regular
-   application tenant, `infra` for a shared/platform-adjacent service onboarded with its
-   own pipeline) - see [naming-conventions.md](naming-conventions.md) for the full
-   convention, including how deploy/staging/PR namespaces build on this same base.
+   There is no `tenantNamespace` field to set - the Application's own CI/CD execution
+   namespace is COMPUTED from `type`+`appName` as `<type>-<app-name>-cicd` (`type` is
+   `app` for a regular application, `infra` for a shared/platform-adjacent service
+   onboarded with its own pipeline), so it structurally cannot drift from the convention.
+   See [naming-conventions.md](naming-conventions.md) for the full convention, including
+   how deploy/staging/PR namespaces are PEERS of this one under the same flat
+   `<type>-<app-name>-<env>` pattern, not built on top of it.
 
    `platformIdentity` is not a key `schemas/cicd.schema.json` permits - its
    `additionalProperties: false` already rejects any `cicd.yaml` that tries to define it,
    so this can never be silently overridden by a developer's own config, independent of
    which file is passed to `helm install` first or last.
 
-4. **Install the tenant chart:**
+4. **Install the app chart:**
 
    ```
-   helm upgrade --install <type>-<app-name>-cicd charts/platform-cicd-tenant \
+   helm upgrade --install <type>-<app-name>-cicd charts/platform-cicd-app \
      --namespace <type>-<app-name>-cicd --create-namespace \
      -f <app-repo>/cicd.yaml -f platform-identity.yaml --wait
    ```
@@ -79,7 +82,7 @@ credentials).
    (if `ephemeralEnvironments.pullRequest.enabled`), the governance policy ConfigMap (if
    `governance.policyCheck`), and an `ExternalSecret` for `registry-credentials` (see
    [secrets-management.md](secrets-management.md)). Re-running this same command after
-   editing `cicd.yaml` is exactly how you change a tenant's shape later - `helm upgrade`
+   editing `cicd.yaml` is exactly how you change an Application's shape later - `helm upgrade`
    prunes whatever a stage removal makes unnecessary, it doesn't just add.
 
 5. **Deliver the `.tekton/` boilerplate.** Trigger a real push to the app repo's `cicd.yaml`
@@ -89,21 +92,21 @@ credentials).
    generated `.tekton/*.yaml` files. Merge it once; you never hand-edit these files. This
    replaces both the old fully-manual copy-paste step and an earlier considered design (an
    ArgoCD Application reading `cicd.yaml` live from every app repo) that was rejected
-   because it would need standing ArgoCD read access to every tenant's source repo as a
+   because it would need standing ArgoCD read access to every Application's source repo as a
    base requirement of onboarding itself - see this same mechanism's own header comment for
    the full reasoning. If you don't want to wait for a real commit, you can also run the
    `onboarding-resync` Pipeline directly:
 
    ```
-   tkn pipeline start onboarding-resync -n <tenant> \
-     -p git-url=<app-repo-url> -p tenant=<tenant> -p app-name=<app-name> \
+   tkn pipeline start onboarding-resync -n <type>-<app-name>-cicd \
+     -p git-url=<app-repo-url> -p app-namespace=<type>-<app-name>-cicd -p app-name=<app-name> \
      -p github-owner=<org> -p gitops-repo-url=<gitops-repo-url-or-empty> \
      --workspace name=source,emptyDir= \
      --serviceaccount pipeline-runner
    ```
 
 6. **Provision the dev Deployment.** `deploy-manifests.yaml` expects a `Deployment` named
-   `<app-name>` to already exist in `<tenant>-dev` (it patches the image and waits for
+   `<app-name>` to already exist in `<type>-<app-name>-dev` (it patches the image and waits for
    rollout - it does not create the Deployment). Apply a minimal Deployment/Service
    manifest by hand; a Crossplane `Application` composition creating this automatically
    remains a later step (see [architecture-plan.md](architecture-plan.md) - this is the
@@ -115,8 +118,8 @@ credentials).
 
 ## Keeping onboarding boilerplate in sync
 
-Two things used to go stale silently, with no mechanism to catch either: a tenant's
-`cicd.yaml` changing (nothing re-rendered the tenant chart), and the platform's own
+Two things used to go stale silently, with no mechanism to catch either: an Application's
+`cicd.yaml` changing (nothing re-rendered the app chart), and the platform's own
 `onboarding-templates/.tekton/*.yaml` changing (nothing re-delivered already-onboarded
 repos' copies). Both are the same problem now: `onboarding-resync.yaml` fires whenever
 `cicd.yaml` changes on a push to `main` (a real, documented Pipelines-as-Code CEL
@@ -125,7 +128,7 @@ current `onboarding-templates/.tekton/*` content regardless of which side went s
 `git status --porcelain` inside `deliver-onboarding-files.yaml` skips opening a PR when
 nothing actually changed, so this is safe to fire often.
 
-For the tenant chart's own resources (Triggers, RBAC, etc.) re-rendering on a `cicd.yaml`
+For the app chart's own resources (Triggers, RBAC, etc.) re-rendering on a `cicd.yaml`
 change: that's a separate `helm upgrade` invocation, not automated yet by this same
 trigger - see step 4 above. Wiring `onboarding-resync` to also re-run `helm upgrade` is a
 natural next step, not built in this pass.

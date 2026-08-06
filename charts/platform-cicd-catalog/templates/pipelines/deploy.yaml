@@ -23,10 +23,17 @@ spec:
     - name: env
       type: string
       default: dev
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
+    - name: app-type
+      type: string
+      description: >-
+        platformIdentity.type ("app"/"infra"/...) - needed (alongside app-name) to
+        construct the deploy-target namespace directly as <app-type>-<app-name>-<env>,
+        a PEER of app-namespace (<app-type>-<app-name>-cicd) under the same flat
+        pattern, not a suffix built on top of it. See docs/concepts.md.
     - name: flow-traceparent
       type: string
     - name: chain-id
@@ -68,7 +75,7 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     - name: validate-config
@@ -130,8 +137,8 @@ spec:
       params:
         - { name: image-ref, value: $(params.image-ref) }
         - { name: env, value: $(params.env) }
-        - { name: tenant, value: $(params.tenant) }
         - { name: app-name, value: $(params.app-name) }
+        - { name: app-type, value: $(params.app-type) }
 
   finally:
     - name: end-deploy-stage-span
@@ -161,7 +168,7 @@ spec:
         - { name: stage-name, value: deploy }
         - { name: status, value: $(tasks.status) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
@@ -186,7 +193,7 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
@@ -205,6 +212,6 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
         - { name: tekton-status, value: $(tasks.status) }

@@ -1,13 +1,13 @@
 # catalog/pipelines/policy-check.yaml
 #
 # Wraps two independent real gates (Phase 3 item 2) - the real (not stub) policy-check
-# check. Referenced from a tenant's GitOps repo's own .tekton/pull-request-policy-
+# check. Referenced from an Application's GitOps repo's own .tekton/pull-request-policy-
 # check.yaml, matching the exact structural shape governance-check.yaml already
 # established for the three still-stub gates (sast/image-scan/sbom) - one Check per file,
 # dedicated Pipeline per real gate, not a shared do-everything Pipeline.
 #
 # `verify` (sub-item 1, docs/commit-signing.md) checks the human's gitsign commit
-# signature against the tenant's allowed-emails list. `verify-provenance` (sub-item 3,
+# signature against the Application's allowed-emails list. `verify-provenance` (sub-item 3,
 # docs/provenance-policy.md) is a genuinely separate, additive gate: the promoted
 # *image*'s own signature + SLSA provenance attestation, checked against Conforma's
 # policy engine - it doesn't re-check emails (deliberate, see that doc). Both must pass;
@@ -25,7 +25,7 @@ spec:
       type: string
     - name: revision
       type: string
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -40,7 +40,7 @@ spec:
       params:
         - { name: repo-url, value: $(params.repo-url) }
         - { name: revision, value: $(params.revision) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
     - name: verify-provenance
       taskRef:
@@ -52,5 +52,5 @@ spec:
       params:
         - { name: repo-url, value: $(params.repo-url) }
         - { name: revision, value: $(params.revision) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }

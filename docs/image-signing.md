@@ -159,13 +159,13 @@ Three more things confirmed live, not assumed from docs:
   would mean this Fulcio-only setup silently attempts to upload every signature there.
 
 **Registry credentials**: Chains signs asynchronously from its own central controller
-(watching completed TaskRuns cluster-wide), not from within a tenant's pipeline pod - it
-resolves registry push credentials via the `secrets`/`imagePullSecrets` attached to
-**the ServiceAccount that ran the TaskRun** (`pipeline-runner`, per tenant), not via any
-credential in Chains' own namespace:
+(watching completed TaskRuns cluster-wide), not from within an Application's pipeline
+pod - it resolves registry push credentials via the `secrets`/`imagePullSecrets`
+attached to **the ServiceAccount that ran the TaskRun** (`pipeline-runner`, per
+Application), not via any credential in Chains' own namespace:
 
 ```bash
-kubectl patch serviceaccount pipeline-runner -n <tenant> --type merge \
+kubectl patch serviceaccount pipeline-runner -n <app-namespace> --type merge \
   -p '{"secrets":[{"name":"registry-credentials"}]}'
 ```
 
@@ -188,16 +188,16 @@ Tekton Chains ships its own `tekton-chains-controller-tenant-access` ClusterRole
 cluster-wide, granting `get`/`list`/`watch` on `secrets`/`configmaps`/`serviceaccounts`
 across **every namespace** - not something `platform-cicd`'s own manifests introduce.
 This is a real, meaningful deviation from this platform's otherwise-consistent
-least-privilege posture (TokenReview-scoped broker, per-tenant impersonation, resourceName
+least-privilege posture (TokenReview-scoped broker, per-Application impersonation, resourceName
 -scoped ConfigMap reads elsewhere) - flagged here honestly rather than silently accepted,
 per this platform's "make tradeoffs structurally loud" precedent. It appears to exist so
-Chains can resolve registry credentials via any tenant's own ServiceAccount, cluster-wide,
+Chains can resolve registry credentials via any Application's own ServiceAccount, cluster-wide,
 matching the credential-resolution mechanism described above. Narrowing this would need a
 careful audit of what Chains' own reconciliation loop actually depends on across
 `pods`/`pods/log`/`events`/`pvc`/`statefulsets`/`configmaps`/`secrets`/`serviceaccounts` -
 not done here, since breaking Chains' own core signing loop is a worse outcome than the
-current breadth. Worth revisiting if this platform ever has a tenant whose threat model
-doesn't tolerate it.
+current breadth. Worth revisiting if this platform ever has an Application whose threat
+model doesn't tolerate it.
 
 ## Verification
 
@@ -236,7 +236,7 @@ list matching the actual PipelineRun.
 - Confirmed no Rekor upload attempt in Chains controller logs during a real signing run
   (`transparency.enabled: "false"` genuinely takes effect).
 - Security check: `fulcio-secret` unreadable from other namespaces' ServiceAccounts
-  (confirmed `pipeline-runner` in a tenant namespace gets `no`); the projected identity
+  (confirmed `pipeline-runner` in an Application's namespace gets `no`); the projected identity
   token's audience (`sigstore`) is narrowly scoped, not a general credential.
 
 ## A real bug found in sub-item 3: `artifacts.taskrun.storage: "oci"` broke every signing run
@@ -277,7 +277,7 @@ nearly every step in every pipeline, this broke signing for every real build.
    *private*, unlike `nodejs-demo-app`'s image, which was made public separately at some
    point - rather than also flipping toolbox to public, `pipeline-runner` now carries
    `imagePullSecrets: [{name: registry-credentials}]`, reusing the same Secret kaniko
-   already pushes with. See `charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`.)
+   already pushes with. See `charts/platform-cicd-app/templates/identity/pipeline-runner.yaml`.)
 2. **Defense in depth**: `artifacts.taskrun.storage` is now `""` (disabled) rather than
    `"oci"`. This platform's own provenance consumer
    (`charts/platform-cicd-catalog/templates/tasks/verify-image-provenance.yaml`) only ever checks PipelineRun-level

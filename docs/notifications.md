@@ -11,7 +11,7 @@ for the stage-level message above. This is controlled by its own
 `notifications.slack.scanResults` toggle (default `true`, only takes effect when
 `notifications.slack.enabled` is also `true`) - the user asked for this to be optional
 independently of the general per-stage notifications, since scan results are more
-frequent/verbose and a tenant might want one without the other:
+frequent/verbose and an Application might want one without the other:
 
 ```yaml
 notifications:
@@ -23,21 +23,21 @@ notifications:
 ## The bug this fixes
 
 The plumbing (`notify-slack.yaml`, reading `notifications.slack` from `cicd.yaml`, a
-per-tenant `slack-webhook-url` Secret) existed since Phase 1, but **never actually
+per-app `slack-webhook-url` Secret) existed since Phase 1, but **never actually
 worked**: the script always read `/var/run/secrets/platform/slack-webhook-url`, but the
-Task never declared a `volumes:`/`volumeMounts:` for it at all. Even a tenant that fully
+Task never declared a `volumes:`/`volumeMounts:` for it at all. Even an Application that fully
 enabled `notifications.slack` and created the Secret exactly as the old header comment
 described would still get nothing - the script's own graceful "no secret mounted" skip
-path silently absorbed the missing file, so this looked like an unconfigured-tenant no-op
-rather than a broken feature. Confirmed live before fixing: no tenant has ever had this
+path silently absorbed the missing file, so this looked like an unconfigured-app no-op
+rather than a broken feature. Confirmed live before fixing: no Application has ever had this
 secret, and `kubectl get externalsecret,clustersecretstore -A` returns nothing anywhere -
 External Secrets Operator is installed but has zero configured backends, so the
 architecture doc's original "populated by ESO at onboarding" plan for this secret was
-never actually built. Fixed with a plain `secret` volume (`optional: true`, so tenants
+never actually built. Fixed with a plain `secret` volume (`optional: true`, so Applications
 without it still start cleanly - not a new failure mode, matches the script's existing
 skip behavior), not a full ESO SecretStore pipeline for one demo webhook.
 
-## Onboarding a tenant (per app)
+## Onboarding an Application (per app)
 
 1. **Enable it in `cicd.yaml`**:
    ```yaml
@@ -46,7 +46,7 @@ skip behavior), not a full ESO SecretStore pipeline for one demo webhook.
        enabled: true
        channel: "#your-channel"
    ```
-2. **Create the Secret yourself**, in the tenant's own namespace - the data key must be
+2. **Create the Secret yourself**, in the Application's own namespace - the data key must be
    literally named `slack-webhook-url` (a Secret volume mount creates one file per key,
    named after the key, and the script reads exactly that filename):
    ```
@@ -58,7 +58,7 @@ skip behavior), not a full ESO SecretStore pipeline for one demo webhook.
 
 ## Message format
 
-- Always: `[<tenant>] <stage-name> <status>: <pipeline-run-name>` - one line, every
+- Always: `[<app-namespace>] <stage-name> <status>: <pipeline-run-name>` - one line, every
   stage, every outcome.
 - On any non-success outcome (`Failed`, `Cancelled`, `PipelineRunTimeout`, etc. - not
   narrowed to just `Failed`, since a short excerpt of whatever the last-running step
@@ -68,19 +68,19 @@ skip behavior), not a full ESO SecretStore pipeline for one demo webhook.
   Slack code block.
 
 No new RBAC was needed for the log-fetching step - `pipeline-runner`'s existing Role
-(`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`) already grants `get`/`list`/
+(`charts/platform-cicd-app/templates/identity/pipeline-runner.yaml`) already grants `get`/`list`/
 `watch` on `taskruns` (tekton.dev) and `pods`/`pods/log` (core), confirmed by re-reading
 that file rather than assumed.
 
 ## Verification
 
 - Mount fix, in isolation: create a real `slack-webhook-url` Secret, enable
-  `notifications.slack` for a real tenant, run a real pipeline, confirm an actual message
+  `notifications.slack` for a real Application, run a real pipeline, confirm an actual message
   lands in the real Slack channel - this is the part that had never once worked, so it
   needs to be seen working, not assumed fixed by re-reading the diff.
 - Failure-log test: a synthetic PipelineRun with a deliberately bad param (same surgical-
   break technique used elsewhere in Phase 3), confirming the Slack message includes a
   real, readable excerpt from the actually-failed step.
-- No-secret regression check: a tenant without the Secret configured still completes a
+- No-secret regression check: an Application without the Secret configured still completes a
   normal pipeline run with no error - the `optional: true` mount plus the script's
   existing skip path, not a new failure mode.

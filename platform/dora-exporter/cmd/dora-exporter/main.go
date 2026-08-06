@@ -12,7 +12,7 @@
 // a metrics feature has no business adding risk to that path.
 //
 // Correlation with a specific release attempt happens via annotations the release
-// Pipeline stamps directly onto its own tenant's Application object
+// Pipeline stamps directly onto its own Application's ArgoCD Application object
 // (catalog/tasks/mark-release-pending.yaml), read back here off the same object this
 // service is already watching - not a separate datastore, not image/revision matching
 // (status.summary.images is empty on this ArgoCD install - checked live before this was
@@ -47,14 +47,14 @@ import (
 var applicationGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 
 const (
-	annoPending             = "platform.io/dora-pending"
-	annoFlowStartTime       = "platform.io/dora-flow-start-time"
-	annoBaselineStartedAt   = "platform.io/dora-baseline-started-at"
-	annoTenant              = "platform.io/dora-tenant"
-	annoApp                 = "platform.io/dora-app"
-	annoLastFailureTime     = "platform.io/dora-last-failure-time"
-	argocdNamespace         = "argocd"
-	doraTrackLabelSelector  = "platform.io/dora-track=true"
+	annoPending            = "platform.io/dora-pending"
+	annoFlowStartTime      = "platform.io/dora-flow-start-time"
+	annoBaselineStartedAt  = "platform.io/dora-baseline-started-at"
+	annoAppNamespace       = "platform.io/dora-app-namespace"
+	annoApp                = "platform.io/dora-app"
+	annoLastFailureTime    = "platform.io/dora-last-failure-time"
+	argocdNamespace        = "argocd"
+	doraTrackLabelSelector = "platform.io/dora-track=true"
 )
 
 // Lead Time buckets are deliberately aligned to DORA's own published elite/high/medium/
@@ -69,19 +69,19 @@ var mttrBuckets = []float64{300, 1800, 3600, 14400, 86400, 604800}
 var (
 	deploymentsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dora_deployments_total",
-		Help: "Confirmed successful releases (ArgoCD sync Succeeded), by tenant/app. Deployment Frequency is increase() over this in Grafana, not precomputed here.",
-	}, []string{"tenant", "app"})
+		Help: "Confirmed successful releases (ArgoCD sync Succeeded), by app_namespace/app. Deployment Frequency is increase() over this in Grafana, not precomputed here.",
+	}, []string{"app_namespace", "app"})
 
 	leadTimeSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "dora_lead_time_seconds",
 		Help:    "Time from a flow's original commit-triggered start (build's start-flow-root-span) to confirmed ArgoCD sync success.",
 		Buckets: leadTimeBuckets,
-	}, []string{"tenant", "app"})
+	}, []string{"app_namespace", "app"})
 
 	releasesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dora_releases_total",
-		Help: "Every confirmed terminal release outcome, by tenant/app/outcome (succeeded|failed). Change Failure Rate is failed/total in Grafana.",
-	}, []string{"tenant", "app", "outcome"})
+		Help: "Every confirmed terminal release outcome, by app_namespace/app/outcome (succeeded|failed). Change Failure Rate is failed/total in Grafana.",
+	}, []string{"app_namespace", "app", "outcome"})
 
 	// _experimental is deliberate and structural, not just a dashboard note - this
 	// platform has no incident-tracking or production-health signal, so this can only
@@ -92,7 +92,7 @@ var (
 		Name:    "dora_time_to_restore_seconds_experimental",
 		Help:    "Time between a confirmed failed release and the next confirmed successful one for the same app. Best-effort - cannot see rollbacks/fixes that happen outside this pipeline.",
 		Buckets: mttrBuckets,
-	}, []string{"tenant", "app"})
+	}, []string{"app_namespace", "app"})
 )
 
 func init() {
@@ -190,18 +190,18 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructur
 		return
 	}
 
-	tenant := annos[annoTenant]
+	appNamespace := annos[annoAppNamespace]
 	appName := annos[annoApp]
 
 	patch := map[string]interface{}{annoPending: nil} // JSON merge patch: null removes the key
 
 	switch phase {
 	case "Succeeded":
-		releasesTotal.WithLabelValues(tenant, appName, "succeeded").Inc()
-		deploymentsTotal.WithLabelValues(tenant, appName).Inc()
+		releasesTotal.WithLabelValues(appNamespace, appName, "succeeded").Inc()
+		deploymentsTotal.WithLabelValues(appNamespace, appName).Inc()
 
 		if flowStart, err := parseTime(annos[annoFlowStartTime]); err == nil {
-			leadTimeSeconds.WithLabelValues(tenant, appName).Observe(finishedAt.Sub(flowStart).Seconds())
+			leadTimeSeconds.WithLabelValues(appNamespace, appName).Observe(finishedAt.Sub(flowStart).Seconds())
 		} else {
 			log.Printf("dora-exporter: %s/%s: unparseable %s %q, skipping lead-time sample", app.GetNamespace(), app.GetName(), annoFlowStartTime, annos[annoFlowStartTime])
 		}
@@ -209,7 +209,7 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructur
 		if lastFailureStr := annos[annoLastFailureTime]; lastFailureStr != "" {
 			if lastFailure, err := parseTime(lastFailureStr); err == nil {
 				if mttr := finishedAt.Sub(lastFailure).Seconds(); mttr > 0 {
-					timeToRestoreSecondsExperimental.WithLabelValues(tenant, appName).Observe(mttr)
+					timeToRestoreSecondsExperimental.WithLabelValues(appNamespace, appName).Observe(mttr)
 				}
 			}
 			patch[annoLastFailureTime] = nil
@@ -218,7 +218,7 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructur
 		log.Printf("dora-exporter: %s/%s: confirmed Succeeded, recorded deployment + lead time", app.GetNamespace(), app.GetName())
 
 	case "Failed", "Error":
-		releasesTotal.WithLabelValues(tenant, appName, "failed").Inc()
+		releasesTotal.WithLabelValues(appNamespace, appName, "failed").Inc()
 		patch[annoLastFailureTime] = finishedAt.Format(time.RFC3339)
 		log.Printf("dora-exporter: %s/%s: confirmed %s, recorded release failure", app.GetNamespace(), app.GetName(), phase)
 	}

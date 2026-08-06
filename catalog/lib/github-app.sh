@@ -5,7 +5,7 @@
 # shared broker's /github-installation-token endpoint (see
 # platform/broker/cmd/token-review-interceptor/github_app.go and docs/release.md). The
 # App's private key never leaves the platform-system namespace - this call proves the
-# caller's own tenant identity (same audience-bound projected ServiceAccount token
+# caller's own Application identity (same audience-bound projected ServiceAccount token
 # pattern as cdevents.sh) and gets back only a token scoped to the one repo it asked
 # for and was authorized for, never the key itself.
 #
@@ -20,7 +20,7 @@ _GITHUB_TOKEN_BROKER_TOKEN_PATH="/var/run/secrets/platform/github-token-broker-t
 
 # github_app_installation_token <owner> <repo>
 # Prints the installation token (and nothing else) on stdout. Fails loudly (via
-# --fail) if the caller's tenant namespace doesn't own a Repository CR that maps to
+# --fail) if the caller's Application namespace doesn't own a Repository CR that maps to
 # <repo> under the gitops-<app-name> convention, or if the App isn't installed on that
 # repo yet - both are real setup states, not transient errors, so this deliberately
 # does not retry the way cdevent_send does for its at-least-once delivery model.

@@ -43,7 +43,7 @@ spec:
         # found live (see docs/cicd-yaml-reference.md's own writeup): jq's `//` operator
         # treats `false` the same as `null`/missing and falls through to the default, so
         # an explicit `unitTest.enabled: false` was silently ignored, always resolving to
-        # "true" - no tenant has ever actually been able to disable unit tests via
+        # "true" - no Application has ever actually been able to disable unit tests via
         # cicd.yaml. `if == false then false else true end` is the correct way to give a
         # boolean field a true default while still respecting an explicit false.
         ENABLED="$(jq -r 'if .build.unitTest.enabled == false then "false" else "true" end' <<< '$(params.config-json)')"

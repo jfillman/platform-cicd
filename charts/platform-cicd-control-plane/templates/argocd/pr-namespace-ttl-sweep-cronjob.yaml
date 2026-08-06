@@ -1,15 +1,16 @@
 # platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml
 #
-# Shared, platform-level CronJob (applied once, NOT a per-tenant template like the other
-# files in this directory) - deletes any platform.io/ephemeral-env=true namespace older
-# than 24h, regardless of which tenant/app it belongs to. One shared sweep across every
-# tenant, matching the same "one shared component, not one per tenant" pattern already
-# used for the CDEvents broker.
+# Shared, platform-level CronJob (applied once, NOT a per-Application template like the
+# other files in this directory) - deletes any platform.io/ephemeral-env=true namespace
+# older than 24h, regardless of which Application it belongs to. One shared sweep across
+# every Application, matching the same "one shared component, not one per Application"
+# pattern already used for the CDEvents broker.
 #
 # This is a BACKSTOP, not the primary cleanup mechanism - the ApplicationSet's
-# resources-finalizer.argocd.argoproj.io (see tenant-ephemeral-envs-argocd-template.yaml)
-# is verified live to correctly cascade-delete a PR's namespace when its Application goes
-# away (PR closed/label removed). This sweep exists because the old cd-pipelines system's
+# resources-finalizer.argocd.argoproj.io (see
+# charts/platform-cicd-app/templates/argocd/ephemeral-envs.yaml) is verified live to
+# correctly cascade-delete a PR's namespace when its Application goes away (PR closed/
+# label removed). This sweep exists because the old cd-pipelines system's
 # equivalent mechanism (a working finalizer at some point) still failed in some way its
 # own commit history doesn't fully explain, and never got a working backstop either - a
 # real namespace lingering 24h despite the primary mechanism is far more likely to be

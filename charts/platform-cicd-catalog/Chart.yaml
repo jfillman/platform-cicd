@@ -1,7 +1,7 @@
 apiVersion: v2
 name: platform-cicd-catalog
 description: >-
-  The shared Tekton catalog (Tasks/Pipelines/StepActions) every tenant's onboarding-
+  The shared Tekton catalog (Tasks/Pipelines/StepActions) every Application's onboarding-
   generated .tekton/*.yaml resolves against via Tekton's cluster resolver. Versioning
   strategy: see docs/catalog-versioning.md - this chart's own Chart.yaml `version` plus
   `helm history`/`helm rollback` is Option A (adopted now); a second install of this same

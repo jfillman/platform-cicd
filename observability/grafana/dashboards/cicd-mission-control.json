@@ -1,7 +1,7 @@
 {
     "title": "CI/CD Variant 1 - Live Mission Control",
     "uid": "platform-cicd-mission-control",
-    "description": "Real-time NOC-style view of the whole platform: what's running right now, which tenants are active, and controller health. Designed for a wallboard - big numbers, bar-gauge leaderboards, short time windows. All queries are scoped by the $tenant variable so this stays readable as the number of onboarded tenants grows.",
+    "description": "Real-time NOC-style view of the whole platform: what's running right now, which apps are active, and controller health. Designed for a wallboard - big numbers, bar-gauge leaderboards, short time windows. All queries are scoped by the $app_namespace variable so this stays readable as the number of onboarded apps grows.",
     "tags": ["platform-cicd", "cicd-variant"],
     "schemaVersion": 39,
     "editable": true,
@@ -10,7 +10,7 @@
     "templating": {
         "list": [
             {
-                "name": "tenant",
+                "name": "app_namespace",
                 "type": "query",
                 "datasource": { "type": "prometheus", "uid": "prometheus" },
                 "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
@@ -31,7 +31,7 @@
         { "id": 100, "type": "row", "title": "Platform pulse", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
         {
             "id": 1, "type": "gauge", "title": "PipelineRuns running now",
-            "description": "Cluster-wide gauge from the Tekton controller itself - not scoped by $tenant (the controller doesn't emit this broken out per tenant).",
+            "description": "Cluster-wide gauge from the Tekton controller itself - not scoped by $app_namespace (the controller doesn't emit this broken out per app).",
             "gridPos": { "x": 0, "y": 1, "w": 6, "h": 6 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "min": 0, "max": 10, "unit": "short",
@@ -82,7 +82,7 @@
                 "overrides": [
                     {
                         "matcher": { "id": "byName", "options": "traceName" },
-                        "properties": [ { "id": "displayName", "value": "Tenant / App" }, { "id": "custom.width", "value": 300 } ]
+                        "properties": [ { "id": "displayName", "value": "App Namespace / App" }, { "id": "custom.width", "value": 300 } ]
                     },
                     {
                         "matcher": { "id": "byName", "options": "traceService" },
@@ -172,24 +172,24 @@
         },
         { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 50, "w": 24, "h": 1 } },
         {
-            "id": 5, "type": "bargauge", "title": "Runs per tenant (15m)",
-            "description": "Every onboarded tenant as one bar - built to stay readable whether there are 3 tenants or 300. Sorted by volume.",
+            "id": 5, "type": "bargauge", "title": "Runs per app (15m)",
+            "description": "Every onboarded app as one bar - built to stay readable whether there are 3 apps or 300. Sorted by volume.",
             "gridPos": { "x": 0, "y": 51, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
-            "targets": [ { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[15m]))", "legendFormat": "{{exported_namespace}}" } ]
+            "targets": [ { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[15m]))", "legendFormat": "{{exported_namespace}}" } ]
         },
         {
             "id": 6, "type": "bargauge", "title": "Slowest tasks right now (p95, 1h)",
-            "description": "Every catalog Task's p95 duration over the last hour, across all tenants and pipelines - the bottleneck leaderboard.",
+            "description": "Every catalog Task's p95 duration over the last hour, across all apps and pipelines - the bottleneck leaderboard.",
             "gridPos": { "x": 12, "y": 51, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "s", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } },
-            "targets": [ { "expr": "topk(10, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[1h]))))", "legendFormat": "{{task}}" } ]
+            "targets": [ { "expr": "topk(10, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[1h]))))", "legendFormat": "{{task}}" } ]
         },
         { "id": 102, "type": "row", "title": "Stage funnel, last 24h", "gridPos": { "x": 0, "y": 60, "w": 24, "h": 1 } },
         {
@@ -200,7 +200,7 @@
             "options": { "displayMode": "lcd", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
-            "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))", "legendFormat": "{{pipeline}}" } ]
+            "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[24h]))", "legendFormat": "{{pipeline}}" } ]
         },
         { "id": 103, "type": "row", "title": "Controller health", "gridPos": { "x": 0, "y": 68, "w": 24, "h": 1 } },
         {

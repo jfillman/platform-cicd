@@ -8,16 +8,16 @@
 # function, not a custom filter. This is Phase 3 item 7's replacement for both the fully
 # manual "hand-copy .tekton files" onboarding process and an earlier design considered
 # (an ArgoCD-multi-source Application reading cicd.yaml live) that was rejected because
-# it would need standing ArgoCD read access to every tenant's source repo as a base
+# it would need standing ArgoCD read access to every Application's source repo as a base
 # requirement of onboarding itself - see docs/onboarding.md. Reusing PaC's own already-
 # trusted webhook auth instead means no new credential class anywhere.
 #
 # Also fires (same mechanism, same file) if the PLATFORM's own onboarding templates
-# change and this tenant's copy goes stale - see docs/cicd-yaml-reference.md's
+# change and this Application's copy goes stale - see docs/cicd-yaml-reference.md's
 # "Staleness of the platform-generated boilerplate" section, closed by this same
 # re-sync path rather than left as a separate, still-unsolved problem.
 #
-# <TENANT>, <APP_NAME>, <GITHUB_OWNER>, and (if this tenant declared a release stage)
+# <APP_NAMESPACE>, <APP_NAME>, <GITHUB_OWNER>, and (if this Application declared a release stage)
 # <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml itself when it
 # delivers this file - see that Task's own substitution loop, which includes this file
 # alongside push.yaml/pull-request.yaml.
@@ -39,7 +39,7 @@ spec:
       - { name: namespace, value: platform-catalog }
   params:
     - { name: git-url, value: "{{ repo_url }}" }
-    - { name: tenant, value: "<TENANT>" }
+    - { name: app-namespace, value: "<APP_NAMESPACE>" }
     - { name: app-name, value: "<APP_NAME>" }
     - { name: github-owner, value: "<GITHUB_OWNER>" }
     - { name: gitops-repo-url, value: "<GITOPS_REPO_URL>" }

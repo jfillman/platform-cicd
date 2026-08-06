@@ -1,7 +1,7 @@
 apiVersion: v2
 name: platform-cicd-control-plane
 description: >-
-  Everything in this platform that is not client/tenant-related and not genuinely
+  Everything in this platform that is not Application-related and not genuinely
   third-party software with its own upstream release cycle: the shared CDEvents broker
   (EventListener + TokenReview interceptor), the stalled-pipeline detector, the
   ephemeral-env PR-namespace TTL sweep, the DORA exporter, self-hosted Fulcio, the Tekton
@@ -12,7 +12,7 @@ description: >-
 
   Deliberately pinned to the `platform-system` namespace (hardcoded in every template,
   not templated to .Release.Namespace): this is a true singleton, always installed once,
-  and every tenant's RBAC (broker impersonation grants, etc.) already references
+  and every Application's RBAC (broker impersonation grants, etc.) already references
   `platform-system`'s ServiceAccounts by fixed name - making the namespace configurable
   would add a flexibility nobody needs at the cost of a real cross-chart-reference
   mismatch risk. Install with `--namespace platform-system --create-namespace`.

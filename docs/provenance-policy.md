@@ -12,7 +12,7 @@ policy engine. See `charts/platform-cicd-catalog/templates/tasks/verify-image-pr
 `ec validate image` is fundamentally an OCI-image-and-attestation validator - it has no
 mechanism to check a *git commit's* signature, that's gitsign's job and already works
 (sub-item 1). Rather than building plumbing to bridge gitsign's result into something
-Conforma could re-check, the tenant's existing `allowed-commit-signers` ConfigMap
+Conforma could re-check, the Application's existing `allowed-commit-signers` ConfigMap
 continues to drive gitsign's check unchanged, and this sub-item adds a genuinely new gate:
 does the promoted **image** have a valid signature and SLSA provenance attestation,
 conforming to policy. `policy-check` ends up with two independent, real gates, neither
@@ -136,8 +136,8 @@ at runtime via `jq`, concatenating:
   matching this item's own original framing ("try and achieve a high SLSA level"). A
   deliberate, not-the-safest choice - see "What a real run against this platform's actual
   provenance shows" below for what that surfaces.
-- **This tenant's own data**: the same `<app-name>-policy-config` ConfigMap
-  (`charts/platform-cicd-tenant/templates/governance/policy-config.yaml`) `verify-commit-signature.yaml`
+- **This Application's own data**: the same `<app-name>-policy-config` ConfigMap
+  (`charts/platform-cicd-app/templates/governance/policy-config.yaml`) `verify-commit-signature.yaml`
   already reads, turned into a JSON array and passed as `ruleData.allowed_commit_signers`
   - present and "concatenated" per the original request, unused by any current base-policy
   rule (see "Scope decision" above for why that's fine).
@@ -148,9 +148,9 @@ at runtime via `jq`, concatenating:
   this platform's "loud, not silent" precedent for trust decisions.
 - **A platform-wide `required-tasks` data file** (`sources[].data`, a directory containing
   one `data.json`) - see "Required tasks: verifying the pipeline actually ran" below for
-  the mechanism, the file-naming gotcha, and why it's platform-wide rather than per-tenant
+  the mechanism, the file-naming gotcha, and why it's platform-wide rather than per-app
   (confirmed with the user: this describes an invariant of `charts/platform-cicd-catalog/templates/pipelines/build.yaml`
-  itself, not a tenant preference).
+  itself, not an Application preference).
 
 `config.include` also explicitly adds `tasks.required_tasks_found`,
 `tasks.required_tasks_list_provided`, and `tasks.data_provided` - confirmed live these
@@ -236,8 +236,8 @@ The required list itself (`git-clone`, `validate-cicd-config`, `start-flow-root-
 is every Task that **unconditionally** runs in `build.yaml` - the three `when:`-gated
 governance-stub tasks (`sast-scan`/`image-scan`/`generate-sbom`, all resolving to the same
 `governance-gate-stub` Task CRD) are deliberately excluded, since they're legitimately
-skipped whenever a tenant's `cicd.yaml` disables that gate - including them would make
-`policy-check` fail for any tenant who's turned SAST/image-scan/SBOM off, which isn't what
+skipped whenever an Application's `cicd.yaml` disables that gate - including them would make
+`policy-check` fail for any Application that's turned SAST/image-scan/SBOM off, which isn't what
 "the pipeline actually ran" should mean.
 
 ### Derived live from the real `build` Pipeline object, not hardcoded

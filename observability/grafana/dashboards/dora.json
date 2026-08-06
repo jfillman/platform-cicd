@@ -9,10 +9,10 @@
   "templating": {
     "list": [
       {
-        "name": "tenant",
+        "name": "app_namespace",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(dora_releases_total, tenant)",
+        "query": "label_values(dora_releases_total, app_namespace)",
         "includeAll": true,
         "multi": true
       },
@@ -20,7 +20,7 @@
         "name": "app",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)",
+        "query": "label_values(dora_releases_total{app_namespace=~\"$app_namespace\"}, app)",
         "includeAll": true,
         "multi": true
       }
@@ -45,7 +45,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
       "targets": [
-        { "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[7d]))", "legendFormat": "deployments" }
+        { "expr": "sum(increase(dora_deployments_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d]))", "legendFormat": "deployments" }
       ]
     },
     {
@@ -57,7 +57,7 @@
       "fieldConfig": { "defaults": { "unit": "short" } },
       "targets": [
         {
-          "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[1d])) by (app)",
+          "expr": "sum(increase(dora_deployments_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[1d])) by (app)",
           "legendFormat": "{{app}}"
         }
       ]
@@ -71,7 +71,7 @@
       "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "blue" } } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d])) by (le))",
           "legendFormat": "p50 lead time"
         }
       ]
@@ -86,7 +86,7 @@
       "fieldConfig": { "defaults": { "unit": "s" } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[1d])) by (le, app))",
+          "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[1d])) by (le, app))",
           "legendFormat": "{{app}} p50"
         }
       ]
@@ -112,7 +112,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[7d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[7d]))",
+          "expr": "sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\",outcome=\"failed\"}[7d])) / sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d]))",
           "legendFormat": "change failure rate"
         }
       ]
@@ -126,7 +126,7 @@
       "fieldConfig": { "defaults": { "unit": "percentunit" } },
       "targets": [
         {
-          "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[7d])) by (app) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (app)",
+          "expr": "sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\",outcome=\"failed\"}[7d])) by (app) / sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d])) by (app)",
           "legendFormat": "{{app}}"
         }
       ]
@@ -140,7 +140,7 @@
       "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[30d])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[30d])) by (le))",
           "legendFormat": "p50 MTTR (experimental)"
         }
       ]
@@ -155,7 +155,7 @@
       "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le, app))",
+          "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d])) by (le, app))",
           "legendFormat": "{{app}} p50 (experimental)"
         }
       ]

@@ -39,10 +39,10 @@ per-stage drill-down the dashboard needs (see
    trace-context, the other is CDEvents' own causal-sequence correlator, and
    conflating them would make either harder to reason about or swap out independently
    later.
-3. The shared broker's Trigger for this tenant extracts all three fields via a
+3. The shared broker's Trigger for this Application extracts all three fields via a
    `TriggerBinding` and passes them as params (`flow-traceparent`, `chain-id`,
    `flow-start-time`) into the next stage's `PipelineRun` (see
-   [../charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)](../charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml))).
+   [../charts/platform-cicd-app/templates/triggers/](../charts/platform-cicd-app/templates/triggers/)).
 4. `test` (and later `deploy`/`release`) receive `flow-traceparent` as a Pipeline param
    instead of generating their own - they call `start-stage-span` with it, producing a
    span parented to the *original* flow root, reconstructing one continuous trace across

@@ -14,7 +14,8 @@
 # RBAC is a namespaced Role, not a ClusterRole - genuinely narrower than every other
 # cluster-scoped component in this platform (stalled-pipeline-detector, the TTL sweep),
 # because every Application this exporter ever needs to read lives in the single argocd
-# namespace, regardless of tenant. get/list/watch to observe status; patch is the one
+# namespace, regardless of which Application it belongs to. get/list/watch to observe
+# status; patch is the one
 # deliberate widening beyond read-only, to clear its own platform.io/dora-* tracking
 # annotations once it's reacted to them - Kubernetes RBAC can't scope patch down to
 # "annotations only", so this identity can technically modify any field on any

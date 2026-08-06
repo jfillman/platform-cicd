@@ -80,26 +80,26 @@ controller polls GitHub independently, not through a live per-call exchange like
 `open-release-pr.yaml` uses for the release stage. Rather than a new long-lived PAT,
 `pr-token-refresher-cronjob.yaml` runs every 20 minutes (comfortably inside a GitHub App
 installation token's 1-hour lifetime) as a dedicated `pr-env-token-refresher`
-ServiceAccount in the tenant's own namespace, calls the same
+ServiceAccount in the Application's own namespace, calls the same
 `/github-installation-token` endpoint built for the release stage, and writes the result
 into `<app-name>-pr-generator-token` in `argocd` - the only thing it's allowed to touch
 there (`create` unscoped since the Secret doesn't exist yet the first time, `get`/
 `update`/`patch` scoped by `resourceNames` after that).
 
-This required one real change to `token-review-interceptor`: `verifyTenantOwnsGitOpsRepo`
-only authorized a tenant to mint a token for its own `gitops-<app-name>` repo. Renamed to
-`verifyTenantOwnsRepo` and extended to also match the tenant's app repo directly (the
-generator needs to list PRs on `nodejs-demo-app` itself, not a gitops repo) - authorized
-the same way, via the tenant's own `Repository` CR, just matching the app-repo name
-directly instead of requiring the `gitops-` prefix. Verified live post-rebuild: app-repo
+This required one real change to `token-review-interceptor`: `verifyAppOwnsRepo`
+(then still named `verifyTenantOwnsGitOpsRepo`) only authorized an Application to mint a
+token for its own `gitops-<app-name>` repo. Extended to also match the Application's app
+repo directly (the generator needs to list PRs on `nodejs-demo-app` itself, not a gitops
+repo) - authorized the same way, via the Application's own `Repository` CR, just matching
+the app-repo name directly instead of requiring the `gitops-` prefix. Verified live post-rebuild: app-repo
 token request succeeds, the existing gitops-repo path still works unchanged, and a
 request for an unrelated repo still gets rejected.
 
 ## TTL backstop
 
 `pr-namespace-ttl-sweep-cronjob.yaml` is a single shared, platform-level CronJob (applied
-once, not per tenant) in `platform-system`, running every 30 minutes: lists every
-namespace labeled `platform.io/ephemeral-env=true` across all tenants and deletes any
+once, not per Application) in `platform-system`, running every 30 minutes: lists every
+namespace labeled `platform.io/ephemeral-env=true` across all Applications and deletes any
 older than `TTL_HOURS` (24) by `metadata.creationTimestamp`. This exists purely as a
 backstop to the finalizer, which is verified live above - a namespace surviving 24h
 despite that is far more likely to be something stuck than a still-legitimately-open PR,
@@ -117,10 +117,10 @@ day one here specifically so this gap can't recur.
 Verified live: Kustomize's built-in name-transformer deliberately excludes `Namespace`
 from `nameSuffix`/`namePrefix` (confirmed via `kubectl kustomize` against the base with
 just `nameSuffix` set - every other resource got suffixed, the `Namespace` didn't). Since
-`destination.namespace` (`<TENANT>-pr-{{.number}}`) is set independently in the
+`destination.namespace` (`<APP_NAMESPACE>-pr-{{.number}}`) is set independently in the
 ApplicationSet template spec, this produced a real, reproducible failure on the first
-live PR test: the `Namespace` synced as `<TENANT>-pr` (unsuffixed) while the `Deployment`/
-`Service` were targeted at `<TENANT>-pr-{{.number}}`, which never existed - sync failed
+live PR test: the `Namespace` synced as `<APP_NAMESPACE>-pr` (unsuffixed) while the `Deployment`/
+`Service` were targeted at `<APP_NAMESPACE>-pr-{{.number}}`, which never existed - sync failed
 with `namespace ... not found`, retried, never converged.
 
 Fixed with an explicit Kustomize JSON6902 `patches` entry in the ApplicationSet template,
@@ -128,11 +128,11 @@ templated the same way `nameSuffix`/`images` already are, that renames the `Name
 object directly:
 ```yaml
 patches:
-  - target: { kind: Namespace, name: <TENANT>-pr }
+  - target: { kind: Namespace, name: <APP_NAMESPACE>-pr }
     patch: |-
       - op: replace
         path: /metadata/name
-        value: <TENANT>-pr-{{.number}}
+        value: <APP_NAMESPACE>-pr-{{.number}}
 ```
 Also confirmed live that ArgoCD correctly prunes the old (wrongly-named) `Namespace` once
 the Application's tracked-resource set changes to the corrected name - the rename itself
@@ -153,7 +153,7 @@ code. (Automating this via the GitHub Packages API is possible but wasn't worth 
 `packages:write` App-permission scope and per-push API call for something that only ever
 needs to happen once per app.)
 
-## Onboarding a tenant for ephemeral environments (per app)
+## Onboarding an Application for ephemeral environments (per app)
 
 One-time setup per app, same spirit as the release stage's onboarding steps.
 
@@ -161,26 +161,26 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
    `deployment.yaml`, `service.yaml`, `kustomization.yaml`) - no PR needed unless the repo
    has branch protection configured (it doesn't currently, unlike `gitops-nodejs-demo-app`).
 
-2. **Apply the ApplicationSet + AppProject template**, with `<TENANT>`, `<APP_NAME>`,
+2. **Apply the ApplicationSet + AppProject template**, with `<APP_NAMESPACE>`, `<APP_NAME>`,
    `<APP_REPO_URL>`, `<GITHUB_OWNER>` substituted:
    ```
-   sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
+   sed -e 's#<APP_NAMESPACE>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
        -e 's#<APP_REPO_URL>#https://github.com/jfillman/nodejs-demo-app#g' \
        -e 's#<GITHUB_OWNER>#jfillman#g' \
-     charts/platform-cicd-tenant/templates/argocd/ephemeral-envs.yaml | kubectl apply -f -
+     charts/platform-cicd-app/templates/argocd/ephemeral-envs.yaml | kubectl apply -f -
    ```
-   This updates the tenant's existing `AppProject` (the same one the release stage's
+   This updates the Application's existing `AppProject` (the same one the release stage's
    staging `Application` already uses) in place - it does not create a second, competing
    `AppProject`.
 
 3. **Apply the token-refresher CronJob**, same substitutions:
    ```
-   sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
+   sed -e 's#<APP_NAMESPACE>#app-nodejs-demo-app-cicd#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
        -e 's#<GITHUB_OWNER>#jfillman#g' \
-     charts/platform-cicd-tenant/templates/argocd/ephemeral-envs.yaml | kubectl apply -f -
+     charts/platform-cicd-app/templates/argocd/ephemeral-envs.yaml | kubectl apply -f -
    ```
 
-4. **Apply the TTL sweep CronJob** - once per cluster, not per tenant:
+4. **Apply the TTL sweep CronJob** - once per cluster, not per Application:
    ```
    kubectl apply -f charts/platform-cicd-control-plane/templates/argocd/pr-namespace-ttl-sweep-cronjob.yaml
    ```
@@ -217,6 +217,6 @@ kubectl port-forward -n platform-cicd-demo-pr-<number> svc/nodejs-demo-app-<numb
   any deploy).
 - Close the PR (or remove the label) and confirm both the `Application` and the
   namespace are actually gone within the poll interval, not just `Terminating`.
-- Security check: from `platform-cicd-demo`'s SA, request a token for a repo the tenant
+- Security check: from `platform-cicd-demo`'s SA, request a token for a repo the Application
   doesn't own via `/github-installation-token` - should still be rejected (403), same as
   the release-stage check.

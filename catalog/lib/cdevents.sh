@@ -16,7 +16,7 @@
 set -euo pipefail
 
 : "${CDEVENTS_BROKER_URL:?CDEVENTS_BROKER_URL must be set (in-cluster shared EventListener address)}"
-: "${NAMESPACE:?NAMESPACE must be set (tenant namespace, injected via downward API)}"
+: "${NAMESPACE:?NAMESPACE must be set (app namespace, injected via downward API)}"
 : "${TEKTON_PIPELINE_RUN:?TEKTON_PIPELINE_RUN must be set (injected via downward API/params)}"
 
 _BROKER_TOKEN_PATH="/var/run/secrets/platform/broker-token"

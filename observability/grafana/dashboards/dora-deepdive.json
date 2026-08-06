@@ -9,10 +9,10 @@
     "refresh": "5m",
     "templating": {
         "list": [
-            { "name": "tenant", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "query": "label_values(dora_releases_total, tenant)", "includeAll": true, "multi": true },
+            { "name": "app_namespace", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total, app_namespace)", "includeAll": true, "multi": true },
             { "name": "app", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)", "includeAll": true, "multi": true }
+              "query": "label_values(dora_releases_total{app_namespace=~\"$app_namespace\"}, app)", "includeAll": true, "multi": true }
         ]
     },
     "panels": [
@@ -23,9 +23,9 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "s" } },
             "targets": [
-                { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p50" },
-                { "expr": "histogram_quantile(0.9, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p90" },
-                { "expr": "histogram_quantile(0.99, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p99" }
+                { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p50" },
+                { "expr": "histogram_quantile(0.9, sum(rate(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p90" },
+                { "expr": "histogram_quantile(0.99, sum(rate(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[3d])) by (le))", "legendFormat": "p99" }
             ]
         },
         {
@@ -33,7 +33,7 @@
             "description": "Every observation, not just a summary quantile - shows whether lead time is a tight cluster or a bimodal split (e.g. 'most PRs promote same-day, a few sit for a week').",
             "gridPos": { "x": 12, "y": 1, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "targets": [ { "expr": "sum by (le) (increase(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "format": "heatmap", "legendFormat": "{{le}}" } ],
+            "targets": [ { "expr": "sum by (le) (increase(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[1d]))", "format": "heatmap", "legendFormat": "{{le}}" } ],
             "options": { "calculate": false, "yAxis": { "unit": "s" } }
         },
         { "id": 101, "type": "row", "title": "MTTR - full percentile spread (experimental)", "gridPos": { "x": 0, "y": 10, "w": 24, "h": 1 } },
@@ -43,15 +43,15 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "purple" } } },
             "targets": [
-                { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p50 ⚠" },
-                { "expr": "histogram_quantile(0.9, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p90 ⚠" }
+                { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p50 ⚠" },
+                { "expr": "histogram_quantile(0.9, sum(rate(dora_time_to_restore_seconds_experimental_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d])) by (le))", "legendFormat": "p90 ⚠" }
             ]
         },
         {
             "id": 4, "type": "heatmap", "title": "MTTR distribution (raw buckets, experimental)",
             "gridPos": { "x": 12, "y": 11, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "targets": [ { "expr": "sum by (le) (increase(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[7d]))", "format": "heatmap", "legendFormat": "{{le}}" } ],
+            "targets": [ { "expr": "sum by (le) (increase(dora_time_to_restore_seconds_experimental_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[7d]))", "format": "heatmap", "legendFormat": "{{le}}" } ],
             "options": { "calculate": false, "yAxis": { "unit": "s" } }
         },
         { "id": 102, "type": "row", "title": "Does shipping faster correlate with more failures?", "gridPos": { "x": 0, "y": 20, "w": 24, "h": 1 } },
@@ -63,8 +63,8 @@
             "fieldConfig": { "defaults": { "unit": "short" },
                 "overrides": [ { "matcher": { "id": "byName", "options": "change failure rate" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "custom.axisPlacement", "value": "right" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] } ] },
             "targets": [
-                { "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "legendFormat": "deploys/day" },
-                { "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[1d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[1d]))", "legendFormat": "change failure rate" }
+                { "expr": "sum(increase(dora_deployments_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[1d]))", "legendFormat": "deploys/day" },
+                { "expr": "sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\",outcome=\"failed\"}[1d])) / sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[1d]))", "legendFormat": "change failure rate" }
             ]
         },
         {

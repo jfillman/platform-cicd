@@ -19,9 +19,9 @@
 #
 # Always alerts (does not check notifications.slack.enabled the way notify-slack.yaml
 # does) - a security bypass event shouldn't be silenceable via a routine notification
-# preference. Uses the same per-tenant slack-webhook-url Secret notify-slack.yaml
+# preference. Uses the same per-Application slack-webhook-url Secret notify-slack.yaml
 # already established (Phase 3 item 3) and the same design-language visual conventions
-# (docs/design-language.md), since this PipelineRun executes under the same tenant
+# (docs/design-language.md), since this PipelineRun executes under the same Application
 # namespace/ServiceAccount as every other gitops-repo governance check.
 apiVersion: tekton.dev/v1
 kind: Task
@@ -122,7 +122,7 @@ spec:
 
         WEBHOOK_URL="$(cat /var/run/secrets/slack/slack-webhook-url 2>/dev/null || true)"
         if [[ -z "${WEBHOOK_URL}" ]]; then
-          echo "warn: no slack-webhook-url secret mounted for this tenant - bypass detected but could not alert Slack (see the log line above)" >&2
+          echo "warn: no slack-webhook-url secret mounted for this Application - bypass detected but could not alert Slack (see the log line above)" >&2
           exit 0
         fi
 

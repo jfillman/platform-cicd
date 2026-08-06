@@ -1,5 +1,5 @@
-{{- if eq (include "platform-cicd-tenant.hasStage" (dict "stages" .Values.pipeline "name" "deploy")) "true" }}
-{{- $tenant := .Values.platformIdentity.tenantNamespace }}
+{{- if eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "deploy")) "true" }}
+{{- $appNamespace := include "platform-cicd-app.namespace" . }}
 {{- $envs := concat (.Values.deploy.lowerEnvironments | default list) (.Values.deploy.upperEnvironments | default list) }}
 {{- range $envs }}
 ---
@@ -7,18 +7,21 @@
 # declared deploy.lowerEnvironments/upperEnvironments entry, rendered only if cicd.yaml's
 # pipeline: declares a "deploy" stage)
 #
-# Without this, catalog/tasks/deploy-manifests.yaml's `kubectl -n <tenant>-<env> set
+# Without this, catalog/tasks/deploy-manifests.yaml's `kubectl -n <type>-<app>-<env> set
 # image ...` fails with Forbidden: pipeline-runner's Role only grants rights inside the
-# tenant's OWN namespace, which is where pipelines execute, not where the deployed app
-# lives - a namespace-scoped Role never extends into a different namespace.
+# Application's OWN namespace, which is where pipelines execute, not where the deployed
+# app lives - a namespace-scoped Role never extends into a different namespace. The
+# deploy namespace is a PEER of the app's own cicd namespace under the flat
+# <type>-<app-name>-<env> pattern (env="dev"/"staging"/etc here), not built on top of it
+# - see docs/concepts.md.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: allow-pipeline-runner-deploy
   labels:
-    {{- include "platform-cicd-tenant.labels" $ | nindent 4 }}
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "env"
-  namespace: {{ $tenant }}-{{ . }}
+  namespace: {{ include "platform-cicd-app.envNamespace" (list $ .) }}
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/status"]
@@ -29,13 +32,13 @@ kind: RoleBinding
 metadata:
   name: allow-pipeline-runner-deploy
   labels:
-    {{- include "platform-cicd-tenant.labels" $ | nindent 4 }}
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "env"
-  namespace: {{ $tenant }}-{{ . }}
+  namespace: {{ include "platform-cicd-app.envNamespace" (list $ .) }}
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pipeline-runner-deploy }
 subjects:
   - kind: ServiceAccount
     name: pipeline-runner
-    namespace: {{ $tenant }}
+    namespace: {{ $appNamespace }}
 {{- end }}
 {{- end }}

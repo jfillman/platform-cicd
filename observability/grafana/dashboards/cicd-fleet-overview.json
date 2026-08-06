@@ -1,7 +1,7 @@
 {
     "title": "CI/CD Variant 5 - Fleet Overview",
     "uid": "platform-cicd-fleet-overview",
-    "description": "One board, every tenant. Built specifically for the multi-tenant future: as more app repos get onboarded, each one gets a row here automatically (driven by label_values, no per-tenant panel edits ever needed) rather than a dashboard that only reads well for a single demo app.",
+    "description": "One board, every app. Built specifically for the many-applications future: as more app repos get onboarded, each one gets a row here automatically (driven by label_values, no per-app panel edits ever needed) rather than a dashboard that only reads well for a single demo app.",
     "tags": ["platform-cicd", "cicd-variant"],
     "schemaVersion": 39,
     "editable": true,
@@ -11,8 +11,8 @@
     "panels": [
         { "id": 100, "type": "row", "title": "Fleet at a glance", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
         {
-            "id": 1, "type": "stat", "title": "Active tenants (24h)",
-            "description": "Distinct tenant namespaces that ran at least one pipeline in the last 24h - the fleet's real current size, not a static onboarding count.",
+            "id": 1, "type": "stat", "title": "Active apps (24h)",
+            "description": "Distinct app namespaces that ran at least one pipeline in the last 24h - the fleet's real current size, not a static onboarding count.",
             "gridPos": { "x": 0, "y": 1, "w": 6, "h": 5 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
@@ -40,10 +40,10 @@
                 "thresholds": { "steps": [ { "value": 0, "color": "blue" }, { "value": 8, "color": "yellow" }, { "value": 12, "color": "red" } ] } } },
             "targets": [ { "expr": "tekton_pipelines_controller_running_pipelineruns" } ]
         },
-        { "id": 101, "type": "row", "title": "Every tenant, one board", "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 } },
+        { "id": 101, "type": "row", "title": "Every app, one board", "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 } },
         {
-            "id": 5, "type": "table", "title": "Tenant fleet board (24h)",
-            "description": "One row per tenant namespace. Runs/Failed/Success rate/p95 duration - Success rate rendered as an inline gradient-gauge bar so unhealthy tenants jump out visually without needing a separate panel per app.",
+            "id": 5, "type": "table", "title": "App fleet board (24h)",
+            "description": "One row per app namespace. Runs/Failed/Success rate/p95 duration - Success rate rendered as an inline gradient-gauge bar so unhealthy apps jump out visually without needing a separate panel per app.",
             "gridPos": { "x": 0, "y": 7, "w": 24, "h": 11 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "targets": [
@@ -56,7 +56,7 @@
                 { "id": "merge", "options": {} },
                 { "id": "organize", "options": {
                     "excludeByName": { "Time": true },
-                    "renameByName": { "exported_namespace": "Tenant", "Value #A": "Runs (24h)", "Value #B": "Failed (24h)", "Value #C": "Success rate", "Value #D": "Build p95" }
+                    "renameByName": { "exported_namespace": "App Namespace", "Value #A": "Runs (24h)", "Value #B": "Failed (24h)", "Value #C": "Success rate", "Value #D": "Build p95" }
                 } }
             ],
             "fieldConfig": { "defaults": {},
@@ -66,10 +66,10 @@
                     { "matcher": { "id": "byName", "options": "Failed (24h)" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-text" } }, { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] } } ] }
                 ] }
         },
-        { "id": 102, "type": "row", "title": "Activity by tenant over time", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 } },
+        { "id": 102, "type": "row", "title": "Activity by app over time", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 } },
         {
-            "id": 6, "type": "timeseries", "title": "Runs per hour, stacked by tenant",
-            "description": "Stacked bars so growth in fleet size (more tenants, more color bands) is as visible as growth in per-tenant volume.",
+            "id": 6, "type": "timeseries", "title": "Runs per hour, stacked by app",
+            "description": "Stacked bars so growth in fleet size (more apps, more color bands) is as visible as growth in per-app volume.",
             "gridPos": { "x": 0, "y": 19, "w": 24, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 60, "stacking": { "mode": "normal" } } } },
@@ -77,7 +77,7 @@
         },
         { "id": 103, "type": "row", "title": "Leaderboard", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
         {
-            "id": 7, "type": "bargauge", "title": "Busiest tenants (24h)",
+            "id": 7, "type": "bargauge", "title": "Busiest apps (24h)",
             "gridPos": { "x": 0, "y": 29, "w": 24, "h": 8 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },

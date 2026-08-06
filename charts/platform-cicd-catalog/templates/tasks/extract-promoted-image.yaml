@@ -1,6 +1,6 @@
 # catalog/tasks/extract-promoted-image.yaml
 #
-# Clones a tenant's gitops-repo PR head commit and reads the image reference
+# Clones an Application's gitops-repo PR head commit and reads the image reference
 # open-release-pr.yaml's yq patch put into the staging Deployment manifest - the actual
 # image about to be promoted. Used by image-scan-check.yaml (Phase 3 item 8.5); intended
 # for reuse by any future gate that needs "which image is this PR actually promoting"
@@ -21,7 +21,7 @@ metadata:
     {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
-  description: Clones a tenant's gitops-repo PR head commit and reads the promoted image reference from its staging Deployment manifest.
+  description: Clones an Application's gitops-repo PR head commit and reads the promoted image reference from its staging Deployment manifest.
   params:
     - name: repo-url
       type: string

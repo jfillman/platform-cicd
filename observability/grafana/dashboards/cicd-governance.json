@@ -1,7 +1,7 @@
 {
     "title": "CI/CD Variant 4 - Governance & Security Gates",
     "uid": "platform-cicd-governance",
-    "description": "Pass/fail health of every release-governance check (sast-check, image-scan-check, sbom-check, policy-check) plus the break-glass bypass-merge detector, broken out per tenant. Stub gates are called out explicitly - see docs/governance-stubs.md - so this dashboard never implies more confidence than the underlying check actually earns.",
+    "description": "Pass/fail health of every release-governance check (sast-check, image-scan-check, sbom-check, policy-check) plus the break-glass bypass-merge detector, broken out per app. Stub gates are called out explicitly - see docs/governance-stubs.md - so this dashboard never implies more confidence than the underlying check actually earns.",
     "tags": ["platform-cicd", "cicd-variant"],
     "schemaVersion": 39,
     "editable": true,
@@ -10,7 +10,7 @@
     "templating": {
         "list": [
             {
-                "name": "tenant",
+                "name": "app_namespace",
                 "type": "query",
                 "datasource": { "type": "prometheus", "uid": "prometheus" },
                 "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
@@ -32,7 +32,7 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.7, "color": "yellow" }, { "value": 0.9, "color": "green" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"sast-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"sast-check\"}[7d]))" } ]
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"sast-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"sast-check\"}[7d]))" } ]
         },
         {
             "id": 2, "type": "gauge", "title": "image-scan-check",
@@ -40,7 +40,7 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.7, "color": "yellow" }, { "value": 0.9, "color": "green" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"image-scan-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"image-scan-check\"}[7d]))" } ]
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"image-scan-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"image-scan-check\"}[7d]))" } ]
         },
         {
             "id": 3, "type": "gauge", "title": "sbom-check",
@@ -48,7 +48,7 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.7, "color": "yellow" }, { "value": 0.9, "color": "green" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"sbom-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"sbom-check\"}[7d]))" } ]
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"sbom-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"sbom-check\"}[7d]))" } ]
         },
         {
             "id": 4, "type": "gauge", "title": "policy-check",
@@ -56,7 +56,7 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.7, "color": "yellow" }, { "value": 0.9, "color": "green" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"policy-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"policy-check\"}[7d]))" } ]
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"policy-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"policy-check\"}[7d]))" } ]
         },
         {
             "id": 5, "type": "stat", "title": "Break-glass alerts fired (7d)",
@@ -65,7 +65,7 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short",
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=\"bypass-merge-check\"}[7d]))" } ]
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=\"bypass-merge-check\"}[7d]))" } ]
         },
         {
             "id": 6, "type": "gauge", "title": "all gates combined",
@@ -73,23 +73,23 @@
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.7, "color": "yellow" }, { "value": 0.9, "color": "green" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\"}[7d]))" } ]
+            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"success\"}[7d])) / sum(increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\"}[7d]))" } ]
         },
-        { "id": 102, "type": "row", "title": "Failures over time and by tenant", "gridPos": { "x": 0, "y": 10, "w": 24, "h": 1 } },
+        { "id": 102, "type": "row", "title": "Failures over time and by app", "gridPos": { "x": 0, "y": 10, "w": 24, "h": 1 } },
         {
             "id": 7, "type": "timeseries", "title": "Gate failures per day, by gate",
             "gridPos": { "x": 0, "y": 11, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short" } },
-            "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"failed\"}[1d]))", "legendFormat": "{{pipeline}}" } ]
+            "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"failed\"}[1d]))", "legendFormat": "{{pipeline}}" } ]
         },
         {
-            "id": 8, "type": "table", "title": "Governance status by tenant (7d)",
-            "description": "One row per tenant+gate. Sort by pass rate to find who needs help getting green.",
+            "id": 8, "type": "table", "title": "Governance status by app (7d)",
+            "description": "One row per app+gate. Sort by pass rate to find who needs help getting green.",
             "gridPos": { "x": 12, "y": 11, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "targets": [ { "expr": "sum by (exported_namespace, pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"success\"}[7d])) / sum by (exported_namespace, pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\"}[7d]))", "format": "table", "instant": true } ],
-            "transformations": [ { "id": "organize", "options": { "renameByName": { "exported_namespace": "Tenant", "pipeline": "Gate", "Value": "Pass rate" } } } ],
+            "targets": [ { "expr": "sum by (exported_namespace, pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\",status=\"success\"}[7d])) / sum by (exported_namespace, pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\",pipeline=~\"sast-check|image-scan-check|sbom-check|policy-check\"}[7d]))", "format": "table", "instant": true } ],
+            "transformations": [ { "id": "organize", "options": { "renameByName": { "exported_namespace": "App Namespace", "pipeline": "Gate", "Value": "Pass rate" } } } ],
             "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1,
                 "custom": { "cellOptions": { "type": "gauge", "mode": "gradient" } },
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 0.7, "color": "yellow" }, { "value": 0.9, "color": "green" } ] } } }
@@ -104,7 +104,7 @@
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "green" } ] } } },
             "targets": [
-                { "expr": "sum by (task, status) (increase(tekton_pipelines_controller_taskrun_duration_seconds_count{exported_namespace=~\"$tenant\",task=~\"sast-scan|image-scan|generate-sbom\"}[7d]))", "legendFormat": "{{task}} ({{status}})" }
+                { "expr": "sum by (task, status) (increase(tekton_pipelines_controller_taskrun_duration_seconds_count{exported_namespace=~\"$app_namespace\",task=~\"sast-scan|image-scan|generate-sbom\"}[7d]))", "legendFormat": "{{task}} ({{status}})" }
             ]
         }
     ]

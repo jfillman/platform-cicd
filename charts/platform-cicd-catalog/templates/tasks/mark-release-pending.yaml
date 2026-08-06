@@ -1,7 +1,8 @@
 # catalog/tasks/mark-release-pending.yaml
 #
-# Stamps tracking annotations on the tenant's own ArgoCD Application (<app-name>-staging,
-# in the argocd namespace) right after open-release-pr successfully opens a promotion PR
+# Stamps tracking annotations on the Application's own ArgoCD Application object
+# (<app-name>-staging, in the argocd namespace) right after open-release-pr successfully
+# opens a promotion PR
 # - the hand-off mechanism the DORA exporter (platform/dora-exporter) reads back to know
 # a release is in flight, and to compute Deployment Frequency / Lead Time / Change
 # Failure Rate / MTTR once ArgoCD actually confirms the sync succeeded or failed. See
@@ -17,11 +18,12 @@
 # exporter tell "the sync I'm waiting for" apart from "a sync that already finished
 # before I started waiting."
 #
-# Runs as pipeline-runner (the tenant's own SA, via the calling PipelineRun's
+# Runs as pipeline-runner (the Application's own SA, via the calling PipelineRun's
 # taskRunTemplate) - kubectl here uses the pod's normal in-cluster identity, no projected
 # broker token needed (unlike open-release-pr.yaml's GitHub call). RBAC for this is
-# scoped in platform/argocd/tenant-release-argocd-template.yaml: get+patch on exactly
-# this tenant's own <app-name>-staging Application, resourceNames-scoped, nothing else.
+# scoped in charts/platform-cicd-app/templates/argocd/release-application.yaml: get+patch
+# on exactly this Application's own <app-name>-staging Application, resourceNames-scoped,
+# nothing else.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -31,7 +33,7 @@ metadata:
     platform.io/catalog: "true"
 spec:
   params:
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -43,8 +45,8 @@ spec:
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
       env:
-        - name: TENANT
-          value: $(params.tenant)
+        - name: APP_NAMESPACE
+          value: $(params.app-namespace)
         - name: APP_NAME
           value: $(params.app-name)
         - name: FLOW_START_TIME
@@ -61,7 +63,7 @@ spec:
           platform.io/dora-pending=true \
           platform.io/dora-flow-start-time="${FLOW_START_TIME}" \
           platform.io/dora-baseline-started-at="${baseline}" \
-          platform.io/dora-tenant="${TENANT}" \
+          platform.io/dora-app-namespace="${APP_NAMESPACE}" \
           platform.io/dora-app="${APP_NAME}" \
           --overwrite
 

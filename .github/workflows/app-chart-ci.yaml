@@ -1,21 +1,21 @@
-name: tenant-chart-ci
+name: app-chart-ci
 
 # Covers the single highest-risk piece of new logic in Phase 3 item 7: conditional
-# rendering off cicd.yaml's pipeline: stage list (charts/platform-cicd-tenant/templates/
-# _helpers.tpl's platform-cicd-tenant.hasStage). This is the direct fix for a
-# live-confirmed bug (a release PipelineRun fired for a tenant whose cicd.yaml never
-# declared a release stage) - a regression here would silently reproduce that bug in a
-# new form, so every fixture below asserts both presence AND absence of the
+# rendering off cicd.yaml's pipeline: stage list (charts/platform-cicd-app/templates/
+# _helpers.tpl's platform-cicd-app.hasStage). This is the direct fix for a
+# live-confirmed bug (a release PipelineRun fired for an Application whose cicd.yaml
+# never declared a release stage) - a regression here would silently reproduce that bug
+# in a new form, so every fixture below asserts both presence AND absence of the
 # stage-gated resources, not just "did it render without error."
 
 on:
   pull_request:
     paths:
-      - "charts/platform-cicd-tenant/**"
+      - "charts/platform-cicd-app/**"
   push:
     branches: [main]
     paths:
-      - "charts/platform-cicd-tenant/**"
+      - "charts/platform-cicd-app/**"
 
 jobs:
   lint:
@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - run: helm lint charts/platform-cicd-tenant
+      - run: helm lint charts/platform-cicd-app
 
   fixture-matrix:
     runs-on: ubuntu-latest
@@ -37,8 +37,8 @@ jobs:
           mkdir -p /tmp/fixtures
           cat > /tmp/fixtures/platform-identity.yaml <<'EOF'
           platformIdentity:
-            tenantNamespace: fixture-tenant
             appName: fixture-app
+            type: app
             gitopsRepoUrl: https://github.com/fixture-org/gitops-fixture-app
             appRepoUrl: https://github.com/fixture-org/fixture-app
             githubOwner: fixture-org
@@ -73,10 +73,10 @@ jobs:
 
       - name: 'Fixture: build-only - test/deploy/release/argocd/policy resources must be ABSENT'
         run: |
-          helm template t charts/platform-cicd-tenant \
+          helm template t charts/platform-cicd-app \
             -f /tmp/fixtures/build-only.yaml -f /tmp/fixtures/platform-identity.yaml \
             > /tmp/rendered-build-only.yaml
-          python3 hack/ci/assert_tenant_render.py /tmp/rendered-build-only.yaml \
+          python3 hack/ci/assert_app_render.py /tmp/rendered-build-only.yaml \
             --absent Trigger:on-build-success Trigger:on-test-success Trigger:on-deploy-success \
             --absent AppProject ApplicationSet Application \
             --absent ConfigMap:fixture-app-policy-config \
@@ -85,20 +85,20 @@ jobs:
 
       - name: 'Fixture: build-test - only on-build-success Trigger present'
         run: |
-          helm template t charts/platform-cicd-tenant \
+          helm template t charts/platform-cicd-app \
             -f /tmp/fixtures/build-test.yaml -f /tmp/fixtures/platform-identity.yaml \
             > /tmp/rendered-build-test.yaml
-          python3 hack/ci/assert_tenant_render.py /tmp/rendered-build-test.yaml \
+          python3 hack/ci/assert_app_render.py /tmp/rendered-build-test.yaml \
             --present Trigger:on-build-success \
             --absent Trigger:on-test-success Trigger:on-deploy-success \
             --absent AppProject ApplicationSet Application
 
       - name: 'Fixture: full-pipeline - every stage-gated resource must be PRESENT, sized correctly'
         run: |
-          helm template t charts/platform-cicd-tenant \
+          helm template t charts/platform-cicd-app \
             -f /tmp/fixtures/full-pipeline.yaml -f /tmp/fixtures/platform-identity.yaml \
             > /tmp/rendered-full.yaml
-          python3 hack/ci/assert_tenant_render.py /tmp/rendered-full.yaml \
+          python3 hack/ci/assert_app_render.py /tmp/rendered-full.yaml \
             --present Trigger:on-build-success Trigger:on-test-success Trigger:on-deploy-success \
             --present AppProject Application ApplicationSet \
             --present ConfigMap:fixture-app-policy-config \

@@ -2,21 +2,24 @@
 #
 # The single shared internal broker for inter-stage chaining (build->test->deploy-
 # >release), replacing both the old platform's per-purpose EventListener split AND its
-# JWT-minting server. Discovers per-tenant Trigger CRs living in each tenant's own
-# namespace via namespaceSelector - see tenant-triggers-template.yaml - rather than one
-# EventListener pod per tenant (rejected in design review as an unnecessary ongoing
-# operational tax at "many tenants" scale; see docs/chaining.md).
+# JWT-minting server. Discovers per-Application Trigger CRs living in each Application's
+# own namespace via namespaceSelector - see
+# charts/platform-cicd-app/templates/triggers/*.yaml - rather than one EventListener pod
+# per Application (rejected in design review as an unnecessary ongoing operational tax
+# at "many Applications" scale; see docs/chaining.md).
 #
 # RBAC note: this EventListener's own ServiceAccount can only WATCH Trigger/
 # TriggerBinding/TriggerTemplate objects cluster-wide - it holds no rights to create
 # PipelineRuns anywhere itself. When a Trigger fires, Tekton Triggers creates the
 # resulting PipelineRun using THAT Trigger's own `spec.serviceAccountName` (the
-# tenant's own least-privilege SA - see tenant-triggers-template.yaml), not this
-# EventListener's identity. Tekton Triggers implements that hand-off via scoped
-# ServiceAccount impersonation: each tenant's onboarding grants this broker SA
-# `impersonate` on exactly that one named SA in that one namespace (see the RBAC block
-# in tenant-triggers-template.yaml) - a world apart from the old platform's single
-# cluster-wide `impersonate` on every ServiceAccount plus a cluster-admin binding.
+# Application's own least-privilege SA - see
+# charts/platform-cicd-app/templates/triggers/*.yaml), not this EventListener's identity.
+# Tekton Triggers implements that hand-off via scoped ServiceAccount impersonation: each
+# Application's onboarding grants this broker SA `impersonate` on exactly that one named
+# SA in that one namespace (see the RBAC block in
+# charts/platform-cicd-app/templates/identity/pipeline-runner.yaml) - a world apart from
+# the old platform's single cluster-wide `impersonate` on every ServiceAccount plus a
+# cluster-admin binding.
 # VERIFY against the pinned Tekton Triggers version in Phase 0: confirm this is still
 # the exact mechanism (vs. a token-based hand-off) before treating this comment as fact.
 apiVersion: v1

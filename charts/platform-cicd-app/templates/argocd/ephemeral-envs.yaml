@@ -1,4 +1,6 @@
 {{- if and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
+{{- $appNamespace := include "platform-cicd-app.namespace" . }}
+{{- $prBaseNamespace := include "platform-cicd-app.envNamespace" (list . "pr") }}
 # templates/argocd/ephemeral-envs.yaml (from tenant-ephemeral-envs-argocd-template.yaml -
 # rendered only if ephemeralEnvironments.pullRequest.enabled)
 #
@@ -28,7 +30,7 @@ kind: ApplicationSet
 metadata:
   name: {{ .Values.platformIdentity.appName }}-pr-envs
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
   namespace: argocd
 spec:
@@ -57,7 +59,7 @@ spec:
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
-      project: {{ .Values.platformIdentity.tenantNamespace }}
+      project: {{ $appNamespace }}
       source:
         repoURL: {{ .Values.platformIdentity.appRepoUrl }}
         targetRevision: "{{ "{{" }}.head_sha{{ "}}" }}"
@@ -70,21 +72,21 @@ spec:
           images:
             - "ghcr.io/{{ .Values.platformIdentity.githubOwner }}/{{ .Values.platformIdentity.appName }}-pr:{{ "{{" }} trunc 12 .head_sha {{ "}}" }}"
           # Kustomize's nameSuffix transformer deliberately excludes Namespace objects, so
-          # without this patch the Namespace stays "<tenant>-pr" while Deployment/Service
-          # deploy into "<tenant>-pr-{{.number}}" via destination.namespace below - a
-          # namespace that never matches, so the sync fails with "namespace ... not
-          # found". This JSON6902 patch renames the Namespace object directly.
+          # without this patch the Namespace stays "<type>-<app>-pr" while Deployment/
+          # Service deploy into "<type>-<app>-pr-{{.number}}" via destination.namespace
+          # below - a namespace that never matches, so the sync fails with "namespace ...
+          # not found". This JSON6902 patch renames the Namespace object directly.
           patches:
             - target:
                 kind: Namespace
-                name: {{ .Values.platformIdentity.tenantNamespace }}-pr
+                name: {{ $prBaseNamespace }}
               patch: |-
                 - op: replace
                   path: /metadata/name
-                  value: {{ .Values.platformIdentity.tenantNamespace }}-pr-{{ "{{" }}.number{{ "}}" }}
+                  value: {{ $prBaseNamespace }}-{{ "{{" }}.number{{ "}}" }}
       destination:
         server: https://kubernetes.default.svc
-        namespace: "{{ .Values.platformIdentity.tenantNamespace }}-pr-{{ "{{" }}.number{{ "}}" }}"
+        namespace: "{{ $prBaseNamespace }}-{{ "{{" }}.number{{ "}}" }}"
       syncPolicy:
         automated:
           prune: true
@@ -98,19 +100,19 @@ spec:
 # trust model already built for the release stage, not a new credential class. 20
 # minutes comfortably inside a GitHub App installation token's 1-hour lifetime.
 #
-# Runs as a dedicated ServiceAccount in the TENANT's own namespace (not argocd) -
+# Runs as a dedicated ServiceAccount in the APPLICATION's own namespace (not argocd) -
 # authorization for minting the token depends on the caller's own namespace owning a
-# Repository CR for this app, which only exists in the tenant namespace. A second,
-# narrowly-scoped RoleBinding in argocd grants this same identity permission to write
-# exactly one named Secret there - nothing else in argocd.
+# Repository CR for this app, which only exists in the Application's own namespace. A
+# second, narrowly-scoped RoleBinding in argocd grants this same identity permission to
+# write exactly one named Secret there - nothing else in argocd.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pr-env-token-refresher
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
-  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: {{ $appNamespace }}
 ---
 # Lets this SA write (but not read arbitrary/list) exactly one named Secret in argocd.
 # `create` can't be resourceName-scoped (the object doesn't exist yet at authorization
@@ -121,7 +123,7 @@ kind: Role
 metadata:
   name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }}
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
   namespace: argocd
 rules:
@@ -138,23 +140,23 @@ kind: RoleBinding
 metadata:
   name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }}
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
   namespace: argocd
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }} }
 subjects:
   - kind: ServiceAccount
     name: pr-env-token-refresher
-    namespace: {{ .Values.platformIdentity.tenantNamespace }}
+    namespace: {{ $appNamespace }}
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ .Values.platformIdentity.appName }}-pr-token-refresher
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
-  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: {{ $appNamespace }}
 spec:
   schedule: "*/20 * * * *"
   concurrencyPolicy: Forbid

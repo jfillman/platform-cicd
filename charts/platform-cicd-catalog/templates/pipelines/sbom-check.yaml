@@ -1,7 +1,7 @@
 # catalog/pipelines/sbom-check.yaml
 #
 # Real (not stub) SBOM governance check - Phase 3 item 8.7. Runs as a PR-triggered Check
-# on a tenant's gitops repo, generating+attesting an SBOM for the actual image about to
+# on an Application's gitops repo, generating+attesting an SBOM for the actual image about to
 # be promoted - same image-resolution mechanism as image-scan-check.yaml (they scan the
 # same artifact, just doing different things with it).
 apiVersion: tekton.dev/v1

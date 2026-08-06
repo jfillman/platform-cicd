@@ -2,19 +2,19 @@
 #
 # Best-effort pipeline-result notification. Reads notifications.slack from cicd.yaml;
 # no-ops cleanly if disabled or unconfigured. The webhook URL is resolved from a
-# per-tenant Secret, never hardcoded in catalog YAML - the old platform's hardcoded
+# per-Application Secret, never hardcoded in catalog YAML - the old platform's hardcoded
 # Testkube API keys in shared Pipeline templates are exactly the mistake this avoids.
 #
 # A real bug lived here until Phase 3 item 3: the script always read
 # /var/run/secrets/platform/slack-webhook-url, but this Task never actually declared a
-# volume/volumeMount for it - so even a tenant that fully configured
+# volume/volumeMount for it - so even an Application that fully configured
 # notifications.slack.enabled: true and created the Secret exactly as this comment
 # describes would still never get a real notification, silently swallowed by the
 # script's own graceful "no secret mounted" skip path. See docs/notifications.md for the
-# fix and the one-time-per-tenant onboarding step. The Secret volume is `optional: true`
-# deliberately - most tenants won't have this Secret at all, and the pod must still start
-# cleanly for them (matches the script's own existing graceful-skip behavior for that
-# case, not a new failure mode).
+# fix and the one-time-per-Application onboarding step. The Secret volume is
+# `optional: true` deliberately - most Applications won't have this Secret at all, and
+# the pod must still start cleanly for them (matches the script's own existing
+# graceful-skip behavior for that case, not a new failure mode).
 #
 # Message format follows docs/design-language.md (Phase 3 item 3 follow-up) - one blue
 # accent, a muted red only on failure, icons used only as a single `⚠` on failure, a
@@ -39,7 +39,7 @@ spec:
       description: succeeded, failed, or completed - typically $(tasks.status)/$(context.pipelineRun.name) from the calling Pipeline's finally block.
     - name: pipeline-run-name
       type: string
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -81,8 +81,8 @@ spec:
           mountPath: /var/run/secrets/platform
           readOnly: true
       env:
-        - name: TENANT
-          value: $(params.tenant)
+        - name: APP_NAMESPACE
+          value: $(params.app-namespace)
         - name: APP_NAME
           value: $(params.app-name)
         - name: PIPELINE_RUN_NAME
@@ -113,7 +113,7 @@ spec:
         CHANNEL="$(jq -r '.notifications.slack.channel // empty' <<< "${CFG}")"
         WEBHOOK_URL="$(cat /var/run/secrets/platform/slack-webhook-url 2>/dev/null || true)"
         if [[ -z "${WEBHOOK_URL}" ]]; then
-          echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this tenant - skipping, not failing the pipeline" >&2
+          echo "warn: notifications.slack.enabled=true but no slack-webhook-url secret is mounted for this Application - skipping, not failing the pipeline" >&2
           exit 0
         fi
 
@@ -150,7 +150,7 @@ spec:
         # same already-documented gap as everywhere else access needs port-forward. Still
         # worth linking: a dead link when nobody's forwarding costs nothing, and it's a
         # real, correct link the moment someone is.
-        DASHBOARD_URL="http://localhost:9097/#/namespaces/${TENANT}/pipelineruns/${PIPELINE_RUN_NAME}"
+        DASHBOARD_URL="http://localhost:9097/#/namespaces/${APP_NAMESPACE}/pipelineruns/${PIPELINE_RUN_NAME}"
 
         # build only - see the image-repo param's own comment for why this is derived
         # here instead of referencing build-image's result directly.
@@ -167,7 +167,7 @@ spec:
         # open-release-pr didn't succeed - no special-casing needed for that.
         pr_url=""
         if [[ "${STAGE_NAME}" == "release" ]]; then
-          pr_url="$(kubectl get taskrun -n "${TENANT}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=open-release-pr" \
+          pr_url="$(kubectl get taskrun -n "${APP_NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=open-release-pr" \
             -o jsonpath='{.items[0].status.results[?(@.name=="pr-url")].value}' 2>/dev/null || true)"
         fi
 
@@ -179,12 +179,12 @@ spec:
         failed_taskrun=""
         log_excerpt=""
         if [[ "${STATUS}" != "Succeeded" && "${STATUS}" != "Completed" ]]; then
-          failed_taskrun="$(kubectl get taskrun -n "${TENANT}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json \
+          failed_taskrun="$(kubectl get taskrun -n "${APP_NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json \
             | jq -r '[.items[] | select(.status.conditions[0].status == "False")][0].metadata.name // empty')"
           if [[ -n "${failed_taskrun}" ]]; then
-            pod_name="$(kubectl get taskrun "${failed_taskrun}" -n "${TENANT}" -o jsonpath='{.status.podName}' 2>/dev/null || true)"
+            pod_name="$(kubectl get taskrun "${failed_taskrun}" -n "${APP_NAMESPACE}" -o jsonpath='{.status.podName}' 2>/dev/null || true)"
             if [[ -n "${pod_name}" ]]; then
-              log_excerpt="$(kubectl logs "${pod_name}" -n "${TENANT}" --all-containers --tail=30 2>/dev/null | tail -c 1500 || true)"
+              log_excerpt="$(kubectl logs "${pod_name}" -n "${APP_NAMESPACE}" --all-containers --tail=30 2>/dev/null | tail -c 1500 || true)"
             fi
           fi
         fi
@@ -194,7 +194,7 @@ spec:
           --arg color "${COLOR}" \
           --arg headerText "${HEADER_TEXT}" \
           --arg app "${APP_NAME}" \
-          --arg tenant "${TENANT}" \
+          --arg appNamespace "${APP_NAMESPACE}" \
           --arg repoShort "${REPO_SHORT}" \
           --arg repoUrl "${GIT_URL}" \
           --arg shortSha "${SHORT_SHA}" \
@@ -212,7 +212,7 @@ spec:
           (
             [
               field("App"; $app),
-              field("Tenant"; $tenant),
+              field("App Namespace"; $appNamespace),
               field("Repo"; "<" + $repoUrl + "|" + $repoShort + ">"),
               field("Commit"; "<" + $commitUrl + "|" + $shortSha + ">")
             ]

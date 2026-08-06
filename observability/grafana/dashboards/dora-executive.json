@@ -9,10 +9,10 @@
     "refresh": "5m",
     "templating": {
         "list": [
-            { "name": "tenant", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "query": "label_values(dora_releases_total, tenant)", "includeAll": true, "multi": true },
+            { "name": "app_namespace", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "query": "label_values(dora_releases_total, app_namespace)", "includeAll": true, "multi": true },
             { "name": "app", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "query": "label_values(dora_releases_total{tenant=~\"$tenant\"}, app)", "includeAll": true, "multi": true }
+              "query": "label_values(dora_releases_total{app_namespace=~\"$app_namespace\"}, app)", "includeAll": true, "multi": true }
         ]
     },
     "panels": [
@@ -28,7 +28,7 @@
             "options": { "textMode": "value", "colorMode": "value", "graphMode": "none" },
             "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "displayName": "deploys / day",
                 "thresholds": { "steps": [ { "value": 0, "color": "red" }, { "value": 1, "color": "orange" }, { "value": 7, "color": "green" } ] } } },
-            "targets": [ { "expr": "sum(increase(dora_deployments_total{tenant=~\"$tenant\",app=~\"$app\"}[30d])) / 30" } ]
+            "targets": [ { "expr": "sum(increase(dora_deployments_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[30d])) / 30" } ]
         },
         {
             "id": 3, "type": "stat", "title": "How fast does a change reach production?",
@@ -37,7 +37,7 @@
             "options": { "textMode": "value", "colorMode": "value", "graphMode": "none" },
             "fieldConfig": { "defaults": { "unit": "s", "displayName": "median lead time",
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 86400, "color": "orange" }, { "value": 604800, "color": "red" } ] } } },
-            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{tenant=~\"$tenant\",app=~\"$app\"}[30d])) by (le))" } ]
+            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_lead_time_seconds_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[30d])) by (le))" } ]
         },
         {
             "id": 4, "type": "stat", "title": "How often does a release fail?",
@@ -46,7 +46,7 @@
             "options": { "textMode": "value", "colorMode": "value", "graphMode": "none" },
             "fieldConfig": { "defaults": { "unit": "percentunit", "displayName": "change failure rate",
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 0.15, "color": "orange" }, { "value": 0.3, "color": "red" } ] } } },
-            "targets": [ { "expr": "sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\",outcome=\"failed\"}[30d])) / sum(increase(dora_releases_total{tenant=~\"$tenant\",app=~\"$app\"}[30d]))" } ]
+            "targets": [ { "expr": "sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\",outcome=\"failed\"}[30d])) / sum(increase(dora_releases_total{app_namespace=~\"$app_namespace\",app=~\"$app\"}[30d]))" } ]
         },
         {
             "id": 5, "type": "stat", "title": "How fast do we recover? (experimental)",
@@ -55,7 +55,7 @@
             "options": { "textMode": "value", "colorMode": "value", "graphMode": "none" },
             "fieldConfig": { "defaults": { "unit": "s", "displayName": "median MTTR ⚠",
                 "thresholds": { "steps": [ { "value": 0, "color": "purple" }, { "value": 3600, "color": "semi-dark-purple" } ] } } },
-            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{tenant=~\"$tenant\",app=~\"$app\"}[30d])) by (le))" } ]
+            "targets": [ { "expr": "histogram_quantile(0.5, sum(rate(dora_time_to_restore_seconds_experimental_bucket{app_namespace=~\"$app_namespace\",app=~\"$app\"}[30d])) by (le))" } ]
         },
         {
             "id": 6, "type": "text", "title": "",

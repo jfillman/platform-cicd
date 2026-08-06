@@ -1,7 +1,7 @@
 # catalog/pipelines/image-scan-check.yaml
 #
 # Real (not stub) image-scan governance check - Phase 3 item 8.5. Runs as a PR-triggered
-# Check on a tenant's gitops repo, scanning the actual image about to be promoted
+# Check on an Application's gitops repo, scanning the actual image about to be promoted
 # (resolved from the staging manifest's own image field, not rebuilt or re-derived).
 #
 # No flow/stage context here - same reasoning as sast-check.yaml.

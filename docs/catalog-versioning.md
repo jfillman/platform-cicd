@@ -4,8 +4,8 @@ Before Phase 3 item 7, the shared catalog (`catalog/tasks|pipelines|stepactions`
 `charts/platform-cicd-catalog`) had zero versioning: every catalog Pipeline resolves its
 Tasks via Tekton's `resolver: cluster` by bare name against whatever happened to be
 `kubectl apply`'d into the `platform-catalog` namespace at that moment - no git tags, no
-CI, no staging, no rollback path. Given every real tenant pipeline run resolves the
-catalog live, a bad edit took effect for every tenant immediately, with no way back short
+CI, no staging, no rollback path. Given every real Application's pipeline run resolves the
+catalog live, a bad edit took effect for every Application immediately, with no way back short
 of hand-reverting and re-applying.
 
 ## What changed: the catalog is now a real Helm release
@@ -21,12 +21,12 @@ helm rollback platform-cicd-catalog 3 -n platform-catalog     # revert to a spec
 helm history platform-cicd-catalog -n platform-catalog        # see what's been deployed, when
 ```
 
-This is **Option A**: one live copy in `platform-catalog`, shared by every tenant - a
-rollback affects everyone at once, there's no per-tenant pinning. That's a real
+This is **Option A**: one live copy in `platform-catalog`, shared by every Application - a
+rollback affects everyone at once, there's no per-app pinning. That's a real
 limitation, accepted deliberately for now (see "Option B" below for the alternative and
 why it's not built yet).
 
-## Testing a change before it reaches every tenant
+## Testing a change before it reaches every Application
 
 Since the chart needs zero real templating, a **second install of the same chart into a
 second namespace** gives a genuine, live staging target with zero OCI-bundle machinery:
@@ -35,8 +35,8 @@ second namespace** gives a genuine, live staging target with zero OCI-bundle mac
 hack/promote-catalog.sh canary    # helm upgrade --install into platform-catalog-canary
 ```
 
-Point one dedicated, always-on canary tenant's `platformIdentity.catalogNamespace` (see
-the tenant chart's `values.yaml`) at `platform-catalog-canary` instead of the default
+Point one dedicated, always-on canary Application's `platformIdentity.catalogNamespace` (see
+the app chart's `values.yaml`) at `platform-catalog-canary` instead of the default
 `platform-catalog`, and run a real build→test→deploy through it. Once you're confident:
 
 ```
@@ -65,15 +65,15 @@ still works.
 Tekton's own idiomatic mechanism for exactly this problem is the **bundle resolver**
 (OCI-packaged, tag-versioned Task/Pipeline bundles) - already proven working in this
 codebase for `git-clone` via the Hub resolver, which is bundle-backed under the hood.
-It gives genuine per-tenant/per-pipeline version pinning (each `.tekton/*.yaml`
+It gives genuine per-app/per-pipeline version pinning (each `.tekton/*.yaml`
 references an explicit `bundle: ghcr.io/.../platform-catalog:v1.2.0`), and staging
 becomes as simple as a different OCI tag rather than a whole second namespace.
 
 This isn't just lower priority than Option A - it's **sequence-blocked**. Migrating every
 onboarding-template `.tekton/*.yaml`'s resolver shape (`cluster`+namespace →
-`bundle`+OCI ref) across every already-onboarded tenant is exactly the re-sync/staleness
+`bundle`+OCI ref) across every already-onboarded Application is exactly the re-sync/staleness
 problem [onboarding.md](onboarding.md#keeping-onboarding-boilerplate-in-sync) solves -
-attempting B before that mechanism existed would mean hand-editing every tenant's
+attempting B before that mechanism existed would mean hand-editing every Application's
 boilerplate again, reproducing the manual-toil problem this whole effort exists to kill.
 Now that the re-sync mechanism exists, Option B is a real, buildable next step - not
 attempted in this pass.

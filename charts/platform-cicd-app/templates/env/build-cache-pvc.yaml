@@ -4,11 +4,11 @@
 #
 # Backs build-source.yaml's build-cache volume - a real, persistent PVC, not the
 # ephemeral per-run `source` workspace every Pipeline already has. One PVC per APP, not
-# one shared PVC per tenant: build.cache.size is a per-app t-shirt-size choice, and a
-# single shared PVC can't honor two apps wanting two different sizes.
+# one shared PVC across multiple apps: build.cache.size is a per-app t-shirt-size choice,
+# and a single shared PVC can't honor two apps wanting two different sizes.
 #
-# Size resolved live via the platform-cicd-tenant.cacheSize helper - this used to be a
-# manual pre-substitution step (no templating engine existed in the tenant-resource path
+# Size resolved live via the platform-cicd-app.cacheSize helper - this used to be a
+# manual pre-substitution step (no templating engine existed in the app-resource path
 # to do the small/medium/large/xlarge -> Gi lookup live); cicd.yaml becoming this chart's
 # values.yaml is what makes a real lookup possible now.
 #
@@ -22,12 +22,12 @@ kind: PersistentVolumeClaim
 metadata:
   name: build-cache-{{ .Values.platformIdentity.appName }}
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "env"
-  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: {{ include "platform-cicd-app.namespace" . }}
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: {{ include "platform-cicd-tenant.cacheSize" (dict "size" .Values.build.cache.size) }}
+      storage: {{ include "platform-cicd-app.cacheSize" (dict "size" .Values.build.cache.size) }}
 {{- end }}

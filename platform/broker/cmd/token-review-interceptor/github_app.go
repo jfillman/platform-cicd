@@ -1,14 +1,15 @@
 // platform/broker/cmd/token-review-interceptor/github_app.go
 //
 // Mints short-lived, single-repo-scoped GitHub App installation tokens on behalf of
-// tenant pipelines - see docs/release.md and the plan's "Release Stage" section for why
-// this lives here rather than as a copy of the App's private key in every tenant
-// namespace: Kubernetes Secrets are namespace-scoped, so a tenant Task running in
-// platform-cicd-demo can't mount a Secret from pipelines-as-code's namespace, and
-// copying the key into every tenant namespace would mean a single compromised tenant
-// Task could mint tokens for every OTHER tenant's repos too. This service already holds
-// the same TokenReview trust boundary as the CDEvents broker path in main.go, so it's a
-// scope extension of an existing trusted component rather than a new one.
+// Application pipelines - see docs/release.md and the plan's "Release Stage" section for
+// why this lives here rather than as a copy of the App's private key in every
+// Application namespace: Kubernetes Secrets are namespace-scoped, so an Application's
+// Task running in platform-cicd-demo can't mount a Secret from pipelines-as-code's
+// namespace, and copying the key into every Application namespace would mean a single
+// compromised Application's Task could mint tokens for every OTHER Application's repos
+// too. This service already holds the same TokenReview trust boundary as the CDEvents
+// broker path in main.go, so it's a scope extension of an existing trusted component
+// rather than a new one.
 //
 // Standard library only for the JWT signing (RS256) - GitHub's own documented App-auth
 // recipe is a small enough amount of code that pulling in a JWT library isn't worth it,

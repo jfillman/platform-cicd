@@ -47,7 +47,7 @@
               "type": "string",
               "enum": ["small", "medium", "large", "xlarge"],
               "default": "small",
-              "description": "T-shirt size for this app's own cache PVC (small=1Gi, medium=2.5Gi, large=5Gi, xlarge=8Gi - same dictionary as the old cd-pipelines-user Helm chart's buildSpec.cacheSize). One PVC per app, not shared across a tenant's apps, specifically so this can vary per app. Chosen at onboarding time, not resizable live afterward - kind-observe's default storage class has allowVolumeExpansion: false, so changing this later means recreating the PVC (and losing its cached content), not a live resize."
+              "description": "T-shirt size for this app's own cache PVC (small=1Gi, medium=2.5Gi, large=5Gi, xlarge=8Gi - same dictionary as the old cd-pipelines-user Helm chart's buildSpec.cacheSize). One PVC per app, specifically so this can vary per app. Chosen at onboarding time, not resizable live afterward - kind-observe's default storage class has allowVolumeExpansion: false, so changing this later means recreating the PVC (and losing its cached content), not a live resize."
             }
           }
         }
@@ -146,7 +146,7 @@
             "scanResults": {
               "type": "boolean",
               "default": true,
-              "description": "Shift-left notifications from sast-scan/image-scan the moment each real scan produces a result, separate from the general build/test/deploy/release pass-fail notification above (which stays on whenever slack.enabled is true). Only takes effect when slack.enabled is also true. Defaults on (matching the pipeline's own default real-scan behavior), but a tenant that finds these too frequent/verbose can turn just this off without losing the general per-stage notifications."
+              "description": "Shift-left notifications from sast-scan/image-scan the moment each real scan produces a result, separate from the general build/test/deploy/release pass-fail notification above (which stays on whenever slack.enabled is true). Only takes effect when slack.enabled is also true. Defaults on (matching the pipeline's own default real-scan behavior), but an app that finds these too frequent/verbose can turn just this off without losing the general per-stage notifications."
             }
           }
         }

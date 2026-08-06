@@ -10,8 +10,9 @@
 #
 # - replicas: 1, resources trimmed to 100Mi/50m (matching Fulcio's own CI test's exact
 #   reduction from its production defaults of 3 replicas / 1G / 0.5 CPU each - this is a
-#   single-tenant dev/test platform, not a target for that kind of HA footprint, and the
-#   cluster is already memory-constrained - see the plan's Concrete-pieces section).
+#   single-organization dev/test platform, not a target for that kind of HA footprint,
+#   and the cluster is already memory-constrained - see the plan's Concrete-pieces
+#   section).
 # - Service type ClusterIP, not LoadBalancer - kind-observe has no LoadBalancer
 #   controller (confirmed, an already-documented gap elsewhere in this platform), and
 #   nothing outside the cluster needs to reach Fulcio anyway.

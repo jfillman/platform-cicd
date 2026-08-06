@@ -9,7 +9,7 @@
 # attestation.yaml for the full design and why re-scanning source at a fixed commit was
 # genuinely redundant (caught by the user, not something this design started with).
 #
-# No <TENANT>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
+# No <APP_NAMESPACE>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
 # from PaC's own template vars; extract-promoted-image.yaml and verify-sast-
 # attestation.yaml both clone/query in their own scratch space, no shared Pipeline
 # workspace required (unlike this file's own pre-redesign version, which needed one to

@@ -27,7 +27,7 @@ Two kinds of triggering, deliberately split by mechanism because they have genui
 
 **Git-sourced triggers (push, PR, tag, release, PR-comment ChatOps)** are owned entirely by **Pipelines-as-Code**. PaC's own GitHub App handles webhook signature validation, PR status checks, and `/retest`-style comments — this is what eliminates the old JWT server and generated-workflow-file machinery outright. PaC requires a small `.tekton/*.yaml` file physically present in each app repo; that file is **pure boilerplate**, generated once at onboarding, referencing the shared Pipeline catalog via Tekton's cluster resolver. It is not something a developer hand-writes or edits.
 
-**Inter-stage chaining (build → test → deploy → release)** is not a git event — it's "stage N finished, start stage N+1" — so PaC doesn't cover it. This stays CDEvents-decoupled (each stage's `finally` block emits a CDEvent) exactly like the old system's core idea, but the transport is redesigned: **one shared Tekton Triggers EventListener** (2–3 replicas, stateless, cheap to run at HA) instead of per-tenant pods. Authentication uses each pipeline pod's own cluster-issued, audience-bound projected ServiceAccount token, verified via a small custom `ClusterInterceptor` calling the Kubernetes TokenReview API — no custom key material, no minting server, no rotation CronJob. Each tenant gets its own `Trigger` CR (a cheap CRD object, not a pod) with `serviceAccountName` scoped to that tenant's own least-privilege namespaced SA, so the shared broker itself never creates a PipelineRun with an elevated identity — the tenant's own SA does, via a mechanism Tekton Triggers already supports natively.
+**Inter-stage chaining (build → test → deploy → release)** is not a git event — it's "stage N finished, start stage N+1" — so PaC doesn't cover it. This stays CDEvents-decoupled (each stage's `finally` block emits a CDEvent) exactly like the old system's core idea, but the transport is redesigned: **one shared Tekton Triggers EventListener** (2–3 replicas, stateless, cheap to run at HA) instead of per-app pods. Authentication uses each pipeline pod's own cluster-issued, audience-bound projected ServiceAccount token, verified via a small custom `ClusterInterceptor` calling the Kubernetes TokenReview API — no custom key material, no minting server, no rotation CronJob. Each tenant gets its own `Trigger` CR (a cheap CRD object, not a pod) with `serviceAccountName` scoped to that tenant's own least-privilege namespaced SA, so the shared broker itself never creates a PipelineRun with an elevated identity — the tenant's own SA does, via a mechanism Tekton Triggers already supports natively.
 
 **Developer-facing config** is a single human-edited file in the app's repo (`cicd.yaml`) — build agent/image, test command, deploy targets, ephemeral-env settings, notification targets — read fresh by the first Task in every pipeline run, directly from the triggering commit, and validated against a JSON Schema with fail-fast, developer-readable errors. No separate sync-to-ConfigMap subsystem, no second source of truth. For v1 this drives a **fixed superset Pipeline DAG** with `when:`-guarded stages (toggle/parameterize, not arbitrary graphs) — a full `cicd.yaml`-to-generated-Pipeline compiler is a materially heavier pattern and is explicitly out of scope until there's real evidence it's needed.
 
@@ -37,7 +37,7 @@ Two kinds of triggering, deliberately split by mechanism because they have genui
 
 **Crossplane** is used, but scoped honestly rather than because you like the tool: a `PreviewEnvironment` XRD is the flagship use — ephemeral environments legitimately want more than K8s manifests (a scoped, TTL'd resource composed alongside the namespace), which is something Crossplane does that Helm+ArgoCD structurally can't.
 
-**Update, Phase 3 item 7 (2026-08-06):** the `Application` XRD described in this doc's original draft — namespace, RBAC, `Trigger` CR, PaC `Repository`, ArgoCD `AppProject` for tenant onboarding — was superseded by three Helm charts (`charts/platform-cicd-{control-plane,catalog,tenant}`) before it was ever built, once hand-onboarding a few pilots surfaced a real, live-confirmed gap a Helm chart could close directly: `cicd.yaml`'s `pipeline:` field was schema-validated but never actually enforced (a `release` PipelineRun once fired for a tenant that never declared a release stage). This is a narrow scope decision, not a reversal of the Crossplane bet above — Crossplane remains the right tool, untouched, for the one case this doc already argued is genuinely Crossplane-justified: the `PreviewEnvironment` XRD for branch-based ephemeral environments with real cloud-resource composition. Helm only displaces Crossplane for tenant *pipeline-plumbing* onboarding (Triggers, RBAC, ArgoCD release wiring, governance config) — see [onboarding.md](onboarding.md) and [catalog-versioning.md](catalog-versioning.md). Today's onboarding is still admin-run (`helm install <tenant> ...`), not genuine self-service; an ArgoCD ApplicationSet git generator scanning a `tenants/*.yaml` directory is the named, not-yet-built path to that.
+**Update, Phase 3 item 7 (2026-08-06):** the `Application` XRD described in this doc's original draft — namespace, RBAC, `Trigger` CR, PaC `Repository`, ArgoCD `AppProject` for Application onboarding — was superseded by three Helm charts (`charts/platform-cicd-{control-plane,catalog,app}`) before it was ever built, once hand-onboarding a few pilots surfaced a real, live-confirmed gap a Helm chart could close directly: `cicd.yaml`'s `pipeline:` field was schema-validated but never actually enforced (a `release` PipelineRun once fired for an Application that never declared a release stage). This is a narrow scope decision, not a reversal of the Crossplane bet above — Crossplane remains the right tool, untouched, for the one case this doc already argued is genuinely Crossplane-justified: the `PreviewEnvironment` XRD for branch-based ephemeral environments with real cloud-resource composition. Helm only displaces Crossplane for Application *pipeline-plumbing* onboarding (Triggers, RBAC, ArgoCD release wiring, governance config) — see [onboarding.md](onboarding.md) and [catalog-versioning.md](catalog-versioning.md). Today's onboarding is still admin-run (`helm install <app-name> ...`), not genuine self-service; an ArgoCD ApplicationSet git generator scanning a `Applications/*.yaml` directory is the named, not-yet-built path to that.
 
 **Retained from the old system, largely as-is**: ArgoCD for GitOps CD; dev→prod image promotion by digest (never rebuild for prod); PR-based ephemeral environments via ArgoCD ApplicationSet's native `pullRequest` generator (it already worked well and needs no new code); External Secrets Operator, with the Azure Key Vault backend swapped for a pluggable/generic one.
 
@@ -46,7 +46,7 @@ Two kinds of triggering, deliberately split by mechanism because they have genui
 > Implementation note: the security-model claim above ("no SA impersonation, anywhere")
 > turned out to be slightly too absolute once the broker was actually built - see
 > [chaining.md](chaining.md) for the corrected, more precise version (scoped,
-> per-tenant, individually-revocable impersonation grants, vs. the old platform's single
+> per-app, individually-revocable impersonation grants, vs. the old platform's single
 > cluster-wide one). The plan's underlying intent - no cluster-admin, no broad grants -
 > held; the "zero impersonation" phrasing didn't survive contact with how Tekton
 > Triggers actually hands off to a Trigger's ServiceAccount.
@@ -57,13 +57,13 @@ Two kinds of triggering, deliberately split by mechanism because they have genui
 
 ```
 platform-cicd/
-├── catalog/                # shared Tekton catalog — the only place tenants get read access to
+├── catalog/                # shared Tekton catalog — the only place Applications get read access to
 │   ├── pipelines/           # build.yaml, test.yaml, deploy.yaml, release.yaml
 │   ├── tasks/                # build-image (kaniko), run-tests, deploy-manifests, send-cdevent, ...
 │   ├── stepactions/          # otel-span-start/end, notify-slack, governance-stub, ...
 │   └── lib/                  # bash helpers (otel.sh, cdevents.sh) baked into a shared toolbox image
 ├── platform/
-│   ├── broker/                # shared EventListener, TokenReview ClusterInterceptor, per-tenant Trigger template
+│   ├── broker/                # shared EventListener, TokenReview ClusterInterceptor, per-app Trigger template
 │   ├── dora-exporter/          # (Phase 2) CDEvents subscriber -> Prometheus metrics (Go)
 │   └── onboarding/              # (Phase 3) Crossplane XRDs/Compositions: Application, PreviewEnvironment
 ├── observability/
@@ -82,13 +82,13 @@ platform-cicd/
 **Phase 0 — Foundations** (prerequisite, not independently demonstrable)
 - Pin a NetworkPolicy-enforcing CNI (Calico or Cilium); validate Pod Security Standards `restricted` compatibility with a rootless image-build tool (kaniko, the more battle-tested rootless-in-k8s option vs. buildah-rootless) *now* — this is painful to discover mid-catalog-build.
 - Install Tekton Pipelines + Triggers + Pipelines-as-Code; register a GitHub App; install kube-prometheus-stack + Loki + Tempo + OTel Collector; install ArgoCD + External Secrets Operator with one concrete backend.
-- Scaffold the catalog repo/namespace with locked-down RBAC: tenants get cluster-resolver **read-only** access, never write.
+- Scaffold the catalog repo/namespace with locked-down RBAC: Applications get cluster-resolver **read-only** access, never write.
 - Local dev/demo target: `kind`, matching the "vanilla Kubernetes" decision.
 - **Status: scaffolded.** `hack/bootstrap.sh` automates this end to end for local `kind`; see [bootstrap.md](bootstrap.md) for what a real cluster needs on top.
 
 **Phase 1 — First demonstrable increment**
 - Minimum real chain: **build → test → deploy-to-dev** (build-only doesn't exercise chaining, which is the architecture's core bet).
-- Shared broker + TokenReview interceptor + per-tenant `Trigger` CRs, built correctly now (migrating this transport later is high-blast-radius).
+- Shared broker + TokenReview interceptor + per-app `Trigger` CRs, built correctly now (migrating this transport later is high-blast-radius).
 - `.tekton/*.yaml` boilerplate hand-generated for 2–3 pilot repos (full Crossplane self-service is a Phase 3 concern).
 - `cicd.yaml` v1 schema + fail-fast validation Task; fixed superset DAG with `when:` toggles.
 - OTel: prove root-span + `traceparent` threading **within a single PipelineRun** first, before tackling cross-PipelineRun stitching — a separable, lower-risk milestone.
@@ -103,7 +103,7 @@ platform-cicd/
 - DORA exporter + Grafana DORA panel row, MTTR visually marked experimental.
 
 **Phase 3 — Self-service onboarding + branch-based ephemeral envs + real governance**
-- Tenant onboarding, informed by however the hand-onboarded pilots actually varied - **done as three Helm charts, not a Crossplane `Application` XRD, per the Phase 3 item 7 update above.**
+- Application onboarding, informed by however the hand-onboarded pilots actually varied - **done as three Helm charts, not a Crossplane `Application` XRD, per the Phase 3 item 7 update above.**
 - Crossplane `PreviewEnvironment` XRD for branch-based ephemeral envs, including genuine cloud-resource composition (e.g. a scoped ephemeral DB per env) — the sharpest real justification for Crossplane in this design.
 - Real implementations behind the Phase-1 governance stub interfaces (SAST, policy-as-code, image scanning, Enterprise-Contract-style attestation, registry immutability), plus the upper-env PR-gated promotion workflow, ported without the old OpenShift/Istio-specific pieces.
 

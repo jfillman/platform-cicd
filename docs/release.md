@@ -22,38 +22,38 @@ deploy (dev) succeeds
      all still stubs, see docs/governance-stubs.md), each individually re-triggerable
   -> branch protection on the gitops repo requires all 4 checks + N human reviewers
   -> once merged, ArgoCD (syncPolicy.automated: prune+selfHeal) syncs the new manifest
-     into <tenant>-staging - the release Pipeline never touches the cluster directly
+     into <type>-<app-name>-staging - the release Pipeline never touches the cluster directly
 ```
 
-## How the GitHub App's private key stays out of tenant namespaces
+## How the GitHub App's private key stays out of Application namespaces
 
 The GitHub App used for git operations (clone/push/PR-open) is the same App PaC already
 uses - but its private key lives in a Secret in the `pipelines-as-code` namespace, which
-a tenant pipeline pod (running in its own tenant namespace) can't mount directly
-(Kubernetes Secrets are namespace-scoped). Rather than copy the key into every tenant
-namespace (which would let one compromised tenant Task mint tokens for every other
-tenant's repos), the shared `token-review-interceptor` service - already deployed,
-already TokenReview-authenticated for the CDEvents broker path - has a second endpoint,
-`/github-installation-token`, that:
+an Application pipeline pod (running in its own namespace) can't mount directly
+(Kubernetes Secrets are namespace-scoped). Rather than copy the key into every
+Application's namespace (which would let one compromised Application's Task mint tokens
+for every other Application's repos), the shared `token-review-interceptor` service -
+already deployed, already TokenReview-authenticated for the CDEvents broker path - has a
+second endpoint, `/github-installation-token`, that:
 
-1. Verifies the caller's own tenant identity via TokenReview (same mechanism as the
+1. Verifies the caller's own Application identity via TokenReview (same mechanism as the
    broker path).
-2. Checks the caller's tenant namespace actually owns a PaC `Repository` CR that maps
-   to the requested `gitops-<app-name>` repo by name - so a tenant can only ever get a
-   token for its own release repo, never another tenant's.
+2. Checks the caller's Application namespace actually owns a PaC `Repository` CR that maps
+   to the requested `gitops-<app-name>` repo by name - so an Application can only ever get a
+   token for its own release repo, never another Application's.
 3. Mints a GitHub App installation token scoped to **only that one repo** (via GitHub's
    `repositories` field on the installation-token exchange) and returns it. The
    private key itself never leaves `platform-system`.
 
 `catalog/lib/github-app.sh` wraps this call for `open-release-pr.yaml`.
 
-## Onboarding a tenant's release stage (per app)
+## Onboarding an Application's release stage (per app)
 
 This is all one-time setup per app, same spirit as onboarding the app repo itself (see
 `docs/onboarding.md`) - not something a developer does per release.
 
 1. **Copy the GitHub App credentials** into `platform-system`, once per cluster, not
-   per tenant (skip if already done):
+   per Application (skip if already done):
    ```
    kubectl get secret pipelines-as-code-secret -n pipelines-as-code -o json \
      | jq '{apiVersion, kind, type, data: {"github-application-id": .data["github-application-id"], "github-private-key": .data["github-private-key"]}, metadata: {name: "github-app-creds", namespace: "platform-system"}}' \
@@ -65,9 +65,9 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    dev manifests), and the four governance-check files from
    `onboarding-templates/.tekton-gitops/` into the new repo's `.tekton/` directory -
    `pull-request-sast.yaml`/`-image-scan.yaml`/`-sbom.yaml` are fully generic as-is;
-   `pull-request-policy-check.yaml` needs `<TENANT>`/`<APP_NAME>` substituted:
+   `pull-request-policy-check.yaml` needs `<APP_NAMESPACE>`/`<APP_NAME>` substituted:
    ```
-   sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
+   sed -e 's#<APP_NAMESPACE>#app-nodejs-demo-app-cicd#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
      onboarding-templates/.tekton-gitops/pull-request-policy-check.yaml \
      > <path-to-gitops-repo>/.tekton/pull-request-policy-check.yaml
    ```
@@ -77,7 +77,7 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    (webhook delivery, checks) may not already include these, since this App is now also
    doing git operations, not just receiving webhooks.
 
-4. **Apply a PaC `Repository` CR** for the new repo, in the tenant's own namespace
+4. **Apply a PaC `Repository` CR** for the new repo, in the Application's own namespace
    (same pattern as the app repo's own Repository CR):
    ```
    kubectl apply -f - <<EOF
@@ -91,12 +91,12 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    EOF
    ```
 
-5. **Apply the ArgoCD template**, with `<TENANT>`, `<APP_NAME>`, `<GITOPS_REPO_URL>`
+5. **Apply the ArgoCD template**, with `<APP_NAMESPACE>`, `<APP_NAME>`, `<GITOPS_REPO_URL>`
    substituted:
    ```
-   sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
+   sed -e 's#<APP_NAMESPACE>#app-nodejs-demo-app-cicd#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
        -e 's#<GITOPS_REPO_URL>#https://github.com/<org>/gitops-nodejs-demo-app#g' \
-     charts/platform-cicd-tenant/templates/argocd/release-application.yaml | kubectl apply -f -
+     charts/platform-cicd-app/templates/argocd/release-application.yaml | kubectl apply -f -
    ```
 
 6. **Configure branch protection** on the gitops repo's `main` branch (GitHub UI or
@@ -164,7 +164,7 @@ failing required check, and how it's made visible.
   4 governance checks should show up **independently** in the PR's checks list (each
   individually re-runnable, e.g. via `/retest sast` PR comment).
 - Security check: confirm `/github-installation-token` genuinely rejects a request for
-  a repo the caller's tenant doesn't own (test from `platform-cicd-demo`'s SA
+  a repo the caller's Application doesn't own (test from `platform-cicd-demo`'s SA
   requesting a different, unrelated `gitops-*` repo name - should get a 403).
 - After merge: `kubectl get application nodejs-demo-app-staging -n argocd` shows
   `Synced`/`Healthy`, and the running pod in `platform-cicd-demo-staging` is on the new

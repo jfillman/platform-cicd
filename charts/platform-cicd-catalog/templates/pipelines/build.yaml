@@ -20,7 +20,7 @@ spec:
       type: string
     - name: image-repo
       type: string
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
@@ -123,7 +123,7 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     - name: resolve-agent-image
@@ -199,7 +199,7 @@ spec:
     # prior test push the image, since nothing downstream depended on it). When sast is
     # disabled in cicd.yaml, sast-scan's when: clause skips it, which Tekton treats as
     # satisfied for this runAfter - build-image proceeds exactly as before, no behavior
-    # change for tenants who haven't enabled it.
+    # change for Applications that haven't enabled it.
     - name: build-image
       runAfter: [build-source, unit-test, sast-scan, start-build-stage-span]
       taskRef:
@@ -317,7 +317,7 @@ spec:
         - { name: stage-name, value: build }
         - { name: status, value: $(tasks.status) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
-        - { name: tenant, value: $(params.tenant) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
@@ -339,7 +339,7 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
     # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
@@ -360,6 +360,6 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
-        - { name: namespace, value: $(params.tenant) }
+        - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
         - { name: tekton-status, value: $(tasks.status) }

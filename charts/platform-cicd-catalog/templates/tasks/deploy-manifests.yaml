@@ -5,8 +5,8 @@
 # sync flow. Phase 2/3 replaces this with a real GitOps write (patch a GitOps repo,
 # let ArgoCD reconcile/promote) once upper-environment promotion is in scope - see the
 # plan's Phase 3 item "upper-env PR-gated promotion workflow". Lower/dev environments
-# in Phase 1 are expected to already exist (created at tenant onboarding), not created
-# by this Task.
+# in Phase 1 are expected to already exist (created at Application onboarding), not
+# created by this Task.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -20,10 +20,15 @@ spec:
       type: string
     - name: env
       type: string
-      description: Target environment name, e.g. dev. Maps to namespace <tenant>-<env>.
-    - name: tenant
-      type: string
+      description: >-
+        Target environment name, e.g. dev. Maps to namespace <app-type>-<app-name>-<env>
+        - a PEER of the app-namespace (<app-type>-<app-name>-cicd) under the platform's
+        flat <type>-<app-name>-<env> namespace pattern, not a suffix built on top of it
+        (deploy namespaces have nothing to do with "cicd" conceptually - see
+        docs/concepts.md).
     - name: app-name
+      type: string
+    - name: app-type
       type: string
   steps:
     - name: apply-and-wait
@@ -32,7 +37,7 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        NAMESPACE="$(params.tenant)-$(params.env)"
+        NAMESPACE="$(params.app-type)-$(params.app-name)-$(params.env)"
         kubectl -n "${NAMESPACE}" set image \
           "deployment/$(params.app-name)" \
           "$(params.app-name)=$(params.image-ref)" \

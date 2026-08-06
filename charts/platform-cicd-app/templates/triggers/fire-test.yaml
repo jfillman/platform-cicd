@@ -1,38 +1,34 @@
-{{- if eq (include "platform-cicd-tenant.hasStage" (dict "stages" .Values.pipeline "name" "release")) "true" }}
-# templates/triggers/fire-release.yaml (from tenant-triggers-template.yaml's Stage 4 -
-# rendered only if cicd.yaml's pipeline: declares a "release" stage - this is the exact
-# case that was live-confirmed broken: a release PipelineRun fired for a tenant whose
-# cicd.yaml never declared this stage, because nothing previously read pipeline: at all)
-#
-# No outcome field to check in the CEL filter below (unlike on-test-success) - deploy's
-# send-cdevent task is itself gated on $(tasks.status) being Succeeded/Completed before
-# it ever fires, so the event's mere existence already implies success.
+{{- if eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "test")) "true" }}
+{{- $appNamespace := include "platform-cicd-app.namespace" . }}
+# templates/triggers/fire-test.yaml (from tenant-triggers-template.yaml's Stage 2 -
+# rendered only if cicd.yaml's pipeline: declares a "test" stage - the direct fix for
+# the enforcement gap: this used to always exist regardless of what cicd.yaml said)
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
 metadata:
-  name: cdevents-service-deployed
+  name: cdevents-artifact-published
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "triggers"
-  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: {{ $appNamespace }}
 spec:
   params:
-    - { name: image-ref, value: "$(body.subject.content.artifactId)" }
+    - { name: image-ref, value: "$(body.subject.content.image)" }
     - { name: git-url, value: "$(body.subject.content.git-url)" }
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
     - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
-    - { name: pipeline-run-name, value: "release-$(body.context.id)" }
+    - { name: pipeline-run-name, value: "test-$(body.context.id)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
 metadata:
-  name: fire-release
+  name: fire-test
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "triggers"
-  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: {{ $appNamespace }}
 spec:
   params:
     - name: image-ref
@@ -46,19 +42,22 @@ spec:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
       metadata:
-        name: $(tt.params.pipeline-run-name)
+        name: $(tt.params.pipeline-run-name) # deterministic - see cdevents.sh idempotency note
       spec:
         pipelineRef:
           resolver: cluster
           params:
             - { name: kind, value: pipeline }
-            - { name: name, value: release }
+            - { name: name, value: test }
             - { name: namespace, value: {{ .Values.platformIdentity.catalogNamespace }} }
         params:
+          # git-url comes from the CDEvent, carried forward from build's own git-url
+          # param - NOT reconstructed from app-namespace/app-name, which aren't
+          # necessarily the actual GitHub org/repo.
           - { name: git-url, value: $(tt.params.git-url) }
           - { name: git-revision, value: $(tt.params.git-revision) }
           - { name: image-ref, value: $(tt.params.image-ref) }
-          - { name: tenant, value: {{ .Values.platformIdentity.tenantNamespace }} }
+          - { name: app-namespace, value: {{ $appNamespace }} }
           - { name: app-name, value: {{ .Values.platformIdentity.appName }} }
           - { name: flow-traceparent, value: $(tt.params.traceparent) }
           - { name: chain-id, value: $(tt.params.chain-id) }
@@ -72,11 +71,11 @@ spec:
 apiVersion: triggers.tekton.dev/v1beta1
 kind: Trigger
 metadata:
-  name: on-deploy-success
+  name: on-build-success
   labels:
-    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "triggers"
-  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: {{ $appNamespace }}
 spec:
   serviceAccountName: pipeline-runner
   interceptors:
@@ -86,11 +85,11 @@ spec:
       params:
         - name: filter
           value: >-
-            body.context.type == 'dev.cdevents.service.deployed.0.3.0' &&
-            extensions.tenant_namespace == '{{ .Values.platformIdentity.tenantNamespace }}' &&
-            body.context.source.startsWith('/platform-cicd/{{ .Values.platformIdentity.tenantNamespace }}/')
+            body.context.type == 'dev.cdevents.artifact.published.0.3.0' &&
+            extensions.app_namespace == '{{ $appNamespace }}' &&
+            body.context.source.startsWith('/platform-cicd/{{ $appNamespace }}/')
   bindings:
-    - { ref: cdevents-service-deployed }
+    - { ref: cdevents-artifact-published }
   template:
-    ref: fire-release
+    ref: fire-test
 {{- end }}

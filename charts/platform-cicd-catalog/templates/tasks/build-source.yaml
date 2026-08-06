@@ -28,10 +28,10 @@ spec:
   workspaces:
     - name: source
   # build-cache: persistent, per-APP dependency-download cache (Phase 3 item 8.3) - a
-  # real PVC (platform/broker/manifests/app-build-cache-pvc-template.yaml), one per app
-  # (not shared across a tenant's apps - cicd.yaml's build.cache.size is a per-app
-  # t-shirt choice, and one shared PVC can't honor two different apps wanting two
-  # different sizes). claimName is param-substituted per-app below, not a fixed
+  # real PVC (charts/platform-cicd-app/templates/env/build-cache-pvc.yaml), one per
+  # Application (cicd.yaml's build.cache.size is a per-app t-shirt choice, and one shared
+  # PVC can't honor two different apps wanting two different sizes). claimName is
+  # param-substituted per-app below, not a fixed
   # string - Tekton allows $(params.*) substitution in volume claimNames (unlike the
   # narrower step-result substitution restriction hit elsewhere in this file).
   #

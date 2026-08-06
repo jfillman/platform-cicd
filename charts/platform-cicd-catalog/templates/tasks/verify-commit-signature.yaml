@@ -28,11 +28,11 @@ spec:
     - name: revision
       type: string
       description: The gitops PR's head commit - PaC's `revision`.
-    - name: tenant
+    - name: app-namespace
       type: string
     - name: app-name
       type: string
-      description: Used to find <app-name>-policy-config in this tenant's own namespace (platform/governance/tenant-policy-config-template.yaml).
+      description: Used to find <app-name>-policy-config in this Application's own namespace (charts/platform-cicd-app/templates/governance/policy-config.yaml).
   steps:
     - name: verify
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -42,8 +42,8 @@ spec:
           value: $(params.repo-url)
         - name: REVISION
           value: $(params.revision)
-        - name: TENANT
-          value: $(params.tenant)
+        - name: APP_NAMESPACE
+          value: $(params.app-namespace)
         - name: APP_NAME
           value: $(params.app-name)
       script: |
@@ -76,21 +76,22 @@ spec:
         git init --quiet
         git fetch --quiet --depth 1 "${app_repo}" "${app_commit}"
 
-        # Tenant's allowed-signers list - plain emails, one per line, comments/blanks
+        # Application's allowed-signers list - plain emails, one per line, comments/blanks
         # ignored - turned into the --certificate-identity-regexp gitsign needs right
         # here, not hand-built into the ConfigMap as pre-made regex (see
-        # tenant-policy-config-template.yaml). "." and "+" are escaped in each email
+        # charts/platform-cicd-app/templates/governance/policy-config.yaml). "." and "+"
+        # are escaped in each email
         # since both are regex metachars - "+" matters in practice, not just in theory:
         # GitHub's own private/noreply address format is "<id>+<username>@users.noreply.
         # github.com", so an unescaped "+" there would silently turn into a quantifier
         # and fail to match its own literal string - a real bug this hit live, not a
         # hypothetical.
-        allowed_emails="$(kubectl get configmap "${APP_NAME}-policy-config" -n "${TENANT}" \
+        allowed_emails="$(kubectl get configmap "${APP_NAME}-policy-config" -n "${APP_NAMESPACE}" \
           -o jsonpath='{.data.allowed-commit-signers}' \
           | grep -vE '^\s*(#.*)?$' | sed -E 's/^\s+|\s+$//g')"
 
         if [[ -z "${allowed_emails}" ]]; then
-          echo "FAIL: ${APP_NAME}-policy-config in ${TENANT} has no allowed-commit-signers entries - refusing to verify against an empty allowlist" >&2
+          echo "FAIL: ${APP_NAME}-policy-config in ${APP_NAMESPACE} has no allowed-commit-signers entries - refusing to verify against an empty allowlist" >&2
           exit 1
         fi
 

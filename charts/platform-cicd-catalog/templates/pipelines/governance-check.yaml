@@ -1,7 +1,7 @@
 # catalog/pipelines/governance-check.yaml
 #
-# Minimal single-task Pipeline wrapping governance-gate-stub, referenced from a tenant's
-# GitOps repo's own .tekton/pull_request-*.yaml files (one file per gate: sast,
+# Minimal single-task Pipeline wrapping governance-gate-stub, referenced from an
+# Application's GitOps repo's own .tekton/pull_request-*.yaml files (one file per gate: sast,
 # image-scan, policy-check, sbom - see docs/release.md) so PaC reports each as its own
 # independently-required, independently-re-triggerable GitHub Check (confirmed live:
 # each matching .tekton/*.yaml file gets its own Check, keyed by the PipelineRun/file,
