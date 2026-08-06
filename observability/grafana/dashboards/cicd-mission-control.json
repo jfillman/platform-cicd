@@ -132,18 +132,11 @@
             "datasource": { "type": "tempo", "uid": "tempo" },
             "targets": [ { "refId": "A", "query": "$traceId", "queryType": "traceql", "limit": 20, "tableType": "traces", "metricsQueryType": "range", "filters": [ { "id": "1", "operator": "=", "scope": "span", "tag": "" } ], "serviceMapQuery": "", "serviceMapUseNativeHistograms": false } ]
         },
-        {
-            "id": 22, "type": "traces", "title": "DEBUG - hardcoded trace ID, no variable (delete once diagnosed)",
-            "description": "Diagnostic only: same trace ID as the panel above, but typed directly into the query with no $traceId variable involved at all. If THIS panel also shows no data, the bug is in the traces panel/Tempo query itself, not variable interpolation. If THIS one works and the panel above doesn't, it confirms the bug is specifically in how the variable's value reaches the query.",
-            "gridPos": { "x": 0, "y": 30, "w": 24, "h": 11 },
-            "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "refId": "A", "query": "a2d4ac5979f7d1030b7a27a136668782", "queryType": "traceql", "limit": 20, "tableType": "traces", "metricsQueryType": "range", "filters": [ { "id": "1", "operator": "=", "scope": "span", "tag": "" } ], "serviceMapQuery": "", "serviceMapUseNativeHistograms": false } ]
-        },
-        { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 41, "w": 24, "h": 1 } },
+        { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 } },
         {
             "id": 5, "type": "bargauge", "title": "Runs per tenant (15m)",
             "description": "Every onboarded tenant as one bar - built to stay readable whether there are 3 tenants or 300. Sorted by volume.",
-            "gridPos": { "x": 0, "y": 42, "w": 12, "h": 9 },
+            "gridPos": { "x": 0, "y": 31, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
@@ -153,42 +146,42 @@
         {
             "id": 6, "type": "bargauge", "title": "Slowest tasks right now (p95, 1h)",
             "description": "Every catalog Task's p95 duration over the last hour, across all tenants and pipelines - the bottleneck leaderboard.",
-            "gridPos": { "x": 12, "y": 42, "w": 12, "h": 9 },
+            "gridPos": { "x": 12, "y": 31, "w": 12, "h": 9 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "s", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } },
             "targets": [ { "expr": "topk(10, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$tenant\"}[1h]))))", "legendFormat": "{{task}}" } ]
         },
-        { "id": 102, "type": "row", "title": "Stage funnel, last 24h", "gridPos": { "x": 0, "y": 51, "w": 24, "h": 1 } },
+        { "id": 102, "type": "row", "title": "Stage funnel, last 24h", "gridPos": { "x": 0, "y": 40, "w": 24, "h": 1 } },
         {
             "id": 7, "type": "bargauge", "title": "Runs by stage (24h)",
             "description": "Volume through each stage of the fixed superset DAG plus the release-governance checks. A big drop between adjacent stages is worth investigating (either real attrition or a stalled chain - see the stalled-pipeline detector).",
-            "gridPos": { "x": 0, "y": 52, "w": 24, "h": 7 },
+            "gridPos": { "x": 0, "y": 41, "w": 24, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "options": { "displayMode": "lcd", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
             "fieldConfig": { "defaults": { "unit": "short", "min": 0,
                 "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
             "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$tenant\"}[24h]))", "legendFormat": "{{pipeline}}" } ]
         },
-        { "id": 103, "type": "row", "title": "Controller health", "gridPos": { "x": 0, "y": 59, "w": 24, "h": 1 } },
+        { "id": 103, "type": "row", "title": "Controller health", "gridPos": { "x": 0, "y": 48, "w": 24, "h": 1 } },
         {
             "id": 9, "type": "timeseries", "title": "Reconcile p99 latency by reconciler",
-            "gridPos": { "x": 0, "y": 60, "w": 8, "h": 7 },
+            "gridPos": { "x": 0, "y": 49, "w": 8, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "s" } },
             "targets": [ { "expr": "histogram_quantile(0.99, sum by (le, reconciler) (rate(tekton_pipelines_controller_reconcile_latency_bucket[5m])))", "legendFormat": "{{reconciler}}" } ]
         },
         {
             "id": 10, "type": "timeseries", "title": "Workqueue depth over time",
-            "gridPos": { "x": 8, "y": 60, "w": 8, "h": 7 },
+            "gridPos": { "x": 8, "y": 49, "w": 8, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short" } },
             "targets": [ { "expr": "sum by (name) (tekton_pipelines_controller_workqueue_depth)", "legendFormat": "{{name}}" } ]
         },
         {
             "id": 11, "type": "timeseries", "title": "Running PipelineRuns / TaskRuns over time",
-            "gridPos": { "x": 16, "y": 60, "w": 8, "h": 7 },
+            "gridPos": { "x": 16, "y": 49, "w": 8, "h": 7 },
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "fieldConfig": { "defaults": { "unit": "short" } },
             "targets": [
