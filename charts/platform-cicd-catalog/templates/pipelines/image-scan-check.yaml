@@ -10,6 +10,7 @@ kind: Pipeline
 metadata:
   name: image-scan-check
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Resolves the promoted image from a gitops PR's staging manifest, then runs a real Trivy scan against it.

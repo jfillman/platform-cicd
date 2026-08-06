@@ -18,7 +18,9 @@ kind: Pipeline
 metadata:
   name: governance-check
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
+    platform.io/stub: "true"
 spec:
   params:
     - name: gate-name

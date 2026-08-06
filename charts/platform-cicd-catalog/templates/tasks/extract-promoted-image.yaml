@@ -18,6 +18,7 @@ kind: Task
 metadata:
   name: extract-promoted-image
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Clones a tenant's gitops-repo PR head commit and reads the promoted image reference from its staging Deployment manifest.

@@ -127,11 +127,66 @@ Short, no trailing dash, matching the concept the file represents (`sast`,
 - Docs: kebab-case, descriptive noun-phrase (`catalog-versioning.md`,
   `secrets-management.md`) - already consistent.
 
-## Labels
+## Labels and annotations
 
-`platform.io/*` is this platform's own label namespace - already established
-(`platform.io/catalog`, `platform.io/dora-track`, `platform.io/stall-alerted`,
-`platform.io/ephemeral-env`). Use it for anything new that needs to be selectable/
-filterable, to avoid colliding with another tool's labels on a shared resource type
-(e.g. ArgoCD `Application`s, where `podinfo-demo-app` and other non-platform
-Applications already coexist in the same `argocd` namespace).
+`platform.io/*` is this platform's own label namespace. As of this pass, every resource
+across all three charts (116 total: 43 catalog, 38 control-plane, 35 in a full-fixture
+tenant render) carries a full, consistent label set via a per-chart `<chart>.labels`
+named template (`templates/_helpers.tpl`) - not just the handful of resources that
+happened to need a label for a real selector before now.
+
+**Standard Kubernetes-recommended labels** (`app.kubernetes.io/*` + `helm.sh/chart`) -
+generic tooling interop (kubectl, Lens, ArgoCD's own resource tree), not platform-
+specific:
+
+```yaml
+app.kubernetes.io/name: <chart name>
+app.kubernetes.io/instance: <helm release name>
+app.kubernetes.io/version: <Chart.yaml appVersion>
+app.kubernetes.io/managed-by: Helm
+app.kubernetes.io/part-of: platform-cicd
+helm.sh/chart: <chart name>-<chart version>
+```
+
+**`platform.io/component`**: `catalog` | `control-plane` | `tenant` - which of the three
+charts owns this resource. The single most useful selector for a cross-cutting audit,
+e.g. `kubectl get role -A -l platform.io/component=tenant`.
+
+**`platform.io/subcomponent`**: which concern *within* that chart - matches the template
+subdirectory a resource's file lives in (`identity`, `triggers`, `env`, `argocd`,
+`governance`, `broker`, `dora-exporter`, `sigstore`, `hooks`, `secretstore`). Lets you
+narrow `platform.io/component=control-plane` down to just
+`platform.io/subcomponent=sigstore`, for example.
+
+**`platform.io/tenant` / `platform.io/app`** (tenant chart only, on every resource it
+creates): most valuable on the resources that live in a *shared* namespace with other
+tenants' resources (`argocd`'s AppProjects/Applications/ApplicationSets/Roles) - lets you
+`kubectl get application -n argocd -l platform.io/tenant=app-nodejs-demo-app-cicd`
+instead of relying on name-pattern matching. Applied to every tenant-chart resource, not
+just the shared-namespace ones, for consistency.
+
+**`platform.io/stub`**: `"true"` on catalog resources that are still genuinely stub
+implementations - currently `governance-gate-stub` (Task), `governance-stub`
+(StepAction), `governance-check` (Pipeline, though live-confirmed unreferenced by any
+current onboarding trigger - a real, minor dead-code finding, not acted on here).
+Reinforces this platform's existing "stub-ness must be structurally loud" principle
+(previously only visible in trace span attributes and docs) at the resource-selection
+level too: `kubectl get task -n platform-catalog -l platform.io/stub=true` now answers
+"which catalog gates are still fake" directly.
+
+**Pre-existing `platform.io/*` labels/annotations** (kept exactly as-is, already
+consistent with this scheme): `platform.io/catalog: "true"` (catalog-resolvable
+resources), `platform.io/dora-track: "true"` (Applications the DORA exporter watches),
+`platform.io/dora-pending`/`-tenant`/`-app`/`-flow-start-time`/`-baseline-started-at`
+(DORA tracking state annotations on Applications), `platform.io/stall-alerted` (dedup
+marker), `platform.io/ephemeral-env` (PR-namespace TTL sweep target marker),
+`platform.io/purpose` (free-text annotation, currently only on the ClusterSecretStore's
+source namespace).
+
+A real bug found and fixed while applying this broadly: two pre-existing resources
+(`fulcio-server`'s Deployment, `dora-exporter`'s Service) already had their own
+`metadata.labels` block for an unrelated reason (a plain `app: <name>` selector label) -
+naively inserting a second `labels:` key produced invalid/duplicate-key YAML rather than
+merging. Fixed by merging into one block in both cases; swept the whole of `charts/` for
+the same class of bug afterward (both block-style and flow-style `labels: { ... }`) and
+confirmed zero remaining occurrences before considering this done.

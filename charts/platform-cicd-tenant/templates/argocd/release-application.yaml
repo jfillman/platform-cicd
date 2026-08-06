@@ -5,6 +5,9 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Values.platformIdentity.tenantNamespace }}-staging
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
 ---
 # No pipeline-runner RBAC needed in this namespace, unlike <tenant>-<env> for dev - the
 # release Pipeline never touches the cluster directly for this tier, only ArgoCD's own
@@ -20,6 +23,8 @@ metadata:
   name: {{ .Values.platformIdentity.appName }}-staging
   namespace: argocd
   labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
     platform.io/dora-track: "true"
 spec:
   project: {{ .Values.platformIdentity.tenantNamespace }}
@@ -44,6 +49,9 @@ kind: Role
 metadata:
   name: allow-dora-tracking-{{ .Values.platformIdentity.appName }}
   namespace: argocd
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
@@ -55,6 +63,9 @@ kind: RoleBinding
 metadata:
   name: allow-dora-tracking-{{ .Values.platformIdentity.appName }}
   namespace: argocd
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-dora-tracking-{{ .Values.platformIdentity.appName }} }
 subjects:
   - kind: ServiceAccount

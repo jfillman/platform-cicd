@@ -10,9 +10,10 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: dora-exporter
-  namespace: platform-system
   labels:
-    app.kubernetes.io/part-of: platform-cicd
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
+  namespace: platform-system
 spec:
   selector:
     matchLabels: { app: dora-exporter }

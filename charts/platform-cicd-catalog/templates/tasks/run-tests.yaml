@@ -8,6 +8,7 @@ kind: Task
 metadata:
   name: run-tests
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   workspaces:

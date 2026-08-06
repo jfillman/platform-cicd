@@ -34,6 +34,7 @@ kind: Task
 metadata:
   name: sast-scan
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Runs Semgrep (p/ci ruleset) against the source workspace; fails closed on real findings.

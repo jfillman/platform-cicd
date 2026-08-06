@@ -26,6 +26,7 @@ kind: Task
 metadata:
   name: build-image
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Resolves the Dockerfile path + image tag, then builds+pushes the image with kaniko.

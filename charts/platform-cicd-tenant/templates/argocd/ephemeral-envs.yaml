@@ -27,6 +27,9 @@ apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: {{ .Values.platformIdentity.appName }}-pr-envs
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
   namespace: argocd
 spec:
   goTemplate: true
@@ -104,6 +107,9 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pr-env-token-refresher
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 ---
 # Lets this SA write (but not read arbitrary/list) exactly one named Secret in argocd.
@@ -114,6 +120,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }}
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
   namespace: argocd
 rules:
   - apiGroups: [""]
@@ -128,6 +137,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }}
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
   namespace: argocd
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }} }
 subjects:
@@ -139,6 +151,9 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ .Values.platformIdentity.appName }}-pr-token-refresher
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 spec:
   schedule: "*/20 * * * *"

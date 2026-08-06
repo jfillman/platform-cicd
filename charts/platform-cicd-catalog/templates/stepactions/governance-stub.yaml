@@ -32,7 +32,9 @@ kind: StepAction
 metadata:
   name: governance-stub
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
+    platform.io/stub: "true"
 spec:
   image: ghcr.io/jfillman/platform-cicd-toolbox:latest
   params:

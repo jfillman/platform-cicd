@@ -23,12 +23,18 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pr-namespace-ttl-sweep
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "broker"
   namespace: platform-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: pr-namespace-ttl-sweep
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "broker"
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -38,6 +44,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: pr-namespace-ttl-sweep
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "broker"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -51,6 +60,9 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: pr-namespace-ttl-sweep
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "broker"
   namespace: platform-system
 spec:
   schedule: "*/30 * * * *"

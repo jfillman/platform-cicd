@@ -17,6 +17,7 @@ kind: Pipeline
 metadata:
   name: policy-check
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   params:

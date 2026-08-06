@@ -39,6 +39,7 @@ kind: Task
 metadata:
   name: generate-sbom
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Generates a CycloneDX SBOM (Trivy) for the given image and attaches it as a real, keyless-signed cosign attestation.

@@ -21,6 +21,7 @@ kind: Pipeline
 metadata:
   name: sast-check
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Resolves the promoted image from a gitops PR's staging manifest, then verifies sast-scan's real, attested build-time outcome for it.

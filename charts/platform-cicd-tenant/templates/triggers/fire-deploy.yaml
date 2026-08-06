@@ -5,6 +5,9 @@ apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
 metadata:
   name: cdevents-testcaserun-finished
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "triggers"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 spec:
   params:
@@ -21,6 +24,9 @@ apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
 metadata:
   name: fire-deploy
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "triggers"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 spec:
   params:
@@ -68,6 +74,9 @@ apiVersion: triggers.tekton.dev/v1beta1
 kind: Trigger
 metadata:
   name: on-test-success
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "triggers"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 spec:
   serviceAccountName: pipeline-runner

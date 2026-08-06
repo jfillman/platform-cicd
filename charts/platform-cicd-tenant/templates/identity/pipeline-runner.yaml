@@ -5,6 +5,9 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pipeline-runner
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "identity"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 # imagePullSecrets reuses the same registry-credentials Secret kaniko already pushes
 # with - needed so every TaskRun's pod can actually pull the shared platform-cicd-toolbox
@@ -16,6 +19,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: pipeline-runner
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "identity"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 rules:
   - apiGroups: ["tekton.dev"]
@@ -34,6 +40,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: pipeline-runner
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "identity"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: pipeline-runner }
 subjects:
@@ -49,6 +58,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: allow-broker-impersonate-pipeline-runner
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "identity"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 rules:
   - apiGroups: [""]
@@ -60,6 +72,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: allow-broker-impersonate-pipeline-runner
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "identity"
   namespace: {{ .Values.platformIdentity.tenantNamespace }}
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-broker-impersonate-pipeline-runner }
 subjects:

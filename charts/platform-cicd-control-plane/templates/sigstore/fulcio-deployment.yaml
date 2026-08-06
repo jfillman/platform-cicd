@@ -25,6 +25,8 @@ metadata:
   namespace: fulcio-system
   name: fulcio-server
   labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "sigstore"
     app: fulcio-server
 spec:
   replicas: 1
@@ -113,6 +115,9 @@ kind: Service
 metadata:
   namespace: fulcio-system
   name: fulcio-server
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "sigstore"
 spec:
   selector:
     app: fulcio-server

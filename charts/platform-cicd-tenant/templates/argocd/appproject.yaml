@@ -14,6 +14,9 @@ apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: {{ .Values.platformIdentity.tenantNamespace }}
+  labels:
+    {{- include "platform-cicd-tenant.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
   namespace: argocd
 spec:
   description: >-

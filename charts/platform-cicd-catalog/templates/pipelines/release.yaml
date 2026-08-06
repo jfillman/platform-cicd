@@ -25,6 +25,7 @@ kind: Pipeline
 metadata:
   name: release
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   params:

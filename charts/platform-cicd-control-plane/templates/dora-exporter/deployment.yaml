@@ -24,12 +24,18 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: dora-exporter
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
   namespace: platform-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: dora-exporter
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
   namespace: argocd
 rules:
   - apiGroups: ["argoproj.io"]
@@ -40,6 +46,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: dora-exporter
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
   namespace: argocd
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: dora-exporter }
 subjects:
@@ -51,6 +60,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dora-exporter
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
   namespace: platform-system
 spec:
   replicas: 1
@@ -81,14 +93,17 @@ apiVersion: v1
 kind: Service
 metadata:
   name: dora-exporter
-  namespace: platform-system
   # ServiceMonitor's selector.matchLabels matches against THIS Service's own
   # metadata.labels, not spec.selector (which only selects the pods it fronts) - caught
   # live via Prometheus's own /api/v1/status/config: the generated scrape job's first
   # relabel_configs rule keeps only targets where
   # __meta_kubernetes_service_label_app=dora-exporter, sourced from here. Without this,
   # every real target got silently dropped despite matching on every other criterion.
-  labels: { app: dora-exporter }
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
+    app: dora-exporter
+  namespace: platform-system
 spec:
   selector: { app: dora-exporter }
   ports: [{ name: metrics, port: 8080, targetPort: metrics }]

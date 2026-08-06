@@ -27,6 +27,7 @@ kind: Task
 metadata:
   name: verify-sast-attestation
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Looks up the sast-scan task's real outcome from the promoted image's own SLSA provenance attestation, rather than re-running Semgrep.

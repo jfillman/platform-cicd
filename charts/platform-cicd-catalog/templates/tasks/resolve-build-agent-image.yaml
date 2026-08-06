@@ -9,6 +9,7 @@ kind: Task
 metadata:
   name: resolve-build-agent-image
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   params:

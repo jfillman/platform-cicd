@@ -8,6 +8,7 @@ kind: Pipeline
 metadata:
   name: bypass-merge-check
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Checks whether a just-closed gitops-repo PR merged despite a non-passing required governance check, and alerts Slack if so.

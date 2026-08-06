@@ -9,6 +9,7 @@ kind: Pipeline
 metadata:
   name: sbom-check
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Resolves the promoted image from a gitops PR's staging manifest, then generates+attests a real SBOM for it.

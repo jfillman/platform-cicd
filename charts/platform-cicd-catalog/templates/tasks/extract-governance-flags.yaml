@@ -9,6 +9,7 @@ kind: Task
 metadata:
   name: extract-governance-flags
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   params:

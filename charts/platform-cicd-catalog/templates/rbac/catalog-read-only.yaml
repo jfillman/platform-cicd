@@ -17,6 +17,8 @@ kind: Role
 metadata:
   name: catalog-read-only
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["tekton.dev"]
     resources: ["pipelines", "tasks", "stepactions"]
@@ -27,6 +29,8 @@ kind: RoleBinding
 metadata:
   name: catalog-read-only
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: catalog-read-only }
 subjects:
   - kind: Group

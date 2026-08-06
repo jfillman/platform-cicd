@@ -11,7 +11,9 @@ kind: Task
 metadata:
   name: governance-gate-stub
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
+    platform.io/stub: "true"
 spec:
   params:
     - name: gate-name

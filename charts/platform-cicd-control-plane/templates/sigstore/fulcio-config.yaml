@@ -38,6 +38,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: fulcio-config
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "sigstore"
   namespace: fulcio-system
 data:
   config.yaml: |

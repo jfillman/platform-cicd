@@ -45,3 +45,23 @@ Defaults to "small" if unset, matching docs/cicd-yaml-reference.md.
 {{- else -}}1Gi
 {{- end -}}
 {{- end -}}
+
+{{/*
+platform-cicd-tenant.labels - see charts/platform-cicd-catalog/templates/_helpers.tpl's
+identical-in-spirit helper for the full rationale. Includes platform.io/tenant and
+platform.io/app unconditionally (not just on the argocd-namespace resources that
+strictly need them for selection) - most valuable there, where many tenants' Applications/
+AppProjects/Roles coexist in one shared namespace, but applied everywhere for
+consistency per docs/naming-conventions.md.
+*/}}
+{{- define "platform-cicd-tenant.labels" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: platform-cicd
+helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+platform.io/component: tenant
+platform.io/tenant: {{ .Values.platformIdentity.tenantNamespace }}
+platform.io/app: {{ .Values.platformIdentity.appName }}
+{{- end -}}

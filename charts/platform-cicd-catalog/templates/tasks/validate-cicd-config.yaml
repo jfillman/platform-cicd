@@ -10,6 +10,7 @@ kind: Task
 metadata:
   name: validate-cicd-config
   labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
   description: Validates the developer-facing cicd.yaml against the platform schema.
