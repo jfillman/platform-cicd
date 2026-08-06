@@ -1,0 +1,55 @@
+{{- $hasRelease := eq (include "platform-cicd-tenant.hasStage" (dict "stages" .Values.pipeline "name" "release")) "true" }}
+{{- $hasEphemeral := and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
+{{- if or $hasRelease $hasEphemeral }}
+# templates/argocd/appproject.yaml - unifies what used to be two separate hand-applied
+# files updating the SAME AppProject object (tenant-release-argocd-template.yaml creating
+# it, tenant-ephemeral-envs-argocd-template.yaml updating it in place) into one
+# conditionally-rendered template - Helm can't have two templates own the same resource
+# within one release, so both concerns live here now, each gated independently.
+#
+# Scoped rather than reusing the cluster's existing `default` AppProject (unscoped - any
+# Application in it can sync anything, from any source, anywhere) - consistent with how
+# every other identity in this platform is narrowly scoped.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.platformIdentity.tenantNamespace }}
+  namespace: argocd
+spec:
+  description: >-
+    {{- if and $hasRelease $hasEphemeral }}
+    Release-stage (staging) and PR-based ephemeral-environment deployments for {{ .Values.platformIdentity.tenantNamespace }}.
+    {{- else if $hasRelease }}
+    Release-stage (staging) deployments for {{ .Values.platformIdentity.tenantNamespace }}, scoped to its own GitOps repo and namespace only.
+    {{- else }}
+    PR-based ephemeral-environment deployments for {{ .Values.platformIdentity.tenantNamespace }}.
+    {{- end }}
+  sourceRepos:
+    {{- if $hasRelease }}
+    - {{ .Values.platformIdentity.gitopsRepoUrl }}
+    {{- end }}
+    {{- if $hasEphemeral }}
+    - {{ .Values.platformIdentity.appRepoUrl }}
+    {{- end }}
+  destinations:
+    {{- if $hasRelease }}
+    - namespace: {{ .Values.platformIdentity.tenantNamespace }}-staging
+      server: https://kubernetes.default.svc
+    {{- end }}
+    {{- if $hasEphemeral }}
+    - namespace: {{ .Values.platformIdentity.tenantNamespace }}-pr-*
+      server: https://kubernetes.default.svc
+    {{- end }}
+  clusterResourceWhitelist:
+    {{- if $hasEphemeral }}
+    # Namespace is cluster-scoped (unlike Deployment/Service) - needs to be here, not
+    # namespaceResourceWhitelist, or ArgoCD blocks the sync of k8s/ephemeral/namespace.yaml
+    # outright. Still nothing else cluster-scoped is allowed.
+    - { group: "", kind: Namespace }
+    {{- else }}
+    []
+    {{- end }}
+  namespaceResourceWhitelist:
+    - { group: "apps", kind: Deployment }
+    - { group: "", kind: Service }
+{{- end }}

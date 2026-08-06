@@ -1,0 +1,68 @@
+# templates/identity/pipeline-runner.yaml (from platform/broker/manifests/
+# tenant-triggers-template.yaml's "Tenant identity" section - unconditional, every
+# tenant needs this regardless of which pipeline stages are declared)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pipeline-runner
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+# imagePullSecrets reuses the same registry-credentials Secret kaniko already pushes
+# with - needed so every TaskRun's pod can actually pull the shared platform-cicd-toolbox
+# image from ghcr.io/jfillman, which defaults to PRIVATE on GHCR.
+imagePullSecrets:
+  - name: registry-credentials
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pipeline-runner
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns", "taskruns"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Deliberately absent: no apps/deployments rule here - that's <tenant>-<env>, a
+  # different namespace, see templates/env/deploy-rbac.yaml. Also deliberately absent:
+  # no impersonate, no wildcard verbs/resources, no cluster-scoped rules, no other
+  # cross-namespace access. This is the entire blast radius of a compromised
+  # pipeline-runner identity for this one tenant, within its own namespace.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pipeline-runner
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: pipeline-runner }
+subjects:
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: {{ .Values.platformIdentity.tenantNamespace }}
+---
+# Lets the shared broker's ServiceAccount (platform-system/cdevents-broker) create the
+# next-stage PipelineRun AS this tenant's own pipeline-runner SA, and ONLY this one, and
+# ONLY in this namespace - one narrow, per-tenant, auditable, individually-revocable
+# grant, not a cluster-wide impersonate on every ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-broker-impersonate-pipeline-runner
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: ["pipeline-runner"]
+    verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-broker-impersonate-pipeline-runner
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-broker-impersonate-pipeline-runner }
+subjects:
+  - kind: ServiceAccount
+    name: cdevents-broker
+    namespace: platform-system

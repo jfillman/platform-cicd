@@ -13,8 +13,8 @@ any of them do real enforcement yet. Real implementations are Phase 3.
 
 ## How a stub stays honestly a stub
 
-Every governance Task in the catalog (`catalog/tasks/governance-gate-stub.yaml`) calls
-`catalog/stepactions/governance-stub.yaml`, which:
+Every governance Task in the catalog (`charts/platform-cicd-catalog/templates/tasks/governance-gate-stub.yaml`) calls
+`charts/platform-cicd-catalog/templates/stepactions/governance-stub.yaml`, which:
 
 1. Logs, loudly, to the step's own output: `no real check implemented yet`.
 2. Emits its own real child span, named `governance:<gate>` and parented to the current

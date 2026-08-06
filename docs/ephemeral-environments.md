@@ -67,7 +67,7 @@ risk - fixed here rather than repeated:
   namespace/Application creation. The only new RBAC is the token-refresher CronJob's
   narrowly-scoped access to exactly one named Secret in `argocd` (see below).
 
-Also different: images are tagged per-PR-per-SHA already (`catalog/tasks/build-image.yaml`
+Also different: images are tagged per-PR-per-SHA already (`charts/platform-cicd-catalog/templates/tasks/build-image.yaml`
 truncates to 12 characters - confirmed live, no fix was actually needed here despite the
 plan initially assuming otherwise), so the ApplicationSet template's `kustomize.images`
 points at a real, already-pushed image via `{{ trunc 12 .head_sha }}`, not a shared
@@ -167,7 +167,7 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
    sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
        -e 's#<APP_REPO_URL>#https://github.com/jfillman/nodejs-demo-app#g' \
        -e 's#<GITHUB_OWNER>#jfillman#g' \
-     platform/argocd/tenant-ephemeral-envs-argocd-template.yaml | kubectl apply -f -
+     charts/platform-cicd-tenant/templates/argocd/ephemeral-envs.yaml | kubectl apply -f -
    ```
    This updates the tenant's existing `AppProject` (the same one the release stage's
    staging `Application` already uses) in place - it does not create a second, competing
@@ -177,12 +177,12 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
    ```
    sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
        -e 's#<GITHUB_OWNER>#jfillman#g' \
-     platform/argocd/pr-token-refresher-cronjob.yaml | kubectl apply -f -
+     charts/platform-cicd-tenant/templates/argocd/ephemeral-envs.yaml | kubectl apply -f -
    ```
 
 4. **Apply the TTL sweep CronJob** - once per cluster, not per tenant:
    ```
-   kubectl apply -f platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml
+   kubectl apply -f charts/platform-cicd-control-plane/templates/argocd/pr-namespace-ttl-sweep-cronjob.yaml
    ```
 
 5. **Bootstrap the generator's token Secret once**, rather than waiting up to 20 minutes

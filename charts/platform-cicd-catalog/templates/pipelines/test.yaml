@@ -1,0 +1,190 @@
+# catalog/pipelines/test.yaml
+#
+# Second stage of the flow. NOT git-triggered - fired by the shared broker in response
+# to the build Pipeline's dev.cdevents.artifact.published event (see platform/broker/).
+# Receives the flow's traceparent/chain-id as params rather than generating its own -
+# this stage's span parents directly to the flow root, as a sibling of build's span,
+# not nested under it. See docs/tracing.md and docs/chaining.md.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: image-ref
+      type: string
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+    - name: flow-traceparent
+      type: string
+    - name: chain-id
+      type: string
+    - name: flow-start-time
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone-repo
+      taskRef:
+        resolver: hub
+        params:
+          - { name: catalog, value: git-clone }
+          - { name: kind, value: task }
+          - { name: name, value: git-clone }
+          - { name: version, value: "1.7.0" }
+      workspaces:
+        - { name: output, workspace: source }
+      params:
+        - { name: url, value: $(params.git-url) }
+        - { name: revision, value: $(params.git-revision) }
+
+    # Deeper CDEvents coverage (Phase 3 item 1, see docs/chaining.md): a generic
+    # pipelinerun.started signal, independent of test's own domain-specific
+    # testcaserun.finished event below. No runAfter - chain-id/traceparent/flow-start-
+    # time already arrive as incoming params (this stage was fired by the broker off
+    # build's event), unlike build.yaml where they don't exist until start-flow runs.
+    - name: pipelinerun-started
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: event-type, value: "dev.cdevents.pipelinerun.started.0.3.0" }
+        - { name: subject-type, value: "pipelineRun" }
+        - { name: subject-content-json, value: "{\"pipelineName\": \"test\"}" }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
+    - name: validate-config
+      runAfter: [clone-repo]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: validate-cicd-config }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      workspaces:
+        - { name: source, workspace: source }
+
+    - name: start-test-stage-span
+      runAfter: [validate-config]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: start-stage-span }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+
+    - name: resolve-agent-image
+      runAfter: [validate-config]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: resolve-build-agent-image }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+
+    - name: integration-test
+      runAfter: [resolve-agent-image, start-test-stage-span]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: run-integration-tests }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: image-ref, value: $(params.image-ref) }
+
+  finally:
+    - name: end-test-stage-span
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: end-stage-span }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: stage-name, value: test }
+        - { name: flow-traceparent, value: $(params.flow-traceparent) }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: span-id, value: $(tasks.start-test-stage-span.results.span-id) }
+        - { name: start-time, value: $(tasks.start-test-stage-span.results.start-time) }
+        - { name: status, value: $(tasks.status) }
+
+    - name: notify
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: notify-slack }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: stage-name, value: test }
+        - { name: status, value: $(tasks.status) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tenant, value: $(params.tenant) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
+        - { name: image-ref, value: $(params.image-ref) }
+
+    - name: send-cdevent
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: event-type, value: "dev.cdevents.testcaserun.finished.0.3.0" }
+        - { name: subject-type, value: "testCaseRun" }
+        - name: subject-content-json
+          value: >-
+            {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "git-url": "$(params.git-url)", "env": "dev"}
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
+    # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
+    # NOT gated on success like the domain-specific event above. See docs/chaining.md.
+    - name: pipelinerun-finished
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: send-cdevent }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: event-type, value: "dev.cdevents.pipelinerun.finished.0.3.0" }
+        - { name: subject-type, value: "pipelineRun" }
+        - { name: subject-content-json, value: "{\"pipelineName\": \"test\"}" }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: traceparent, value: $(params.flow-traceparent) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: namespace, value: $(params.tenant) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: tekton-status, value: $(tasks.status) }

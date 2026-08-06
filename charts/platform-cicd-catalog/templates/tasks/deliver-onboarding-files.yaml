@@ -1,0 +1,190 @@
+# templates/tasks/deliver-onboarding-files.yaml (Phase 3 item 7 - see
+# docs/onboarding.md's "Keeping onboarding boilerplate in sync" section)
+#
+# Replaces both the fully-manual copy-paste onboarding process AND the old system's
+# ConfigMap+trigger-field re-sync button, with the same design language this platform
+# already uses everywhere else for a repo-write operation: mint a fresh, single-repo-
+# scoped GitHub App installation token per target repo (never a standing credential),
+# open a PR rather than pushing directly to a default branch, and let PaC's own already-
+# trusted webhook auth be the thing that decides when this Task should run at all - see
+# onboarding-templates/.tekton/onboarding-resync.yaml's own header for exactly which
+# events trigger it (a cicd.yaml change on the app repo).
+#
+# Deliberately NOT touching the gitsign-enforced path: policy-check's gitsign
+# verification runs only as a Check on the gitops repo's release PR (verifying the
+# app-repo commit via X-App-Repo/X-App-Commit trailers - see open-release-pr.yaml) -
+# there is no gitsign/policy-check gate wired onto either repo's default branch here, so
+# this Task's own machine-generated commits never need to be signed.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: deliver-onboarding-files
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: The app repo's own git-url - only its GitHub org/owner is used.
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+    - name: github-owner
+      type: string
+    - name: gitops-repo-url
+      type: string
+      default: ""
+      description: >-
+        Optional - only needed if this tenant's pipeline declares a release stage (see
+        the tenant chart's own conditional rendering). Empty skips the gitops-repo
+        delivery half entirely, not an error.
+  # Same audience-bound projected-ServiceAccount-token volume shape already proven in
+  # send-cdevent.yaml/open-release-pr.yaml/pr-token-refresher-cronjob.yaml - no new
+  # identity, no new RBAC (talking to the broker isn't RBAC-gated). This Task is meant to
+  # run as the tenant's own existing pipeline-runner SA, not a new one.
+  volumes:
+    - name: github-token-broker-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: github-token-broker-token
+              audience: github-installation-token
+              expirationSeconds: 600
+  steps:
+    - name: deliver-app-repo-files
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent
+      volumeMounts:
+        - name: github-token-broker-token
+          mountPath: /var/run/secrets/platform
+          readOnly: true
+      env:
+        - name: GITHUB_TOKEN_BROKER_URL
+          value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: TENANT
+          value: $(params.tenant)
+        - name: APP_NAME
+          value: $(params.app-name)
+        - name: GITHUB_OWNER
+          value: $(params.github-owner)
+        - name: GITOPS_REPO_URL
+          value: $(params.gitops-repo-url)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        source "${PLATFORM_LIB}/github-app.sh"
+
+        owner="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        repo="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
+        image_repo="ghcr.io/${GITHUB_OWNER}/${APP_NAME}"
+
+        token="$(github_app_installation_token "${owner}" "${repo}")"
+        workdir="$(mktemp -d)"
+        clone_url="https://x-access-token:${token}@github.com/${owner}/${repo}.git"
+        git clone --quiet "${clone_url}" "${workdir}/repo"
+        cd "${workdir}/repo"
+        mkdir -p .tekton
+
+        # onboarding-resync.yaml is itself part of what gets delivered - the app repo's
+        # own copy of the trigger that re-invokes this whole mechanism the next time
+        # cicd.yaml changes, kept in sync exactly like push.yaml/pull-request.yaml.
+        for f in push.yaml pull-request.yaml onboarding-resync.yaml; do
+          sed \
+            -e "s|<TENANT>|${TENANT}|g" \
+            -e "s|<APP_NAME>|${APP_NAME}|g" \
+            -e "s|<IMAGE_REPO>|${image_repo}|g" \
+            -e "s|<GITHUB_OWNER>|${GITHUB_OWNER}|g" \
+            -e "s|<GITOPS_REPO_URL>|${GITOPS_REPO_URL}|g" \
+            "/opt/platform/onboarding-templates/.tekton/${f}" > ".tekton/${f}"
+        done
+
+        if git status --porcelain | grep -q .; then
+          git config user.name "platform-cicd onboarding automation"
+          git config user.email "onboarding@platform-cicd.invalid"
+          branch="onboarding-resync-$(date +%s)"
+          git checkout -b "${branch}"
+          git add .tekton/push.yaml .tekton/pull-request.yaml .tekton/onboarding-resync.yaml
+          git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton boilerplate from the platform catalog\n\nRegenerated from onboarding-templates/.tekton/ - see docs/onboarding.md. No developer action needed beyond merging.')"
+          git push --quiet "${clone_url}" "${branch}"
+          pr_body="$(jq -n \
+            --arg title "Onboarding: re-sync .tekton boilerplate" \
+            --arg body "Regenerated push.yaml/pull-request.yaml from the platform catalog's onboarding-templates/.tekton/ - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this tenant's files went stale." \
+            --arg head "${branch}" --arg base "main" \
+            '{title: $title, body: $body, head: $head, base: $base}')"
+          curl --fail --silent --show-error \
+            -X POST -H "Authorization: Bearer ${token}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${owner}/${repo}/pulls" -d "${pr_body}" > /dev/null
+          echo "app repo: opened onboarding-resync PR"
+        else
+          echo "app repo: .tekton/ already up to date, nothing to deliver"
+        fi
+
+    - name: deliver-gitops-repo-files
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent
+      volumeMounts:
+        - name: github-token-broker-token
+          mountPath: /var/run/secrets/platform
+          readOnly: true
+      env:
+        - name: GITHUB_TOKEN_BROKER_URL
+          value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+        - name: GITOPS_REPO_URL
+          value: $(params.gitops-repo-url)
+        - name: TENANT
+          value: $(params.tenant)
+        - name: APP_NAME
+          value: $(params.app-name)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        if [[ -z "${GITOPS_REPO_URL}" ]]; then
+          echo "gitops repo: no gitops-repo-url param given (release stage not declared), skipping"
+          exit 0
+        fi
+        source "${PLATFORM_LIB}/github-app.sh"
+
+        owner="$(echo "${GITOPS_REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        repo="$(echo "${GITOPS_REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
+
+        token="$(github_app_installation_token "${owner}" "${repo}")"
+        workdir="$(mktemp -d)"
+        clone_url="https://x-access-token:${token}@github.com/${owner}/${repo}.git"
+        git clone --quiet "${clone_url}" "${workdir}/repo"
+        cd "${workdir}/repo"
+        mkdir -p .tekton
+
+        for f in /opt/platform/onboarding-templates/.tekton-gitops/*.yaml; do
+          base="$(basename "${f}")"
+          sed \
+            -e "s|<TENANT>|${TENANT}|g" \
+            -e "s|<APP_NAME>|${APP_NAME}|g" \
+            "${f}" > ".tekton/${base}"
+        done
+
+        if git status --porcelain | grep -q .; then
+          git config user.name "platform-cicd onboarding automation"
+          git config user.email "onboarding@platform-cicd.invalid"
+          branch="onboarding-resync-$(date +%s)"
+          git checkout -b "${branch}"
+          git add .tekton/
+          git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton governance-check boilerplate\n\nRegenerated from onboarding-templates/.tekton-gitops/ - see docs/onboarding.md. No developer action needed beyond merging.')"
+          git push --quiet "${clone_url}" "${branch}"
+          pr_body="$(jq -n \
+            --arg title "Onboarding: re-sync governance-check boilerplate" \
+            --arg body "Regenerated the 5 governance-check .tekton files from the platform catalog's onboarding-templates/.tekton-gitops/ - see docs/onboarding.md." \
+            --arg head "${branch}" --arg base "main" \
+            '{title: $title, body: $body, head: $head, base: $base}')"
+          curl --fail --silent --show-error \
+            -X POST -H "Authorization: Bearer ${token}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${owner}/${repo}/pulls" -d "${pr_body}" > /dev/null
+          echo "gitops repo: opened onboarding-resync PR"
+        else
+          echo "gitops repo: .tekton/ already up to date, nothing to deliver"
+        fi

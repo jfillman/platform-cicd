@@ -1,0 +1,34 @@
+# templates/rbac/catalog-read-only.yaml (moved from catalog/rbac/, Phase 3 item 7 - see
+# docs/catalog-versioning.md)
+#
+# Every tenant's pipeline-runner SA needs to READ Pipelines/Tasks/StepActions in
+# {{ .Release.Namespace }} via Tekton's cluster resolver (see onboarding-templates/.tekton/
+# and platform/broker/manifests/tenant-triggers-template.yaml, both of which reference
+# {kind: pipeline, name: ..., namespace: <this release's namespace>}). Bound to a group
+# (system:serviceaccounts by default - every ServiceAccount cluster-wide) rather than
+# granted per-tenant at onboarding, because the catalog holds no secrets and read access
+# to Pipeline/Task/StepAction *definitions* isn't tenant-sensitive - only WRITE access to
+# this namespace is restricted (nothing binds tenants write here at all). Kept as a value
+# (rbac.readOnlyGroup) rather than hardcoded so a canary install into a second namespace
+# can, if ever needed, bind a narrower group instead of the cluster-wide default every
+# tenant already relies on in the real production release.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: catalog-read-only
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelines", "tasks", "stepactions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: catalog-read-only
+  namespace: {{ .Release.Namespace }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: catalog-read-only }
+subjects:
+  - kind: Group
+    name: {{ .Values.rbac.readOnlyGroup }}
+    apiGroup: rbac.authorization.k8s.io

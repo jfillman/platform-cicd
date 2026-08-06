@@ -103,6 +103,15 @@ COPY catalog/lib/github-app.sh /opt/platform/lib/github-app.sh
 COPY catalog/lib/build-agents.env /opt/platform/lib/build-agents.env
 COPY schemas/cicd.schema.json /opt/platform/schemas/cicd.schema.json
 
+# Onboarding boilerplate (Phase 3 item 7's PaC-delivery mechanism - see
+# catalog/tasks/deliver-onboarding-files.yaml and docs/onboarding.md) is baked in the
+# same way catalog/lib and the schema already are, rather than cloned from platform-cicd
+# at Task runtime - this Task runs triggered off a tenant's own app repo, which has no
+# reason to hold read access to this platform's own source repo, and baking it in means
+# a template change only takes effect on the next toolbox image build, matching every
+# other pinned-version convention in this file.
+COPY onboarding-templates/ /opt/platform/onboarding-templates/
+
 # Non-root by default - every catalog Task should run under Pod Security Standards
 # "restricted" without needing per-Task overrides.
 RUN adduser -D -u 65532 platform

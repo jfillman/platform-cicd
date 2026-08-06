@@ -1,0 +1,37 @@
+# templates/pipelines/onboarding-resync.yaml (Phase 3 item 7) - one Task, wrapped in a
+# Pipeline only because every PaC trigger in this platform references a Pipeline via the
+# cluster resolver, matching the existing convention (see onboarding-templates/.tekton/
+# onboarding-resync.yaml, the trigger file that fires this).
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: onboarding-resync
+  labels:
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: tenant
+      type: string
+    - name: app-name
+      type: string
+    - name: github-owner
+      type: string
+    - name: gitops-repo-url
+      type: string
+      default: ""
+  tasks:
+    - name: deliver-onboarding-files
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: deliver-onboarding-files }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: git-url, value: $(params.git-url) }
+        - { name: tenant, value: $(params.tenant) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: github-owner, value: $(params.github-owner) }
+        - { name: gitops-repo-url, value: $(params.gitops-repo-url) }

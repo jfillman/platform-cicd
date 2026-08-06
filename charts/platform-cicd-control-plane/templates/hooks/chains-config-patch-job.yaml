@@ -1,0 +1,76 @@
+# templates/hooks/chains-config-patch-job.yaml (replaces the old chains-config-patch.yaml
+# manual `kubectl patch` step - see hooks/chains-config-reference.yaml for the full
+# rationale behind each key, kept as documentation/values source, not applied directly)
+#
+# Why a hook Job, not a plain ConfigMap template: Tekton Chains installs its own empty
+# `chains-config` ConfigMap in `tekton-chains` (a namespace this chart doesn't own) as
+# part of its own release. A plain Helm-templated ConfigMap with the same name would fail
+# on first `helm install` ("already exists", not adopted by this release) - Helm refuses
+# to silently take ownership of a resource it didn't create. `kubectl patch --type merge`
+# via a hook Job matches this platform's existing patch-not-replace convention for
+# third-party-owned config (see hooks/chains-config-reference.yaml's own header comment)
+# and sidesteps the ownership conflict entirely - a patch doesn't care who created the
+# object.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chains-config-patcher
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chains-config-patcher
+  namespace: tekton-chains
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["chains-config"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chains-config-patcher
+  namespace: tekton-chains
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: chains-config-patcher }
+subjects:
+  - kind: ServiceAccount
+    name: chains-config-patcher
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chains-config-patch
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: chains-config-patcher
+      restartPolicy: Never
+      containers:
+        - name: patch
+          image: {{ .Values.toolboxImage }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              kubectl patch configmap chains-config -n tekton-chains --type merge -p '{{ dict "data" .Values.chains.configPatch | toJson }}'

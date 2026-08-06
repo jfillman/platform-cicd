@@ -1,0 +1,85 @@
+{{- if eq (include "platform-cicd-tenant.hasStage" (dict "stages" .Values.pipeline "name" "test")) "true" }}
+# templates/triggers/fire-test.yaml (from tenant-triggers-template.yaml's Stage 2 -
+# rendered only if cicd.yaml's pipeline: declares a "test" stage - the direct fix for
+# the enforcement gap: this used to always exist regardless of what cicd.yaml said)
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: cdevents-artifact-published
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+spec:
+  params:
+    - { name: image-ref, value: "$(body.subject.content.image)" }
+    - { name: git-url, value: "$(body.subject.content.git-url)" }
+    - { name: git-revision, value: "$(body.subject.content.revision)" }
+    - { name: chain-id, value: "$(body.context.chainId)" }
+    - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
+    - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
+    - { name: pipeline-run-name, value: "test-$(body.context.id)" }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: fire-test
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+spec:
+  params:
+    - name: image-ref
+    - name: git-url
+    - name: git-revision
+    - name: chain-id
+    - name: traceparent
+    - name: flow-start-time
+    - name: pipeline-run-name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        name: $(tt.params.pipeline-run-name) # deterministic - see cdevents.sh idempotency note
+      spec:
+        pipelineRef:
+          resolver: cluster
+          params:
+            - { name: kind, value: pipeline }
+            - { name: name, value: test }
+            - { name: namespace, value: {{ .Values.platformIdentity.catalogNamespace }} }
+        params:
+          # git-url comes from the CDEvent, carried forward from build's own git-url
+          # param - NOT reconstructed from tenant/app-name, which aren't necessarily the
+          # actual GitHub org/repo.
+          - { name: git-url, value: $(tt.params.git-url) }
+          - { name: git-revision, value: $(tt.params.git-revision) }
+          - { name: image-ref, value: $(tt.params.image-ref) }
+          - { name: tenant, value: {{ .Values.platformIdentity.tenantNamespace }} }
+          - { name: app-name, value: {{ .Values.platformIdentity.appName }} }
+          - { name: flow-traceparent, value: $(tt.params.traceparent) }
+          - { name: chain-id, value: $(tt.params.chain-id) }
+          - { name: flow-start-time, value: $(tt.params.flow-start-time) }
+        workspaces:
+          - name: source
+            volumeClaimTemplate:
+              spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: 1Gi } } }
+        taskRunTemplate: { serviceAccountName: pipeline-runner }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: on-build-success
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+spec:
+  serviceAccountName: pipeline-runner
+  interceptors:
+    - ref: { name: cdevents-broker-auth, kind: ClusterInterceptor }
+      params: [{ name: audience, value: cdevents-broker }]
+    - ref: { name: cel, kind: ClusterInterceptor }
+      params:
+        - name: filter
+          value: >-
+            body.context.type == 'dev.cdevents.artifact.published.0.3.0' &&
+            extensions.tenant_namespace == '{{ .Values.platformIdentity.tenantNamespace }}' &&
+            body.context.source.startsWith('/platform-cicd/{{ .Values.platformIdentity.tenantNamespace }}/')
+  bindings:
+    - { ref: cdevents-artifact-published }
+  template:
+    ref: fire-test
+{{- end }}

@@ -119,12 +119,15 @@ echo "        running on kind-observe. See docs/bootstrap.md for what got reused
 echo "        The shared OTel Collector there was patched (additively) with a spanmetrics"
 echo "        connector - see observability/kind-observe/otel-collector-values-patch.yaml."
 
-log "3/6 - platform catalog namespace + shared Tekton catalog (read-only for tenants)"
+log "3/6 - platform catalog (Tasks/Pipelines/StepActions, read-only for tenants)"
+# Phase 3 item 7: was bare `kubectl apply -n platform-catalog -f catalog/...` - now a
+# real Helm release, giving this the same version/rollback story as everything else this
+# platform owns (see docs/catalog-versioning.md). Chart version bumps happen in
+# charts/platform-cicd-catalog/Chart.yaml deliberately, not via --version here, so a
+# `git log` on that one line is the release history.
 kubectl create namespace platform-catalog --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -n platform-catalog -f catalog/stepactions/
-kubectl apply -n platform-catalog -f catalog/tasks/
-kubectl apply -n platform-catalog -f catalog/pipelines/
-kubectl apply -f catalog/rbac/catalog-read-only.yaml
+helm upgrade --install platform-cicd-catalog charts/platform-cicd-catalog \
+  --namespace platform-catalog --wait
 
 log "4/6 - build + publish toolbox; build + load token-review-interceptor"
 # The toolbox image is `docker push`ed to a real registry (ghcr.io/jfillman, the same
@@ -154,9 +157,19 @@ else
   warn "  ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}"
 fi
 
-log "5/6 - shared broker (EventListener + TokenReview interceptor)"
-kubectl apply -f platform/broker/manifests/interceptor.yaml
-kubectl apply -f platform/broker/manifests/eventlistener.yaml
+log "5/6 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecretStore)"
+# Phase 3 item 7: consolidates what used to be several separately hand-`kubectl apply`'d
+# files (platform/broker/manifests/{interceptor,eventlistener,stalled-pipeline-detector-
+# cronjob}.yaml, platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml, platform/
+# dora-exporter/manifests/*, platform/sigstore/*) into one real Helm release - several of
+# these (DORA exporter, Fulcio, the Chains config patch) had never actually been added
+# back into this idempotent bootstrap flow after being applied once by hand during their
+# own build sessions, a real gap this closes, not just a refactor. Fulcio's root CA
+# secret is still a one-time manual bootstrap step - see docs/image-signing.md - this
+# does not create it, only consumes it.
+kubectl create namespace platform-system --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install platform-cicd-control-plane charts/platform-cicd-control-plane \
+  --namespace platform-system --wait
 
 log "6/6 - Grafana dashboards, provisioned into the existing Grafana in observability ns"
 kubectl apply -k observability/grafana/

@@ -11,7 +11,7 @@ Go service that subscribes as another consumer off the same shared broker" - a C
 HTTP consumer, matching how every other stage of this platform's chain works. Working
 through the actual metric definitions surfaced a real problem with that: CDEvents, as
 this platform emits them today, can tell us a release **PR was opened**
-(`catalog/pipelines/release.yaml`'s `open-release-pr` task succeeding) - but nothing
+(`charts/platform-cicd-catalog/templates/pipelines/release.yaml`'s `open-release-pr` task succeeding) - but nothing
 confirms whether that PR was ever merged, or whether ArgoCD's sync of it actually
 succeeded. All four DORA metrics need that confirmed outcome: Deployment Frequency and
 Lead Time need to know a deploy really happened, not just that one was proposed; Change
@@ -58,7 +58,7 @@ it pushed, not the merge-commit SHA GitHub assigns on merge.
 
 Instead: **the release Pipeline stamps tracking annotations directly onto its own
 tenant's Application object**, and the exporter reads those back off the same object it's
-already watching - no separate correlation store, no guessing. `catalog/tasks/mark-
+already watching - no separate correlation store, no guessing. `charts/platform-cicd-catalog/templates/tasks/mark-
 release-pending.yaml`, wired into `release.yaml` right after `open-release-pr` succeeds
 (`runAfter: [open-release-pr]` - only runs if the PR was actually opened, via standard
 Tekton DAG failure propagation, no `when` guard needed), does:
@@ -104,7 +104,7 @@ terminal:
 
 RBAC for `mark-release-pending` is `pipeline-runner` (the tenant's own SA) granted
 `get`+`patch` on exactly its own `<app-name>-staging` Application, `resourceNames`-
-scoped, added to `platform/argocd/tenant-release-argocd-template.yaml` (the file that
+scoped, added to `charts/platform-cicd-tenant/templates/argocd/release-application.yaml` (the file that
 already sets up this tenant's release-stage ArgoCD RBAC) rather than a new template file.
 That same file also adds `platform.io/dora-track: "true"` to the `Application` resource
 itself - a stable, explicit marker the exporter's informer filters on
@@ -192,7 +192,7 @@ tenant's Application, no other resource type.
   localhost:8080/metrics` for the raw Prometheus exposition.
 - Grafana: "CI/CD Platform - DORA Metrics" dashboard (`dora.json`), same
   `$tenant`/`$app` template-variable pattern as `pipelines-overview.json`.
-- A standalone `ServiceMonitor` (`platform/dora-exporter/manifests/servicemonitor.yaml`)
+- A standalone `ServiceMonitor` (`charts/platform-cicd-control-plane/templates/dora-exporter/servicemonitor.yaml`)
   registers the scrape target - no Helm-chart wiring needed, since kind-observe's
   existing Prometheus CR has empty `serviceMonitorSelector`/`serviceMonitorNamespaceSelector`
   (matches everything cluster-wide), the same precedent already established for Tekton's

@@ -1,0 +1,30 @@
+{{- if .Values.build.cache.enabled }}
+# templates/env/build-cache-pvc.yaml (from app-build-cache-pvc-template.yaml - rendered
+# only if build.cache.enabled)
+#
+# Backs build-source.yaml's build-cache volume - a real, persistent PVC, not the
+# ephemeral per-run `source` workspace every Pipeline already has. One PVC per APP, not
+# one shared PVC per tenant: build.cache.size is a per-app t-shirt-size choice, and a
+# single shared PVC can't honor two apps wanting two different sizes.
+#
+# Size resolved live via the platform-cicd-tenant.cacheSize helper - this used to be a
+# manual pre-substitution step (no templating engine existed in the tenant-resource path
+# to do the small/medium/large/xlarge -> Gi lookup live); cicd.yaml becoming this chart's
+# values.yaml is what makes a real lookup possible now.
+#
+# ReadWriteOnce is sufficient (and simpler than RWX, which the default kind storage class
+# doesn't support anyway) since this platform's whole cluster is single-node. No live
+# resize support: kind-observe's default `standard` StorageClass has
+# allowVolumeExpansion: false - changing build.cache.size later means deleting and
+# recreating this PVC (losing its cached content, not a big deal for a cache).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: build-cache-{{ .Values.platformIdentity.appName }}
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ include "platform-cicd-tenant.cacheSize" (dict "size" .Values.build.cache.size) }}
+{{- end }}

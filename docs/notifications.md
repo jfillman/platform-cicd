@@ -1,7 +1,7 @@
 # Slack notifications
 
 Every stage's pipeline (`build`/`test`/`deploy`/`release`) calls
-`catalog/tasks/notify-slack.yaml` unconditionally in its `finally` block - one status
+`charts/platform-cicd-catalog/templates/tasks/notify-slack.yaml` unconditionally in its `finally` block - one status
 message per stage completion, with a failure log excerpt appended when the stage didn't
 succeed.
 
@@ -68,7 +68,7 @@ skip behavior), not a full ESO SecretStore pipeline for one demo webhook.
   Slack code block.
 
 No new RBAC was needed for the log-fetching step - `pipeline-runner`'s existing Role
-(`platform/broker/manifests/tenant-triggers-template.yaml`) already grants `get`/`list`/
+(`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`) already grants `get`/`list`/
 `watch` on `taskruns` (tekton.dev) and `pods`/`pods/log` (core), confirmed by re-reading
 that file rather than assumed.
 

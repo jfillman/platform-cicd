@@ -42,7 +42,7 @@ per-stage drill-down the dashboard needs (see
 3. The shared broker's Trigger for this tenant extracts all three fields via a
    `TriggerBinding` and passes them as params (`flow-traceparent`, `chain-id`,
    `flow-start-time`) into the next stage's `PipelineRun` (see
-   [../platform/broker/manifests/tenant-triggers-template.yaml](../platform/broker/manifests/tenant-triggers-template.yaml)).
+   [../charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)](../charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml))).
 4. `test` (and later `deploy`/`release`) receive `flow-traceparent` as a Pipeline param
    instead of generating their own - they call `start-stage-span` with it, producing a
    span parented to the *original* flow root, reconstructing one continuous trace across
@@ -74,7 +74,7 @@ call** (explicit `--start`/`--end`/`--force-trace-id`/`--force-span-id`/
 Pod, since nothing is recovered from local process state. See the file header of
 `catalog/lib/otel.sh` for the exact functions (`otel_flow_root_begin`,
 `otel_stage_span_begin`, `otel_span_send`, `otel_child_span`) and
-`catalog/tasks/end-flow-root-span.yaml` for why the flow-root span is currently sent
+`charts/platform-cicd-catalog/templates/tasks/end-flow-root-span.yaml` for why the flow-root span is currently sent
 from `deploy`'s `finally` block (Phase 1's last stage) rather than from `build`.
 
 It's fine, by design, for coarse per-step/per-stage spans (seconds to minutes - what
@@ -82,7 +82,7 @@ this platform actually needs). `otel-cli exec` (used by `otel_child_span`, e.g. 
 governance-stub spans) is not the right tool for sub-second in-step instrumentation
 (process-per-invocation overhead dominates at that granularity) -
 `resolve-build-config`-style config-parsing steps deliberately skip span wrapping for
-exactly this reason, see the comment in `catalog/tasks/build-image.yaml`.
+exactly this reason, see the comment in `charts/platform-cicd-catalog/templates/tasks/build-image.yaml`.
 
 ## Task-level spans, and a real non-toolbox-image bug found live
 

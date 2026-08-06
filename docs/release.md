@@ -16,7 +16,7 @@ deploy (dev) succeeds
   -> dev.cdevents.service.deployed CDEvent, now carrying git-url/revision forward
   -> broker fires `release` PipelineRun
   -> release opens a PR against gitops-<app-name>, bumping the staging image tag
-     (catalog/tasks/open-release-pr.yaml) - this is where the automated part of the
+     (charts/platform-cicd-catalog/templates/tasks/open-release-pr.yaml) - this is where the automated part of the
      flow ends; the flow-root trace closes here (see docs/tracing.md)
   -> 4 independent GitHub Checks run on that PR (sast/image-scan/policy-check/sbom -
      all still stubs, see docs/governance-stubs.md), each individually re-triggerable
@@ -96,7 +96,7 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    ```
    sed -e 's#<TENANT>#platform-cicd-demo#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
        -e 's#<GITOPS_REPO_URL>#https://github.com/<org>/gitops-nodejs-demo-app#g' \
-     platform/argocd/tenant-release-argocd-template.yaml | kubectl apply -f -
+     charts/platform-cicd-tenant/templates/argocd/release-application.yaml | kubectl apply -f -
    ```
 
 6. **Configure branch protection** on the gitops repo's `main` branch (GitHub UI or
@@ -140,7 +140,7 @@ failing required check, and how it's made visible.
   requirement" section above) - a manual, out-of-band GitHub setting, not platform IaC.
 - **Audit**: GitHub's own merge/audit-log record is real and already visible on the PR,
   but a security-relevant bypass shouldn't depend on someone thinking to go check it -
-  `catalog/tasks/detect-bypass-merge.yaml` fires on every PR close (via the new
+  `charts/platform-cicd-catalog/templates/tasks/detect-bypass-merge.yaml` fires on every PR close (via the new
   `.tekton/pull-request-merged.yaml` trigger) and posts a real Slack alert (same
   `slack-webhook-url` Secret/design language as every other notification, but **not**
   gated on `notifications.slack.enabled` - a bypass alert isn't a routine preference)

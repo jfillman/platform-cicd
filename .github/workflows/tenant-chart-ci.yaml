@@ -1,0 +1,119 @@
+name: tenant-chart-ci
+
+# Covers the single highest-risk piece of new logic in Phase 3 item 7: conditional
+# rendering off cicd.yaml's pipeline: stage list (charts/platform-cicd-tenant/templates/
+# _helpers.tpl's platform-cicd-tenant.hasStage). This is the direct fix for a
+# live-confirmed bug (a release PipelineRun fired for a tenant whose cicd.yaml never
+# declared a release stage) - a regression here would silently reproduce that bug in a
+# new form, so every fixture below asserts both presence AND absence of the
+# stage-gated resources, not just "did it render without error."
+
+on:
+  pull_request:
+    paths:
+      - "charts/platform-cicd-tenant/**"
+  push:
+    branches: [main]
+    paths:
+      - "charts/platform-cicd-tenant/**"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/platform-cicd-tenant
+
+  fixture-matrix:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      - name: Write fixtures + platform-identity
+        run: |
+          mkdir -p /tmp/fixtures
+          cat > /tmp/fixtures/platform-identity.yaml <<'EOF'
+          platformIdentity:
+            tenantNamespace: fixture-tenant
+            appName: fixture-app
+            gitopsRepoUrl: https://github.com/fixture-org/gitops-fixture-app
+            appRepoUrl: https://github.com/fixture-org/fixture-app
+            githubOwner: fixture-org
+            catalogNamespace: platform-catalog
+          EOF
+
+          cat > /tmp/fixtures/build-only.yaml <<'EOF'
+          pipeline: [{ stage: build }]
+          governance: { policyCheck: false }
+          ephemeralEnvironments: { pullRequest: { enabled: false } }
+          build: { cache: { enabled: false } }
+          EOF
+
+          cat > /tmp/fixtures/build-test.yaml <<'EOF'
+          pipeline: [{ stage: build }, { stage: test, after: build }]
+          governance: { policyCheck: false }
+          ephemeralEnvironments: { pullRequest: { enabled: false } }
+          build: { cache: { enabled: false } }
+          EOF
+
+          cat > /tmp/fixtures/full-pipeline.yaml <<'EOF'
+          pipeline:
+            - { stage: build }
+            - { stage: test, after: build }
+            - { stage: deploy, after: test, env: dev }
+            - { stage: release, after: deploy }
+          deploy: { lowerEnvironments: [dev, qa], upperEnvironments: [prod] }
+          governance: { policyCheck: true, allowedCommitSigners: [dev@example.com] }
+          ephemeralEnvironments: { pullRequest: { enabled: true } }
+          build: { cache: { enabled: true, size: large } }
+          EOF
+
+      - name: 'Fixture: build-only - test/deploy/release/argocd/policy resources must be ABSENT'
+        run: |
+          helm template t charts/platform-cicd-tenant \
+            -f /tmp/fixtures/build-only.yaml -f /tmp/fixtures/platform-identity.yaml \
+            > /tmp/rendered-build-only.yaml
+          python3 hack/ci/assert_tenant_render.py /tmp/rendered-build-only.yaml \
+            --absent Trigger:on-build-success Trigger:on-test-success Trigger:on-deploy-success \
+            --absent AppProject ApplicationSet Application \
+            --absent ConfigMap:fixture-app-policy-config \
+            --absent PersistentVolumeClaim:build-cache-fixture-app \
+            --present ServiceAccount:pipeline-runner
+
+      - name: 'Fixture: build-test - only on-build-success Trigger present'
+        run: |
+          helm template t charts/platform-cicd-tenant \
+            -f /tmp/fixtures/build-test.yaml -f /tmp/fixtures/platform-identity.yaml \
+            > /tmp/rendered-build-test.yaml
+          python3 hack/ci/assert_tenant_render.py /tmp/rendered-build-test.yaml \
+            --present Trigger:on-build-success \
+            --absent Trigger:on-test-success Trigger:on-deploy-success \
+            --absent AppProject ApplicationSet Application
+
+      - name: 'Fixture: full-pipeline - every stage-gated resource must be PRESENT, sized correctly'
+        run: |
+          helm template t charts/platform-cicd-tenant \
+            -f /tmp/fixtures/full-pipeline.yaml -f /tmp/fixtures/platform-identity.yaml \
+            > /tmp/rendered-full.yaml
+          python3 hack/ci/assert_tenant_render.py /tmp/rendered-full.yaml \
+            --present Trigger:on-build-success Trigger:on-test-success Trigger:on-deploy-success \
+            --present AppProject Application ApplicationSet \
+            --present ConfigMap:fixture-app-policy-config \
+            --present PersistentVolumeClaim:build-cache-fixture-app \
+            --present Role:allow-pipeline-runner-deploy \
+            --count Role:allow-pipeline-runner-deploy 3 \
+            --pvc-size PersistentVolumeClaim:build-cache-fixture-app 5Gi
+
+      - name: No stray unrendered Helm template syntax (excluding the deliberately-escaped ArgoCD ApplicationSet vars)
+        run: |
+          # ephemeral-envs.yaml deliberately emits literal {{.number}}/{{.head_sha}}/etc
+          # for ArgoCD's own template engine to evaluate later - see that file's header
+          # comment. Anything else with a stray '{{' is a real bug.
+          if grep -n '{{' /tmp/rendered-full.yaml | grep -v '{{\.\(number\|head_sha\)\|trunc 12 \.head_sha'; then
+            echo "ERROR: unexpected stray '{{' in rendered output"
+            exit 1
+          fi
+          echo "OK: only the expected, deliberately-escaped ArgoCD template syntax present"

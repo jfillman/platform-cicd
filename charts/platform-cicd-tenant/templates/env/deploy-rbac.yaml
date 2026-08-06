@@ -1,0 +1,35 @@
+{{- if eq (include "platform-cicd-tenant.hasStage" (dict "stages" .Values.pipeline "name" "deploy")) "true" }}
+{{- $tenant := .Values.platformIdentity.tenantNamespace }}
+{{- $envs := concat (.Values.deploy.lowerEnvironments | default list) (.Values.deploy.upperEnvironments | default list) }}
+{{- range $envs }}
+---
+# templates/env/deploy-rbac.yaml (from tenant-env-rbac-template.yaml - one copy per
+# declared deploy.lowerEnvironments/upperEnvironments entry, rendered only if cicd.yaml's
+# pipeline: declares a "deploy" stage)
+#
+# Without this, catalog/tasks/deploy-manifests.yaml's `kubectl -n <tenant>-<env> set
+# image ...` fails with Forbidden: pipeline-runner's Role only grants rights inside the
+# tenant's OWN namespace, which is where pipelines execute, not where the deployed app
+# lives - a namespace-scoped Role never extends into a different namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-pipeline-runner-deploy
+  namespace: {{ $tenant }}-{{ . }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/status"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-pipeline-runner-deploy
+  namespace: {{ $tenant }}-{{ . }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pipeline-runner-deploy }
+subjects:
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: {{ $tenant }}
+{{- end }}
+{{- end }}

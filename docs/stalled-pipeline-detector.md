@@ -10,7 +10,7 @@ downstream to notice a PR sat unbuilt) - this closes that gap with an automated 
 
 The architecture plan originally bundled this with "CDEvents idempotency/dedup." Live
 code inspection found the dedup half was already built during Phase 1:
-`platform/broker/manifests/tenant-triggers-template.yaml` names every triggered
+`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)` names every triggered
 PipelineRun deterministically (`test-$(body.context.id)`, etc.), and that `id` is itself
 `sha256(emitting-PipelineRun-name:event-type)[:20]`, computed in
 `catalog/lib/cdevents.sh`'s `cdevent_send()`. At-least-once redelivery of the same

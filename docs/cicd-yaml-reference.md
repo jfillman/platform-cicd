@@ -91,7 +91,7 @@ What's actually cached is the build tool's own *download* cache (npm's tarball c
 `node_modules` from scratch on every run by design, so caching that directory would do
 nothing; what actually avoids re-downloading is the tool's own cache, backed here by a
 real, persistent, **per-app** PVC (`build-cache-<app-name>`, provisioned at onboarding -
-see `platform/broker/manifests/app-build-cache-pvc-template.yaml`) that survives across
+see `charts/platform-cicd-tenant/templates/env/build-cache-pvc.yaml`) that survives across
 runs, unlike the ephemeral per-run `source` workspace. Per-app rather than shared across
 a tenant's apps specifically so `size` above can vary per app.
 
@@ -152,15 +152,18 @@ use the `if ... == false then ... else ... end` form, not `// true` - `// false`
 as-is (both sides collapse to the same falsy result either way, so there's nothing for
 the bug to hide behind).
 
-## Staleness of the platform-generated boilerplate
+## Staleness of the platform-generated boilerplate - resolved, Phase 3 item 7
 
-`cicd.yaml` itself never goes stale (see above), but the two files onboarding generates
-into `.tekton/` (`push.yaml`, `pull-request.yaml`) reference the shared catalog by
-Pipeline name and param list - if the catalog adds a required param or a new trigger
-type, those files need a re-sync. This isn't automated yet (Phase 1 hand-generates them
-for pilot repos); a periodic diff-against-current-template check, surfaced as a "stale
-integration" flag in the Grafana dashboard, is a named follow-up - see the plan's Q3
-review notes. Don't assume `.tekton/*.yaml` silently stays current.
+`cicd.yaml` itself never goes stale (see above), and as of Phase 3 item 7 neither does
+the boilerplate `.tekton/` generates into an app/gitops repo: `push.yaml`/
+`pull-request.yaml` (and the gitops repo's 5 governance-check files) reference the shared
+catalog by Pipeline name and param list, and used to need a hand re-sync whenever the
+catalog changed - now automated via `onboarding-templates/.tekton/onboarding-resync.yaml`
+(fires on any `cicd.yaml` change) + `charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml` (opens
+a PR with regenerated files, skipping the PR entirely when nothing actually changed) -
+see [onboarding.md](onboarding.md#keeping-onboarding-boilerplate-in-sync). Re-running
+that same Pipeline manually is also how a platform-side onboarding-template change gets
+pushed out to already-onboarded repos, not just a tenant-side `cicd.yaml` edit.
 
 ## Local validation before pushing
 

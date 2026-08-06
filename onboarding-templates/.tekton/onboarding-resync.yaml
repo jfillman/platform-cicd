@@ -1,0 +1,49 @@
+# onboarding-templates/.tekton/onboarding-resync.yaml
+#
+# BOILERPLATE - see push.yaml for the general explanation. This one is different in
+# kind from push.yaml/pull-request.yaml: instead of running this app's own build, it
+# re-invokes the onboarding-delivery mechanism itself (catalog/tasks/
+# deliver-onboarding-files.yaml) whenever cicd.yaml changes on a push to main -
+# `.pathChanged("cicd.yaml")` is a real, documented Pipelines-as-Code CEL extension
+# function, not a custom filter. This is Phase 3 item 7's replacement for both the fully
+# manual "hand-copy .tekton files" onboarding process and an earlier design considered
+# (an ArgoCD-multi-source Application reading cicd.yaml live) that was rejected because
+# it would need standing ArgoCD read access to every tenant's source repo as a base
+# requirement of onboarding itself - see docs/onboarding.md. Reusing PaC's own already-
+# trusted webhook auth instead means no new credential class anywhere.
+#
+# Also fires (same mechanism, same file) if the PLATFORM's own onboarding templates
+# change and this tenant's copy goes stale - see docs/cicd-yaml-reference.md's
+# "Staleness of the platform-generated boilerplate" section, closed by this same
+# re-sync path rather than left as a separate, still-unsolved problem.
+#
+# <TENANT>, <APP_NAME>, <GITHUB_OWNER>, and (if this tenant declared a release stage)
+# <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml itself when it
+# delivers this file - see that Task's own substitution loop, which includes this file
+# alongside push.yaml/pull-request.yaml.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: onboarding-resync-
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/on-cel-expression: '.pathChanged("cicd.yaml")'
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: onboarding-resync }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: git-url, value: "{{ repo_url }}" }
+    - { name: tenant, value: "<TENANT>" }
+    - { name: app-name, value: "<APP_NAME>" }
+    - { name: github-owner, value: "<GITHUB_OWNER>" }
+    - { name: gitops-repo-url, value: "<GITOPS_REPO_URL>" }
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "10m"

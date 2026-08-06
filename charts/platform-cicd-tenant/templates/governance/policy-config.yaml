@@ -1,0 +1,54 @@
+{{- if .Values.governance.policyCheck }}
+# templates/governance/policy-config.yaml (from tenant-policy-config-template.yaml -
+# rendered only if governance.policyCheck is true)
+#
+# allowed-commit-signers is a plain, human-editable list of emails - not a pre-built
+# regex - so onboarding/updating a tenant's allowed signers never means hand-writing
+# regex syntax. catalog/tasks/verify-commit-signature.yaml builds the
+# --certificate-identity-regexp gitsign needs from this list at runtime.
+#
+# Lives in the tenant's own namespace, not argocd or platform-system, so the PaC-
+# triggered policy-check Task (already running under this tenant's own Repository CR
+# context, same namespace) can read it same-namespace - no cross-namespace RBAC needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.platformIdentity.appName }}-policy-config
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+data:
+  # One email per line. Comments (#) and blank lines are ignored by the Task that reads
+  # this - see verify-commit-signature.yaml. Real signer emails are managed by editing
+  # this chart's values (platformIdentity is platform-controlled, but this list is
+  # ordinary tenant config), not by hand-editing regex.
+  allowed-commit-signers: |
+    {{- range .Values.governance.allowedCommitSigners | default list }}
+    {{ . }}
+    {{- else }}
+    # Add one email per line, e.g.:
+    # dev@example.com
+    {{- end }}
+---
+# Lets this tenant's own pipeline-runner SA read exactly this one named ConfigMap.
+# resourceNames-scoped, same shape as every other narrowly-scoped grant in this chart.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-policy-config-read-{{ .Values.platformIdentity.appName }}
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ .Values.platformIdentity.appName }}-policy-config"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-policy-config-read-{{ .Values.platformIdentity.appName }}
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-policy-config-read-{{ .Values.platformIdentity.appName }} }
+subjects:
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: {{ .Values.platformIdentity.tenantNamespace }}
+{{- end }}

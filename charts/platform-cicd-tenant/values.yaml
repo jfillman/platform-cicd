@@ -1,0 +1,88 @@
+# charts/platform-cicd-tenant/values.yaml
+#
+# Real installs merge THREE sources, in this order (later wins on any key collision):
+#   helm install <tenant> charts/platform-cicd-tenant \
+#     -f <this file, the chart's own defaults - always loaded first> \
+#     -f <app-repo>/cicd.yaml \
+#     -f platform-identity.yaml
+#
+# platform-identity.yaml goes LAST and supplies the platformIdentity: key below -
+# putting it last isn't what makes it authoritative (see docs/onboarding.md's security
+# note: the real guarantee is that `platformIdentity` is not a key schemas/cicd.schema.json
+# permits, so validate-cicd-config's existing additionalProperties:false check already
+# rejects any cicd.yaml that tries to define it, independent of -f ordering).
+#
+# The values below (except the platformIdentity stub) mirror schemas/cicd.schema.json's
+# own defaults - kept here too, not just in the schema, so `helm template`/`helm lint`
+# work standalone against this chart without requiring a real cicd.yaml, matching the
+# fixture-matrix testing approach in docs/catalog-versioning.md.
+
+build:
+  agent: nodejs-20
+  unitTest:
+    enabled: true
+  sonar: false
+  cache:
+    enabled: false
+    size: small
+
+test:
+  enabled: true
+
+deploy:
+  lowerEnvironments: [dev]
+  upperEnvironments: []
+  strategy: deployment
+
+ephemeralEnvironments:
+  branch:
+    enabled: false
+  pullRequest:
+    enabled: false
+  ttl: 5d
+
+governance:
+  sast: false
+  imageScan: false
+  policyCheck: false
+  sbom: false
+  allowedCommitSigners: []
+
+notifications:
+  slack:
+    enabled: false
+
+# The fixed superset DAG this platform supports - see docs/cicd-yaml-reference.md's
+# "Fixed superset DAG, not arbitrary graphs" design rule. Every resource in this chart
+# that's specific to test/deploy/release renders only if that stage appears here - see
+# templates/_helpers.tpl's platform-cicd-tenant.hasStage.
+pipeline:
+  - stage: build
+
+# Shared platform infrastructure this chart's templates need to reach - not really
+# per-tenant config, kept here (rather than under platformIdentity) since these are
+# platform-wide constants every tenant install shares, not this-one-tenant identity.
+toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
+
+# Must match charts/platform-cicd-control-plane/values.yaml's own secretStore.name/kind
+# exactly - ClusterSecretStore is cluster-scoped (not namespaced), so this is a real
+# cross-chart reference by name, not a value either chart owns independently. See
+# docs/secrets-management.md.
+secretStore:
+  name: platform-secret-store
+  kind: ClusterSecretStore
+
+# Placeholder only - a real install MUST override every field here via
+# `-f platform-identity.yaml` (see Chart.yaml). Left empty rather than a fake example
+# value so an accidental `helm install` without that file fails loudly (empty namespace
+# names, empty repo URLs) instead of silently deploying to a plausible-looking wrong
+# place. catalogNamespace defaults to the real production catalog release's namespace -
+# override this one specific field (only) for a canary tenant pointed at
+# platform-catalog-canary, see docs/catalog-versioning.md.
+platformIdentity:
+  tenantNamespace: ""
+  appName: ""
+  gitopsRepoUrl: ""
+  appRepoUrl: ""
+  githubOwner: ""
+  catalogNamespace: platform-catalog

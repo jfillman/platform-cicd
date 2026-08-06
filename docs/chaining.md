@@ -18,7 +18,7 @@ the top-level [README.md](../README.md) architecture summary.
 
 ## The shared broker
 
-One Tekton Triggers `EventListener` (`platform/broker/manifests/eventlistener.yaml`,
+One Tekton Triggers `EventListener` (`charts/platform-cicd-control-plane/templates/broker/eventlistener.yaml`,
 2-3 replicas, stateless), shared across every tenant - **not** one EventListener per
 tenant. An earlier draft of this design had per-tenant EventListener pods; design review
 rejected that as an unnecessary ongoing operational tax (patch/cert/config drift
@@ -27,7 +27,7 @@ approach doesn't already provide.
 
 **Authentication**: each pipeline pod's own cluster-issued, audience-bound projected
 ServiceAccount token (`audience: cdevents-broker`, minted fresh per Task run, 10-minute
-expiry - see the `volumes:` block in `catalog/tasks/send-cdevent.yaml`), verified by a
+expiry - see the `volumes:` block in `charts/platform-cicd-catalog/templates/tasks/send-cdevent.yaml`), verified by a
 small custom `ClusterInterceptor`
 (`platform/broker/cmd/token-review-interceptor`) calling the Kubernetes `TokenReview`
 API. There is no platform-minted credential anywhere in this path - this is what
@@ -47,7 +47,7 @@ not a nice-to-have, in `hack/kind-config.yaml`).
 **PipelineRun creation identity**: when a `Trigger` fires, Tekton Triggers creates the
 resulting `PipelineRun` using *that Trigger's own* `spec.serviceAccountName` - each
 tenant's own least-privilege, namespace-scoped `pipeline-runner` SA (see
-`platform/broker/manifests/tenant-triggers-template.yaml`), never the broker's own
+`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`), never the broker's own
 identity. The broker's ServiceAccount holds no rights to create PipelineRuns anywhere;
 it can only watch `Trigger`/`TriggerBinding`/`TriggerTemplate` objects cluster-wide.
 
@@ -132,7 +132,7 @@ already used), each with three predicates - `queued`, `started`, `finished`.
   outside), which is separable infrastructure, not a natural extension of the existing
   `send-cdevent` pattern every other event here uses.
 - **No changes to the existing domain events or the broker's chaining Triggers.** Every
-  Trigger's CEL filter (`platform/broker/manifests/tenant-triggers-template.yaml`) checks
+  Trigger's CEL filter (`charts/platform-cicd-tenant/templates/triggers/ (+ templates/identity/pipeline-runner.yaml)`) checks
   an exact `body.context.type` string - a new type the filter doesn't check for simply
   never matches, so this is safely additive to the real chaining mechanism.
 
@@ -155,7 +155,7 @@ signal that only reports on success isn't a useful uniform signal at all.
 reasons - confirmed against Tekton's own docs) don't match CDEvents' `outcome` enum
 (`success`/`failure`/`cancel`/`error`) directly. Rather than hand-mapping this in every
 pipeline's YAML (Tekton param wiring has no conditional logic - only a Task's own script
-can compute a mapped value), `catalog/tasks/send-cdevent.yaml` gained one new **optional**
+can compute a mapped value), `charts/platform-cicd-catalog/templates/tasks/send-cdevent.yaml` gained one new **optional**
 param, `tekton-status` (default `""`). When set (every `pipelinerun-finished` task passes
 `$(tasks.status)`), the script maps it via `cdevents_map_outcome()` (new in
 `catalog/lib/cdevents.sh`, a small pure function alongside `cdevent_send()`, not replacing

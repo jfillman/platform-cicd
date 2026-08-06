@@ -1,0 +1,194 @@
+{{- if and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
+# templates/argocd/ephemeral-envs.yaml (from tenant-ephemeral-envs-argocd-template.yaml -
+# rendered only if ephemeralEnvironments.pullRequest.enabled)
+#
+# IMPORTANT for future editors: this file's `template:` block below uses ArgoCD
+# ApplicationSet's OWN Go-template syntax (goTemplate: true - `.number`, `.head_sha`,
+# etc, wrapped in double curly braces and resolved by ArgoCD at generate-time), which
+# collides with Helm's own Go-template engine (this file is rendered by Helm first, at
+# install/upgrade time). Every ArgoCD template expression below is deliberately escaped
+# (each literal curly-brace pair written as a quoted string inside its own Helm action)
+# so Helm emits it as literal double-curly-brace text for ArgoCD to evaluate later - do
+# not "simplify" these by removing the escaping, that would make Helm try to evaluate
+# `.number`/`.head_sha` as if they were its own values (which don't exist), not
+# ArgoCD's.
+#
+# Ported from a real prior production pattern - the ApplicationSet pullRequest generator
+# itself is sound and worth keeping, but two supporting pieces in that old system were
+# confirmed broken, not just theoretically risky: cleanup was explicitly disabled (a
+# commented-out finalizer, never fixed) and RBAC used cluster-admin for the controlling
+# identity. Both fixed here: a real finalizer below, and no new elevated identity
+# anywhere (ArgoCD's own already-trusted applicationset-controller does all namespace/
+# Application creation).
+#
+# The GitHub App installation token this generator reads is minted by a periodic CronJob
+# (see pr-token-refresher-cronjob.yaml below), not a long-lived PAT.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ .Values.platformIdentity.appName }}-pr-envs
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=invalid"]
+  generators:
+    - pullRequest:
+        github:
+          owner: {{ .Values.platformIdentity.githubOwner }}
+          repo: {{ .Values.platformIdentity.appName }}
+          tokenRef:
+            secretName: {{ .Values.platformIdentity.appName }}-pr-generator-token
+            key: token
+          # Opt-in only - avoids spinning up a full namespace+Deployment for every
+          # WIP/typo-fix PR. A developer adds this label when they actually want a live
+          # preview.
+          labels:
+            - preview
+        requeueAfterSeconds: 180
+  template:
+    metadata:
+      name: "{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
+      # Only cascade-deletes correctly if the Namespace is a tracked resource
+      # (k8s/ephemeral/namespace.yaml in the app repo), not just a CreateNamespace=true
+      # side effect - CreateNamespace=true is deliberately NOT set below for that reason.
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: {{ .Values.platformIdentity.tenantNamespace }}
+      source:
+        repoURL: {{ .Values.platformIdentity.appRepoUrl }}
+        targetRevision: "{{ "{{" }}.head_sha{{ "}}" }}"
+        path: k8s/ephemeral
+        kustomize:
+          nameSuffix: "-{{ "{{" }}.number{{ "}}" }}"
+          # build-image.yaml (the shared catalog Task) already tags every build
+          # ghcr.io/.../<app>-pr:<12-char-sha> - trunc 12 here matches that exactly so
+          # this points at a real, already-pushed image, not a guess.
+          images:
+            - "ghcr.io/{{ .Values.platformIdentity.githubOwner }}/{{ .Values.platformIdentity.appName }}-pr:{{ "{{" }} trunc 12 .head_sha {{ "}}" }}"
+          # Kustomize's nameSuffix transformer deliberately excludes Namespace objects, so
+          # without this patch the Namespace stays "<tenant>-pr" while Deployment/Service
+          # deploy into "<tenant>-pr-{{.number}}" via destination.namespace below - a
+          # namespace that never matches, so the sync fails with "namespace ... not
+          # found". This JSON6902 patch renames the Namespace object directly.
+          patches:
+            - target:
+                kind: Namespace
+                name: {{ .Values.platformIdentity.tenantNamespace }}-pr
+              patch: |-
+                - op: replace
+                  path: /metadata/name
+                  value: {{ .Values.platformIdentity.tenantNamespace }}-pr-{{ "{{" }}.number{{ "}}" }}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .Values.platformIdentity.tenantNamespace }}-pr-{{ "{{" }}.number{{ "}}" }}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+---
+# templates/argocd/pr-token-refresher (from pr-token-refresher-cronjob.yaml) - ArgoCD's
+# ApplicationSet pullRequest generator needs a static Secret to read a GitHub token from
+# (its own controller polls independently). Rather than a new long-lived PAT, this
+# CronJob periodically mints a fresh, single-repo-scoped GitHub App installation token
+# via the shared broker's /github-installation-token endpoint - same infrastructure and
+# trust model already built for the release stage, not a new credential class. 20
+# minutes comfortably inside a GitHub App installation token's 1-hour lifetime.
+#
+# Runs as a dedicated ServiceAccount in the TENANT's own namespace (not argocd) -
+# authorization for minting the token depends on the caller's own namespace owning a
+# Repository CR for this app, which only exists in the tenant namespace. A second,
+# narrowly-scoped RoleBinding in argocd grants this same identity permission to write
+# exactly one named Secret there - nothing else in argocd.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pr-env-token-refresher
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+---
+# Lets this SA write (but not read arbitrary/list) exactly one named Secret in argocd.
+# `create` can't be resourceName-scoped (the object doesn't exist yet at authorization
+# time), so it's granted unscoped but still restricted to the `secrets` resource type in
+# this one namespace; get/update/patch are scoped to the one Secret name by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }}
+  namespace: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Values.platformIdentity.appName }}-pr-generator-token"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }}
+  namespace: argocd
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }} }
+subjects:
+  - kind: ServiceAccount
+    name: pr-env-token-refresher
+    namespace: {{ .Values.platformIdentity.tenantNamespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.platformIdentity.appName }}-pr-token-refresher
+  namespace: {{ .Values.platformIdentity.tenantNamespace }}
+spec:
+  schedule: "*/20 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: pr-env-token-refresher
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile: { type: RuntimeDefault }
+          volumes:
+            - name: github-token-broker-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      path: github-token-broker-token
+                      audience: github-installation-token
+                      expirationSeconds: 600
+          containers:
+            - name: refresh
+              image: {{ .Values.toolboxImage }}
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              volumeMounts:
+                - name: github-token-broker-token
+                  mountPath: /var/run/secrets/platform
+                  readOnly: true
+              env:
+                - name: GITHUB_TOKEN_BROKER_URL
+                  value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  sa_token="$(cat /var/run/secrets/platform/github-token-broker-token)"
+                  resp="$(curl --fail --silent --show-error --max-time 15 \
+                    -X POST "${GITHUB_TOKEN_BROKER_URL}" \
+                    -H "Authorization: Bearer ${sa_token}" \
+                    -H "Content-Type: application/json" \
+                    -d '{"owner":"{{ .Values.platformIdentity.githubOwner }}","repo":"{{ .Values.platformIdentity.appName }}"}')"
+                  token="$(jq -er '.token' <<<"${resp}")"
+                  kubectl create secret generic {{ .Values.platformIdentity.appName }}-pr-generator-token \
+                    -n argocd --from-literal=token="${token}" \
+                    --dry-run=client -o yaml | kubectl apply -f -
+{{- end }}
