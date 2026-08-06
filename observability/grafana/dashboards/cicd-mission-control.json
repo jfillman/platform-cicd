@@ -130,14 +130,14 @@
             "description": "The closest thing to a live 'progress bar' this platform's telemetry can honestly give: spans are only sent once a stage finishes (see docs/tracing.md - there is no true mid-stage percent-complete signal), so this waterfall shows real, completed stages as they land, not a simulated animation. Click a Trace ID above to load it here.",
             "gridPos": { "x": 0, "y": 19, "w": 24, "h": 11 },
             "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "query": "{ trace:id = \"${traceId}\" }", "queryType": "traceql" } ]
+            "targets": [ { "query": "$traceId", "queryType": "traceId" } ]
         },
         {
             "id": 22, "type": "traces", "title": "DEBUG - hardcoded trace ID, no variable (delete once diagnosed)",
             "description": "Diagnostic only: same trace ID as the panel above, but typed directly into the query with no $traceId variable involved at all. If THIS panel also shows no data, the bug is in the traces panel/Tempo query itself, not variable interpolation. If THIS one works and the panel above doesn't, it confirms the bug is specifically in how the variable's value reaches the query.",
             "gridPos": { "x": 0, "y": 30, "w": 24, "h": 11 },
             "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "query": "{ trace:id = \"a2d4ac5979f7d1030b7a27a136668782\" }", "queryType": "traceql" } ]
+            "targets": [ { "query": "a2d4ac5979f7d1030b7a27a136668782", "queryType": "traceId" } ]
         },
         { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 41, "w": 24, "h": 1 } },
         {
