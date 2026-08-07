@@ -1,5 +1,4 @@
-# templates/rbac/catalog-read-only.yaml (moved from catalog/rbac/, Phase 3 item 7 - see
-# docs/catalog-versioning.md)
+# templates/rbac/catalog-read-only.yaml (see docs/catalog-versioning.md)
 #
 # Every Application's pipeline-runner SA needs to READ Pipelines/Tasks/StepActions in
 # {{ .Release.Namespace }} via Tekton's cluster resolver (see onboarding-templates/.tekton/

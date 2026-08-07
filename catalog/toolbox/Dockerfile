@@ -19,13 +19,13 @@
 # binary at all (checked against its actual release assets, v1.4.1 - only linux/amd64 and
 # linux/386, plus darwin/arm64) - built from source in a Go stage instead of downloaded.
 #
-# gitsign (Phase 3 item 2, docs/commit-signing.md) - used by catalog/tasks/verify-
-# commit-signature.yaml to verify a fetched app-repo commit's signature/identity, not to
-# sign anything from inside a Task (signing is a developer-machine, interactive-OIDC-flow
-# action, see docs/commit-signing.md). Real linux_amd64/linux_arm64 asset names confirmed
-# against the actual v0.17.0 release (checked live via the GitHub API), not guessed.
+# gitsign - used by catalog/tasks/verify-commit-signature.yaml to verify a fetched app-repo
+# commit's signature/identity, not to sign anything from inside a Task (signing is a
+# developer-machine, interactive-OIDC-flow action, see docs/commit-signing.md). Real
+# linux_amd64/linux_arm64 asset names confirmed against the actual v0.17.0 release (checked
+# live via the GitHub API), not guessed.
 #
-# ec (Conforma CLI, Phase 3 item 2 sub-item 3, docs/provenance-policy.md) - used by
+# ec (Conforma CLI, docs/provenance-policy.md) - used by
 # catalog/tasks/verify-image-provenance.yaml. Deliberately the GitHub-release binary
 # (github.com/conforma/cli), not the quay.io/enterprise-contract/ec-cli container image -
 # that image is amd64-only and genuinely crashes under this node's arm64 emulation with a

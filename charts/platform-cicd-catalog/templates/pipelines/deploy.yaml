@@ -43,21 +43,7 @@ spec:
   workspaces:
     - name: source
   tasks:
-    - name: clone-repo
-      taskRef:
-        resolver: hub
-        params:
-          - { name: catalog, value: git-clone }
-          - { name: kind, value: task }
-          - { name: name, value: git-clone }
-          - { name: version, value: "1.7.0" }
-      workspaces:
-        - { name: output, workspace: source }
-      params:
-        - { name: url, value: $(params.git-url) }
-        - { name: revision, value: $(params.git-revision) }
-
-    # Deeper CDEvents coverage (Phase 3 item 1, see docs/chaining.md): a generic
+    # Deep CDEvents coverage (see docs/chaining.md): a generic
     # pipelinerun.started signal, independent of deploy's own domain-specific
     # service.deployed event below. No runAfter - chain-id/traceparent/flow-start-time
     # already arrive as incoming params.
@@ -77,6 +63,20 @@ spec:
         - { name: flow-start-time, value: $(params.flow-start-time) }
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+
+    - name: clone-repo
+      taskRef:
+        resolver: hub
+        params:
+          - { name: catalog, value: git-clone }
+          - { name: kind, value: task }
+          - { name: name, value: git-clone }
+          - { name: version, value: "1.7.0" }
+      workspaces:
+        - { name: output, workspace: source }
+      params:
+        - { name: url, value: $(params.git-url) }
+        - { name: revision, value: $(params.git-revision) }
 
     - name: validate-config
       runAfter: [clone-repo]
@@ -196,7 +196,7 @@ spec:
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
-    # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
+    # Deeper CDEvents coverage - generic completion signal, deliberately
     # NOT gated on success like the domain-specific event above. See docs/chaining.md.
     - name: pipelinerun-finished
       taskRef:
