@@ -101,7 +101,7 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
 
-    # Deeper CDEvents coverage (Phase 3 item 1, see docs/chaining.md): a generic
+    # Deeper CDEvents coverage (see docs/chaining.md): a generic
     # pipelinerun.started signal, independent of build's own domain-specific
     # artifact.published event below. Fires here, not earlier, because build is the flow
     # root - chain-id/traceparent don't exist until start-flow generates them, unlike
