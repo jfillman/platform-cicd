@@ -1,0 +1,67 @@
+{{- if and .Values.onboarding.sync.enabled .Values.platformIdentity.appRepoUrl }}
+{{- $appNamespace := include "platform-cicd-app.namespace" . -}}
+{{- $appRepoUrl := .Values.platformIdentity.appRepoUrl -}}
+{{- $gitopsRepoUrl := .Values.platformIdentity.gitopsRepoUrl | default "" -}}
+{{- $pipelinesJson := .Values.pipelines | default (dict) | toJson -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: onboarding-sync-{{ .Release.Name }}
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    platform.io/subcomponent: "onboarding"
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "platform-cicd-app.labels" . | nindent 8 }}
+        platform.io/subcomponent: "onboarding"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: pipeline-runner
+      volumes:
+        - name: github-token-broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: github-token-broker-token
+                  audience: github-installation-token
+                  expirationSeconds: 600
+        - name: script-volume
+          configMap:
+            name: {{ include "platform-cicd-app.fullname" . }}-onboarding-sync
+            defaultMode: 0755
+      containers:
+        - name: sync-tekton-boilerplate
+          image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: github-token-broker-token
+              mountPath: /var/run/secrets/platform
+              readOnly: true
+            - name: script-volume
+              mountPath: /scripts
+          env:
+            - name: GITHUB_TOKEN_BROKER_URL
+              value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+            - name: APP_REPO_URL
+              value: {{ $appRepoUrl | quote }}
+            - name: APP_NAMESPACE
+              value: {{ $appNamespace | quote }}
+            - name: APP_NAME
+              value: {{ .Values.platformIdentity.appName | quote }}
+            - name: GITHUB_OWNER
+              value: {{ .Values.platformIdentity.githubOwner | quote }}
+            - name: GITOPS_REPO_URL
+              value: {{ $gitopsRepoUrl | quote }}
+            - name: PIPELINES_JSON
+              value: {{ $pipelinesJson | quote }}
+          command: ["/bin/bash",]
+          args:
+            - /scripts/onboarding-sync.sh
+{{- end }}

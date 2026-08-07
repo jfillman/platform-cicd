@@ -46,30 +46,50 @@ jobs:
           EOF
 
           cat > /tmp/fixtures/build-only.yaml <<'EOF'
-          pipeline: [{ stage: build }]
-          governance: { policyCheck: false }
-          ephemeralEnvironments: { pullRequest: { enabled: false } }
-          build: { cache: { enabled: false } }
-          EOF
+pipelines:
+  ci:
+    steps:
+      - stage: build
+    trigger:
+      source: event
+      event: artifact.published
+governance: { policyCheck: false }
+ephemeralEnvironments: { pullRequest: { enabled: false } }
+build: { cache: { enabled: false } }
+EOF
 
           cat > /tmp/fixtures/build-test.yaml <<'EOF'
-          pipeline: [{ stage: build }, { stage: test, after: build }]
-          governance: { policyCheck: false }
-          ephemeralEnvironments: { pullRequest: { enabled: false } }
-          build: { cache: { enabled: false } }
-          EOF
+pipelines:
+  ci:
+    steps:
+      - stage: build
+      - stage: test
+    trigger:
+      source: event
+      event: artifact.published
+governance: { policyCheck: false }
+ephemeralEnvironments: { pullRequest: { enabled: false } }
+build: { cache: { enabled: false } }
+EOF
 
           cat > /tmp/fixtures/full-pipeline.yaml <<'EOF'
-          pipeline:
-            - { stage: build }
-            - { stage: test, after: build }
-            - { stage: deploy, after: test, env: dev }
-            - { stage: release, after: deploy }
-          deploy: { lowerEnvironments: [dev, qa], upperEnvironments: [prod] }
-          governance: { policyCheck: true, allowedCommitSigners: [dev@example.com] }
-          ephemeralEnvironments: { pullRequest: { enabled: true } }
-          build: { cache: { enabled: true, size: large } }
-          EOF
+pipelines:
+  ci:
+    steps:
+      - stage: build
+      - stage: test
+      - stage: deploy
+        env: dev
+      - stage: release
+        env: prod
+    trigger:
+      source: event
+      event: artifact.published
+deploy: { lowerEnvironments: [dev, qa], upperEnvironments: [prod] }
+governance: { policyCheck: true, allowedCommitSigners: [dev@example.com] }
+ephemeralEnvironments: { pullRequest: { enabled: true } }
+build: { cache: { enabled: true, size: large } }
+EOF
 
       - name: 'Fixture: build-only - test/deploy/release/argocd/policy resources must be ABSENT'
         run: |

@@ -153,19 +153,77 @@
       }
     },
 
-    "pipeline": {
-      "type": "array",
-      "description": "Stage graph. Each entry names a stage from the fixed platform stage set and what it runs after. This does not define arbitrary DAGs - it toggles/orders a known, finite set of stages (build, test, deploy, release).",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["stage"],
-        "properties": {
-          "stage": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
-          "after": { "type": "string", "description": "Name of the stage (optionally suffixed :env, e.g. deploy:staging) this stage runs after. Omit for the first stage." },
-          "env": { "type": "string", "description": "Required for deploy/release stages: which environment from deploy.lowerEnvironments/upperEnvironments this instance targets." },
-          "approvalRequired": { "type": "boolean", "default": false, "description": "Only meaningful on release stages targeting an upper environment." }
-        }
+    "pipelines": {
+      "type": "object",
+      "description": "Optional named pipeline flows. Each flow can define a root trigger and an ordered list of stages, allowing app teams to describe build -> test -> deploy -> release sequences without writing Tekton YAML directly. The legacy list form used by earlier config files is also accepted and normalized by the chart.",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "trigger": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": ["git", "event"],
+                    "description": "Preferred explicit shape: git triggers evaluate branch/path filters; event triggers use the broker CDEvents path and the event field."
+                  },
+                  "event": {
+                    "type": "string",
+                    "enum": ["push", "branch.created", "release.created", "deploy", "artifact.published", "testcaserun.finished", "service.deployed", "change.created"],
+                    "description": "Explicit event identifier for the root trigger. For git sources this is the Git event kind; for event sources it is the CDEvents event type."
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": ["branch.created", "push", "release.created", "deploy"],
+                    "description": "Legacy shorthand for the git-trigger form. Newer configs should use source+event."
+                  },
+                  "branch": { "type": "string" },
+                  "branchPattern": { "type": "string" },
+                  "filePathPattern": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["stage"],
+                  "properties": {
+                    "stage": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
+                    "after": { "type": "string" },
+                    "env": { "type": "string" },
+                    "cluster": { "type": "string" },
+                    "name": { "type": "string" },
+                    "approvalRequired": { "type": "boolean", "default": false }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "task": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
+                "trigger": { "type": "string", "enum": ["branch.created", "push", "release.created", "deploy"] },
+                "branch": { "type": "string" },
+                "branchPattern": { "type": "string" },
+                "filePathPattern": { "type": "array", "items": { "type": "string" } },
+                "env": { "type": "string" },
+                "cluster": { "type": "string" },
+                "name": { "type": "string" },
+                "triggerEnv": { "type": "string" },
+                "approvalRequired": { "type": "boolean", "default": false }
+              }
+            }
+          }
+        ]
       }
     }
   }

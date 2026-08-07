@@ -1,4 +1,4 @@
-{{- if eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "release")) "true" }}
+{{- if eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "release")) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 # templates/triggers/fire-release.yaml (from tenant-triggers-template.yaml's Stage 4 -
 # rendered only if cicd.yaml's pipeline: declares a "release" stage - this is the exact

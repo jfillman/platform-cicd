@@ -1,4 +1,4 @@
-{{- if eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "deploy")) "true" }}
+{{- if eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "deploy")) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 {{- $envs := concat (.Values.deploy.lowerEnvironments | default list) (.Values.deploy.upperEnvironments | default list) }}
 {{- range $envs }}

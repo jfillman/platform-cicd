@@ -1,4 +1,4 @@
-{{- $hasRelease := eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "release")) "true" }}
+{{- $hasRelease := eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "release")) "true" }}
 {{- $hasEphemeral := and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
 {{- if or $hasRelease $hasEphemeral }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}

@@ -1,4 +1,4 @@
-{{- if eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "release")) "true" }}
+{{- if eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "release")) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 {{- $stagingNamespace := include "platform-cicd-app.envNamespace" (list $ "staging") }}
 # templates/argocd/release-application.yaml (from tenant-release-argocd-template.yaml -

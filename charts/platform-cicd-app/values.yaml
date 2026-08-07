@@ -52,12 +52,32 @@ notifications:
   slack:
     enabled: false
 
-# The fixed superset DAG this platform supports - see docs/cicd-yaml-reference.md's
-# "Fixed superset DAG, not arbitrary graphs" design rule. Every resource in this chart
-# that's specific to test/deploy/release renders only if that stage appears here - see
-# templates/_helpers.tpl's platform-cicd-app.hasStage.
-pipeline:
-  - stage: build
+onboarding:
+  sync:
+    enabled: true
+
+# Optional named pipeline flows. Each entry can define a root trigger plus an ordered
+# list of stages. This is a draft rendering model for app-owned sequential flows such as
+# build -> deploy -> test -> release without hand-writing Tekton YAML.
+#
+# Example explicit trigger shape:
+# pipelines:
+#   ci:
+#     trigger:
+#       source: git
+#       event: push
+#       branch: main
+#       filePathPattern:
+#         - "src/**"
+#     steps:
+#       - stage: build
+#       - stage: deploy
+#         env: dev
+#
+pipelines: {}
+
+# Stage presence is derived from `.Values.pipelines` flow definitions. The older
+# top-level `pipeline:` array is no longer used by the chart.
 
 # Shared platform infrastructure this chart's templates need to reach - not really
 # per-app config, kept here (rather than under platformIdentity) since these are

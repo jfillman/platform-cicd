@@ -1,29 +1,30 @@
 {{/*
-platform-cicd-app.hasStage - the direct fix for the enforcement gap this whole chart
-exists to close: cicd.yaml's `pipeline:` field was schema-validated but never actually
-read by anything (confirmed live: a `release` PipelineRun fired for an Application whose
-cicd.yaml only declared build/test/deploy). Every conditional resource in this chart
-keys off this helper instead of assuming a stage is present.
+platform-cicd-app.hasStage - checks whether any flow in `.Values.pipelines` contains
+an explicit stage entry for the requested stage name. This keeps the chart fully aligned
+with the new flow-based model instead of relying on the old top-level `pipeline:` array.
 
-Deliberately a simple membership check, not real DAG evaluation: this platform's own
-schema docs describe pipeline as a "fixed superset DAG, not arbitrary graphs" - the
-`after` field on each stage entry is validated by the schema but the broker's trigger
-wiring (see templates/triggers/*.yaml) is hardcoded to the specific build->test->deploy->
-release sequence regardless of what `after` says. This helper faithfully replicates that
-existing, real behavior (present/absent toggle) rather than building DAG flexibility
-nothing in this platform actually uses yet.
-
-Usage: {{ include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "test") }}
+Usage: {{ include "platform-cicd-app.hasStage" (dict "ctx" . "name" "test") }}
 Returns the string "true" or "" (empty) - compare with `eq ... "true"`, matching Helm's
 usual idiom for boolean-shaped named templates (a named template can only return a
 string, not a real bool).
 */}}
 {{- define "platform-cicd-app.hasStage" -}}
-{{- $found := "" -}}
-{{- range .stages -}}
-{{- if eq .stage $.name -}}
-{{- $found = "true" -}}
+{{- $targetName := .name | default "" -}}
+{{- $flows := dict -}}
+{{- if hasKey . "ctx" -}}
+  {{- $flows = .ctx.Values.pipelines | default (dict) -}}
+{{- else -}}
+  {{- $flows = .Values.pipelines | default (dict) -}}
 {{- end -}}
+{{- $found := "" -}}
+{{- range $flowName, $flow := $flows -}}
+  {{- $normalizedFlow := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}
+  {{- $steps := $normalizedFlow.steps | default (list) -}}
+  {{- range $step := $steps -}}
+    {{- if eq ($step.stage | default "") $targetName -}}
+      {{- $found = "true" -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- $found -}}
 {{- end -}}
@@ -78,6 +79,144 @@ Usage: {{ include "platform-cicd-app.namespace" . }} (or `$` from inside a range
 */}}
 {{- define "platform-cicd-app.namespace" -}}
 {{- include "platform-cicd-app.envNamespace" (list . "cicd") -}}
+{{- end -}}
+
+{{/*
+platform-cicd-app.normalizeFlow - accepts either the newer object form
+  pipelines:
+    ci:
+      trigger: { type: branch.created }
+      steps: [ ... ]
+
+or the legacy list form that the old config used:
+  pipelines:
+    ci:
+      - task: build
+        trigger: branch.created
+
+The normalized result is a dict with a `trigger` object and a `steps` list so the
+renderer can treat both forms uniformly.
+*/}}
+{{- define "platform-cicd-app.normalizeFlow" -}}
+{{- $flow := .flow -}}
+{{- $rootTrigger := dict -}}
+{{- $steps := list -}}
+{{- if kindIs "slice" $flow -}}
+  {{- range $idx, $entry := $flow -}}
+    {{- $step := dict -}}
+    {{- if hasKey $entry "task" -}}
+      {{- $_ := set $step "stage" $entry.task -}}
+    {{- else if hasKey $entry "stage" -}}
+      {{- $_ := set $step "stage" $entry.stage -}}
+    {{- end -}}
+    {{- if hasKey $entry "env" -}}
+      {{- $_ := set $step "env" $entry.env -}}
+    {{- end -}}
+    {{- if hasKey $entry "cluster" -}}
+      {{- $_ := set $step "cluster" $entry.cluster -}}
+    {{- end -}}
+    {{- if hasKey $entry "name" -}}
+      {{- $_ := set $step "name" $entry.name -}}
+    {{- end -}}
+    {{- if hasKey $entry "approvalRequired" -}}
+      {{- $_ := set $step "approvalRequired" $entry.approvalRequired -}}
+    {{- end -}}
+    {{- if eq $idx 0 -}}
+      {{- if hasKey $entry "trigger" -}}
+        {{- $entryTrigger := $entry.trigger -}}
+        {{- if kindIs "map" $entryTrigger -}}
+          {{- if hasKey $entryTrigger "source" -}}
+            {{- $_ := set $rootTrigger "source" (get $entryTrigger "source") -}}
+          {{- end -}}
+          {{- if hasKey $entryTrigger "event" -}}
+            {{- $_ := set $rootTrigger "event" (get $entryTrigger "event") -}}
+          {{- end -}}
+          {{- if hasKey $entryTrigger "type" -}}
+            {{- $_ := set $rootTrigger "type" (get $entryTrigger "type") -}}
+            {{- if not (hasKey $entryTrigger "event") -}}
+              {{- $_ := set $rootTrigger "event" (get $entryTrigger "type") -}}
+            {{- end -}}
+          {{- end -}}
+        {{- else if kindIs "string" $entryTrigger -}}
+          {{- $_ := set $rootTrigger "source" "git" -}}
+          {{- $_ := set $rootTrigger "event" $entryTrigger -}}
+          {{- $_ := set $rootTrigger "type" $entryTrigger -}}
+        {{- end -}}
+      {{- end -}}
+      {{- if hasKey $entry "branch" -}}
+        {{- $_ := set $rootTrigger "branch" $entry.branch -}}
+      {{- end -}}
+      {{- if hasKey $entry "branchPattern" -}}
+        {{- $_ := set $rootTrigger "branchPattern" $entry.branchPattern -}}
+      {{- end -}}
+      {{- if hasKey $entry "filePathPattern" -}}
+        {{- $_ := set $rootTrigger "filePathPattern" $entry.filePathPattern -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $steps = append $steps $step -}}
+  {{- end -}}
+{{- else if kindIs "map" $flow -}}
+  {{- if hasKey $flow "trigger" -}}
+    {{- $flowTrigger := get $flow "trigger" -}}
+    {{- if kindIs "map" $flowTrigger -}}
+      {{- if hasKey $flowTrigger "source" -}}
+        {{- $_ := set $rootTrigger "source" (get $flowTrigger "source") -}}
+      {{- end -}}
+      {{- if hasKey $flowTrigger "event" -}}
+        {{- $_ := set $rootTrigger "event" (get $flowTrigger "event") -}}
+      {{- end -}}
+      {{- if hasKey $flowTrigger "type" -}}
+        {{- $_ := set $rootTrigger "type" (get $flowTrigger "type") -}}
+        {{- if not (hasKey $flowTrigger "event") -}}
+          {{- $_ := set $rootTrigger "event" (get $flowTrigger "type") -}}
+        {{- end -}}
+      {{- end -}}
+    {{- else if kindIs "string" $flowTrigger -}}
+      {{- $_ := set $rootTrigger "source" "git" -}}
+      {{- $_ := set $rootTrigger "event" $flowTrigger -}}
+      {{- $_ := set $rootTrigger "type" $flowTrigger -}}
+    {{- end -}}
+    {{- if hasKey $flow.trigger "branch" -}}
+      {{- $_ := set $rootTrigger "branch" (get $flow.trigger "branch") -}}
+    {{- end -}}
+    {{- if hasKey $flow.trigger "branchPattern" -}}
+      {{- $_ := set $rootTrigger "branchPattern" (get $flow.trigger "branchPattern") -}}
+    {{- end -}}
+    {{- if hasKey $flow.trigger "filePathPattern" -}}
+      {{- $_ := set $rootTrigger "filePathPattern" (get $flow.trigger "filePathPattern") -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if hasKey $flow "steps" -}}
+    {{- range $entry := $flow.steps -}}
+      {{- $step := dict -}}
+      {{- if hasKey $entry "stage" -}}
+        {{- $_ := set $step "stage" $entry.stage -}}
+      {{- end -}}
+      {{- if hasKey $entry "env" -}}
+        {{- $_ := set $step "env" $entry.env -}}
+      {{- end -}}
+      {{- if hasKey $entry "cluster" -}}
+        {{- $_ := set $step "cluster" $entry.cluster -}}
+      {{- end -}}
+      {{- if hasKey $entry "name" -}}
+        {{- $_ := set $step "name" $entry.name -}}
+      {{- end -}}
+      {{- if hasKey $entry "approvalRequired" -}}
+        {{- $_ := set $step "approvalRequired" $entry.approvalRequired -}}
+      {{- end -}}
+      {{- $steps = append $steps $step -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if eq ($rootTrigger.source | default "") "" -}}
+  {{- $defaultEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
+  {{- if or (eq $defaultEvent "push") (eq $defaultEvent "branch.created") (eq $defaultEvent "release.created") (eq $defaultEvent "deploy") -}}
+    {{- $_ := set $rootTrigger "source" "git" -}}
+  {{- else if ne $defaultEvent "" -}}
+    {{- $_ := set $rootTrigger "source" "event" -}}
+  {{- end -}}
+{{- end -}}
+{{- dict "trigger" $rootTrigger "steps" $steps | toYaml -}}
 {{- end -}}
 
 {{/*

@@ -1,4 +1,4 @@
-{{- if eq (include "platform-cicd-app.hasStage" (dict "stages" .Values.pipeline "name" "deploy")) "true" }}
+{{- if eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "deploy")) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 # templates/triggers/fire-deploy.yaml (from tenant-triggers-template.yaml's Stage 3 -
 # rendered only if cicd.yaml's pipeline: declares a "deploy" stage)

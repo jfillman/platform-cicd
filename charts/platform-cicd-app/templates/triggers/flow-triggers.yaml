@@ -1,0 +1,209 @@
+{{- $appNamespace := include "platform-cicd-app.namespace" . -}}
+{{- $flows := .Values.pipelines | default (dict) -}}
+{{- range $flowName, $flow := $flows }}
+{{- $normalizedFlow := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}
+{{- $steps := $normalizedFlow.steps | default (list) -}}
+{{- $stepCount := len $steps -}}
+{{- if gt $stepCount 0 }}
+{{- $rootTrigger := $normalizedFlow.trigger | default (dict) -}}
+{{- range $index, $step := $steps }}
+{{- $isFirst := eq $index 0 -}}
+{{- $stageName := $step.stage | default "build" -}}
+{{- $triggerName := printf "flow-%s-%s" $flowName $stageName -}}
+{{- $pipelineName := $stageName -}}
+{{- $eventType := "" -}}
+{{- if eq $stageName "build" }}{{- $eventType = "artifact.published" -}}{{- end }}
+{{- if eq $stageName "test" }}{{- $eventType = "testcaserun.finished" -}}{{- end }}
+{{- if eq $stageName "deploy" }}{{- $eventType = "service.deployed" -}}{{- end }}
+{{- if eq $stageName "release" }}{{- $eventType = "change.created" -}}{{- end }}
+{{- $rootTriggerSource := $rootTrigger.source | default "" -}}
+{{- $rootTriggerEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
+{{- $rootTriggerBranch := $rootTrigger.branch | default "" -}}
+{{- $rootTriggerFilePaths := $rootTrigger.filePathPattern | default (list) -}}
+{{- $rootTriggerFilter := "" -}}
+{{- if $isFirst }}
+{{- if eq $rootTriggerSource "" -}}
+  {{- if or (eq $rootTriggerEvent "push") (eq $rootTriggerEvent "branch.created") (eq $rootTriggerEvent "release.created") (eq $rootTriggerEvent "deploy") -}}
+    {{- $rootTriggerSource = "git" -}}
+  {{- else if eq $rootTriggerEvent "" -}}
+    {{- $rootTriggerSource = "event" -}}
+    {{- $rootTriggerEvent = $eventType -}}
+  {{- else -}}
+    {{- $rootTriggerSource = "event" -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (eq $rootTriggerSource "git") (eq $rootTriggerEvent "") }}{{- $rootTriggerEvent = $eventType -}}{{- end }}
+{{- if eq $rootTriggerSource "git" }}
+{{- $rootTriggerFilter = printf "body.context.type == 'dev.cdevents.change.created.0.3.0' && body.subject.content.git-url != '' && body.context.source.startsWith('/platform-cicd/%s/')" $appNamespace -}}
+{{- if and (ne $rootTriggerBranch "") (or (eq $rootTriggerEvent "push") (eq $rootTriggerEvent "branch.created")) }}
+{{- $rootTriggerFilter = printf "%s && body.subject.content.branch == '%s'" $rootTriggerFilter $rootTriggerBranch -}}
+{{- end -}}
+{{- if and (gt (len $rootTriggerFilePaths) 0) (or (eq $rootTriggerEvent "push") (eq $rootTriggerEvent "branch.created")) }}
+{{- $rootTriggerPathExprs := list -}}
+{{- range $rootTriggerFilePaths }}{{- $rootTriggerPathExprs = append $rootTriggerPathExprs (printf "body.subject.content.path == '%s'" .) -}}{{- end -}}
+{{- if gt (len $rootTriggerPathExprs) 0 }}{{- $rootTriggerFilter = printf "%s && (%s)" $rootTriggerFilter (join $rootTriggerPathExprs " || ") -}}{{- end -}}
+{{- end -}}
+{{- else }}
+{{- $rootTriggerFilter = printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/')" $rootTriggerEvent $appNamespace $appNamespace -}}
+{{- end -}}
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: {{ $triggerName }}-binding
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "triggers"
+spec:
+  params:
+    - { name: flow-name, value: {{ $flowName | quote }} }
+    - { name: stage-name, value: {{ $stageName | quote }} }
+    - { name: pipeline-run-name, value: {{ printf "%s-%s" $flowName $stageName | quote }} }
+    - { name: env, value: {{ $step.env | default "dev" | quote }} }
+    - { name: cluster, value: {{ $step.cluster | default "" | quote }} }
+    - { name: name, value: {{ $step.name | default "" | quote }} }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: {{ $triggerName }}-template
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "triggers"
+spec:
+  params:
+    - name: flow-name
+    - name: stage-name
+    - name: pipeline-run-name
+    - name: env
+    - name: cluster
+    - name: name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        name: $(tt.params.pipeline-run-name)
+      spec:
+        pipelineRef:
+          resolver: cluster
+          params:
+            - { name: kind, value: pipeline }
+            - { name: name, value: {{ $pipelineName }} }
+            - { name: namespace, value: {{ $.Values.platformIdentity.catalogNamespace }} }
+        params:
+          - { name: app-namespace, value: {{ $appNamespace }} }
+          - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
+          - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
+          - { name: env, value: $(tt.params.env) }
+          - { name: cluster, value: $(tt.params.cluster) }
+          - { name: name, value: $(tt.params.name) }
+        taskRunTemplate: { serviceAccountName: pipeline-runner }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: {{ $triggerName }}
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "triggers"
+spec:
+  serviceAccountName: pipeline-runner
+  interceptors:
+    - ref: { name: cdevents-broker-auth, kind: ClusterInterceptor }
+      params: [{ name: audience, value: cdevents-broker }]
+    - ref: { name: cel, kind: ClusterInterceptor }
+      params:
+        - name: filter
+          value: >-
+            {{ $rootTriggerFilter }}
+  bindings:
+    - { ref: {{ $triggerName }}-binding }
+  template:
+    ref: {{ $triggerName }}-template
+{{- else }}
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: {{ $triggerName }}-binding
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "triggers"
+spec:
+  params:
+    - { name: flow-name, value: {{ $flowName | quote }} }
+    - { name: stage-name, value: {{ $stageName | quote }} }
+    - { name: pipeline-run-name, value: {{ printf "%s-%s" $flowName $stageName | quote }} }
+    - { name: env, value: {{ $step.env | default "dev" | quote }} }
+    - { name: cluster, value: {{ $step.cluster | default "" | quote }} }
+    - { name: name, value: {{ $step.name | default "" | quote }} }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: {{ $triggerName }}-template
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "triggers"
+spec:
+  params:
+    - name: flow-name
+    - name: stage-name
+    - name: pipeline-run-name
+    - name: env
+    - name: cluster
+    - name: name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        name: $(tt.params.pipeline-run-name)
+      spec:
+        pipelineRef:
+          resolver: cluster
+          params:
+            - { name: kind, value: pipeline }
+            - { name: name, value: {{ $pipelineName }} }
+            - { name: namespace, value: {{ $.Values.platformIdentity.catalogNamespace }} }
+        params:
+          - { name: app-namespace, value: {{ $appNamespace }} }
+          - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
+          - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
+          - { name: env, value: $(tt.params.env) }
+          - { name: cluster, value: $(tt.params.cluster) }
+          - { name: name, value: $(tt.params.name) }
+        taskRunTemplate: { serviceAccountName: pipeline-runner }
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: {{ $triggerName }}
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "triggers"
+spec:
+  serviceAccountName: pipeline-runner
+  interceptors:
+    - ref: { name: cdevents-broker-auth, kind: ClusterInterceptor }
+      params: [{ name: audience, value: cdevents-broker }]
+    - ref: { name: cel, kind: ClusterInterceptor }
+      params:
+        - name: filter
+          value: >-
+            body.context.type == 'dev.cdevents.{{ $eventType }}.0.3.0' &&
+            extensions.app_namespace == '{{ $appNamespace }}' &&
+            body.context.source.startsWith('/platform-cicd/{{ $appNamespace }}/')
+  bindings:
+    - { ref: {{ $triggerName }}-binding }
+  template:
+    ref: {{ $triggerName }}-template
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

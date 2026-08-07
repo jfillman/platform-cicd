@@ -1,0 +1,13 @@
+{{- if and .Values.onboarding.sync.enabled .Values.platformIdentity.appRepoUrl }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "platform-cicd-app.fullname" . }}-onboarding-sync
+  namespace: {{ include "platform-cicd-app.namespace" . }}
+  labels:
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    platform.io/subcomponent: "onboarding"
+data:
+  onboarding-sync.sh: |
+{{ .Files.Get "files/onboarding-sync.sh" | indent 4 }}
+{{- end }}
