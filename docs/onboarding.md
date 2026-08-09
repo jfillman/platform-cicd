@@ -123,7 +123,7 @@ Two things used to go stale silently, with no mechanism to catch either: an Appl
 `onboarding-templates/.tekton/*.yaml` changing (nothing re-delivered already-onboarded
 repos' copies). Both are the same problem now: `onboarding-resync.yaml` fires whenever
 `cicd.yaml` changes on a push to `main` (a real, documented Pipelines-as-Code CEL
-extension, `.pathChanged("cicd.yaml")` - not a custom filter), and re-delivers the
+extension, `"cicd.yaml".pathChanged()` - not a custom filter), and re-delivers the
 current `onboarding-templates/.tekton/*` content regardless of which side went stale.
 `git status --porcelain` inside `deliver-onboarding-files.yaml` skips opening a PR when
 nothing actually changed, so this is safe to fire often.

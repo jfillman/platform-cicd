@@ -153,7 +153,12 @@ spec:
               fi
               if [[ "${file_paths_json}" != "[]" ]]; then
                 local expr
-                expr="$(echo "${file_paths_json}" | jq -r 'map(".pathChanged(\"" + . + "\")") | join(" || ")')"
+                # pathChanged() is a suffix method on the glob-pattern string itself
+                # ("<pattern>".pathChanged()), not a function taking the pattern as an
+                # argument - confirmed live: the inverted form parses (jq/bash don't
+                # catch it) but PaC's CEL evaluator rejects it at webhook-delivery time
+                # with "no matching overload for 'pathChanged' applied to '(string)'".
+                expr="$(echo "${file_paths_json}" | jq -r 'map("\"" + . + "\".pathChanged()") | join(" || ")')"
                 cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${expr}'"
               fi
               ;;
@@ -171,7 +176,14 @@ spec:
             tag)
               on_event="[push]"
               local pattern="${tag_pattern:-v[0-9]+.[0-9]+.[0-9]+}"
-              cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.ref.startsWith(\"refs/tags/\") && body.ref.matches(\"refs/tags/${pattern}\")'"
+              # A regex tagPattern legitimately contains backslash escapes (\. for a
+              # literal dot, etc.) - CEL's own double-quoted string literals treat
+              # backslash as their OWN escape character, so splicing the pattern into a
+              # plain "..." literal breaks CEL's lexer on any backslash (confirmed live:
+              # "token recognition error at: '\"refs/tags/v[0-9]+\\.'"). A CEL raw
+              # string (r"...") disables CEL's escape processing so the pattern's own
+              # backslashes reach RE2's matches() unmolested.
+              cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.ref.startsWith(\"refs/tags/\") && body.ref.matches(r\"refs/tags/${pattern}\")'"
               tag_param_line="    - { name: git-tag, value: \"${GIT_TAG_VAR}\" }"
               ;;
             release.created)
@@ -188,11 +200,20 @@ spec:
           # needed here, and adding one would double-strip and corrupt nested indentation
           # (caught live: a bare `sed 's/^        //'` here knocked 8 more spaces off
           # every already-8-or-more-indented line, flattening volumeClaimTemplate.spec).
+          # generateName is keyed by flow_name, not root_stage - PaC requires every
+          # PipelineRun definition under .tekton/ to have a unique generateName/name
+          # across the WHOLE repo, not just within one file. Two different flows can
+          # legitimately share a root stage (e.g. a "ci" push flow and a "pr-check"
+          # pull_request flow both rooted at build) - confirmed live: PaC's matcher
+          # aborts the entire event with "found multiple pipelinerun in .tekton with
+          # the same generateName: build-, please update" and creates NOTHING, even for
+          # the annotation set that matched. flow_name is a cicd.yaml `pipelines:` map
+          # key, so it's already guaranteed unique.
           cat <<YAMLEOF
         apiVersion: tekton.dev/v1
         kind: PipelineRun
         metadata:
-          generateName: ${root_stage}-
+          generateName: ${flow_name}-
           annotations:
             pipelinesascode.tekton.dev/on-event: "${on_event}"
         ${branch_line}

@@ -4,7 +4,7 @@
 # kind from push.yaml/pull-request.yaml: instead of running this app's own build, it
 # re-invokes the onboarding-delivery mechanism itself (catalog/tasks/
 # deliver-onboarding-files.yaml) whenever cicd.yaml changes on a push to main -
-# `.pathChanged("cicd.yaml")` is a real, documented Pipelines-as-Code CEL extension
+# `"cicd.yaml".pathChanged()` is a real, documented Pipelines-as-Code CEL extension
 # function, not a custom filter. This is Phase 3 item 7's replacement for both the fully
 # manual "hand-copy .tekton files" onboarding process and an earlier design considered
 # (an ArgoCD-multi-source Application reading cicd.yaml live) that was rejected because
@@ -28,7 +28,7 @@ metadata:
   annotations:
     pipelinesascode.tekton.dev/on-event: "[push]"
     pipelinesascode.tekton.dev/on-target-branch: "[main]"
-    pipelinesascode.tekton.dev/on-cel-expression: '.pathChanged("cicd.yaml")'
+    pipelinesascode.tekton.dev/on-cel-expression: '"cicd.yaml".pathChanged()'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:

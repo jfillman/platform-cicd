@@ -1,11 +1,18 @@
-{{- if .Values.build.cache.enabled }}
-# templates/env/build-cache-pvc.yaml (from app-build-cache-pvc-template.yaml - rendered
-# only if build.cache.enabled)
+# templates/env/build-cache-pvc.yaml (from app-build-cache-pvc-template.yaml)
 #
 # Backs build-source.yaml's build-cache volume - a real, persistent PVC, not the
 # ephemeral per-run `source` workspace every Pipeline already has. One PVC per APP, not
 # one shared PVC across multiple apps: build.cache.size is a per-app t-shirt-size choice,
 # and a single shared PVC can't honor two apps wanting two different sizes.
+#
+# Rendered UNCONDITIONALLY, regardless of build.cache.enabled - matches build-source.yaml's
+# own documented design (a raw volume, always mounted; whether it's actually USED is a
+# pure script-level check on build.cache.enabled, deliberately not a Tekton *workspace*
+# to avoid colliding with the Affinity Assistant used by build-source/unit-test's
+# concurrent PVC-workspace sharing - see that Task's header comment). This used to be
+# conditional here, which left every app with cache.enabled=false (the default) unable to
+# ever schedule build-source at all: "persistentvolumeclaim ... not found" - confirmed
+# live the very first time a real app onboarded without opting into caching.
 #
 # Size resolved live via the platform-cicd-app.cacheSize helper - this used to be a
 # manual pre-substitution step (no templating engine existed in the app-resource path
@@ -30,4 +37,3 @@ spec:
   resources:
     requests:
       storage: {{ include "platform-cicd-app.cacheSize" (dict "size" .Values.build.cache.size) }}
-{{- end }}

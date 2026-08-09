@@ -173,16 +173,20 @@
                   },
                   "event": {
                     "type": "string",
-                    "enum": ["push", "branch.created", "release.created", "deploy", "artifact.published", "testcaserun.finished", "service.deployed", "change.created"],
+                    "enum": ["push", "pull_request", "branch.created", "tag", "release.created", "deploy", "artifact.published", "testcaserun.finished", "service.deployed", "change.created"],
                     "description": "Explicit event identifier for the root trigger. For git sources this is the Git event kind; for event sources it is the CDEvents event type."
                   },
                   "type": {
                     "type": "string",
-                    "enum": ["branch.created", "push", "release.created", "deploy"],
+                    "enum": ["branch.created", "push", "pull_request", "tag", "release.created", "deploy"],
                     "description": "Legacy shorthand for the git-trigger form. Newer configs should use source+event."
                   },
                   "branch": { "type": "string" },
                   "branchPattern": { "type": "string" },
+                  "tagPattern": {
+                    "type": "string",
+                    "description": "Regex the pushed tag's name must match, required when event is 'tag' (e.g. 'v[0-9]+\\.[0-9]+\\.[0-9]+'). See deliver-onboarding-files.yaml's generate_flow_file."
+                  },
                   "filePathPattern": { "type": "array", "items": { "type": "string" } }
                 }
               },
@@ -211,9 +215,10 @@
               "additionalProperties": false,
               "properties": {
                 "task": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
-                "trigger": { "type": "string", "enum": ["branch.created", "push", "release.created", "deploy"] },
+                "trigger": { "type": "string", "enum": ["branch.created", "push", "pull_request", "tag", "release.created", "deploy"] },
                 "branch": { "type": "string" },
                 "branchPattern": { "type": "string" },
+                "tagPattern": { "type": "string" },
                 "filePathPattern": { "type": "array", "items": { "type": "string" } },
                 "env": { "type": "string" },
                 "cluster": { "type": "string" },
