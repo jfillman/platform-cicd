@@ -22,6 +22,10 @@ spec:
       type: string
     - name: image-ref
       type: string
+    - name: env
+      type: string
+    - name: suite
+      type: string
   steps:
     - name: resolve-suite
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -36,7 +40,19 @@ spec:
         # treats `false` the same as missing/null, so an explicit `test.enabled: false`
         # was silently ignored - no Application has ever actually been able to disable the
         # integration-test stage via cicd.yaml.
-        jq -r 'if .test.enabled == false then "false" else "true" end' <<< '$(params.config-json)' | tee "$(step.results.enabled.path)"
+        #
+        # Second, separate bug found live in THIS step while wiring up test env/suite
+        # (2026-08-09): this used to pipe jq's own output straight into `tee` with no `-n`
+        # anywhere, so the result file held "true\n", not "true" - a real cross-step env
+        # var substitution (unlike a $(...) command substitution) does NOT strip that
+        # trailing newline (same gotcha build-image.yaml's own header already documents
+        # for span-start-time). `[[ "${TEST_ENABLED}" != "true" ]]` in the next step was
+        # therefore ALWAYS true regardless of cicd.yaml's actual value - confirmed live,
+        # every integration-test run ever reported "disabled...skipping" even with
+        # test.enabled defaulting true. run-tests.yaml's equivalent step already avoided
+        # this by capturing into a variable first; mirrored here.
+        ENABLED="$(jq -r 'if .test.enabled == false then "false" else "true" end' <<< '$(params.config-json)')"
+        echo -n "${ENABLED}" | tee "$(step.results.enabled.path)"
 
     - name: integration-test
       image: $(params.agent-image)
@@ -48,6 +64,10 @@ spec:
           value: $(params.image-ref)
         - name: TEST_ENABLED
           value: $(steps.resolve-suite.results.enabled)
+        - name: TEST_ENV
+          value: $(params.env)
+        - name: TEST_SUITE
+          value: $(params.suite)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -59,5 +79,6 @@ spec:
           echo "warn: test.enabled is true but no ./integration-test.sh found at repo root - skipping, not failing" >&2
           exit 0
         fi
+        echo "running suite '${TEST_SUITE}' against env '${TEST_ENV}', image ${IMAGE_REF}"
         chmod +x ./integration-test.sh
         ./integration-test.sh

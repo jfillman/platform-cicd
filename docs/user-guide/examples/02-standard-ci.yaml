@@ -1,0 +1,46 @@
+# Example 2: Standard CI - build, test, deploy to dev
+#
+# The most common real shape: every push to main builds, runs integration tests against
+# the fresh image, then deploys straight to a dev namespace for fast feedback. No
+# governance gates, no human review - this is the inner-loop path, not the promotion
+# path (see 04-multi-env-promotion.yaml for that).
+#
+# Flow shape:
+#
+#   push to main -> [build] -(artifact.published)-> [test] -(testcaserun.finished)-> [deploy:dev]
+#
+# Only `build` is triggered by the git push itself - `test` and `deploy` are fired
+# automatically by the previous stage's own completion event. You don't configure that
+# wiring; declaring the steps in order is enough. See ../cicd-yaml-reference.md's
+# "How flows work" for the two different mechanisms behind this.
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+  dockerfile: ./Dockerfile   # thin packaging Dockerfile - copies build.sh's output in
+
+test:
+  suite: integration   # the suite name this flow's `test` step inherits, since it
+                        # doesn't set its own `suite` below
+
+deploy:
+  lowerEnvironments: [dev]   # this is the default - shown explicitly since the
+                              # `deploy` step below targets `dev`
+
+pipelines:
+  ci:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+        env: dev   # REQUIRED on every test step - which build's env this run is
+                   # actually exercising
+      - stage: deploy
+        env: dev   # REQUIRED on deploy - must appear in deploy.lowerEnvironments/
+                   # upperEnvironments above, or validate-cicd-config rejects this
+                   # flow before anything runs

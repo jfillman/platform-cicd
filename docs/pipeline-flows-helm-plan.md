@@ -177,7 +177,7 @@ This avoids breaking current onboarding behavior.
 - [charts/platform-cicd-app/templates/_helpers.tpl](../charts/platform-cicd-app/templates/_helpers.tpl): add helpers for flow normalization and naming
 - [charts/platform-cicd-app/templates/triggers](../charts/platform-cicd-app/templates/triggers): add flow-specific trigger templates or a shared template that loops over each flow
 - [schemas/cicd.schema.json](../schemas/cicd.schema.json): add validation for `pipelines` and the normalized step shape
-- [docs/cicd-yaml-reference.md](./cicd-yaml-reference.md): document the new flow schema and the compatibility rule
+- [docs/user-guide/cicd-yaml-reference.md](./cicd-yaml-reference.md): document the new flow schema and the compatibility rule
 
 ## Rendering example
 

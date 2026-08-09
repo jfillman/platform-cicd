@@ -1,0 +1,44 @@
+# Example 5: Release triggered directly by a tag push (git-rooted release)
+#
+# Most releases in this platform are event-chained, reached at the end of a longer flow
+# (see 04-multi-env-promotion.yaml). But release can also be the FIRST step of its own
+# flow - a new trace root, triggered directly by a tag push, for teams that want to
+# coordinate releases manually rather than auto-promoting every main-branch build.
+#
+# There is deliberately no `event: release.created` - confirmed live that
+# Pipelines-as-Code has no support for GitHub's "release" webhook at all, at any
+# version. Publishing a GitHub Release also creates its underlying tag though, which
+# fires a real, working `push` event - `event: tag` below is what actually catches
+# that in practice, both for a plain `git tag && git push --tags` and for clicking
+# "Publish release" in GitHub's UI.
+#
+# Flow shape:
+#
+#   push tag matching v1.2.3 -> [release]   (new trace root - nothing before it to
+#                                             chain from, since this IS the first step)
+#
+# A GIT-ROOTED release must be the ONLY step in its flow (validateFlows enforces this) -
+# there's nothing for a second step to chain from except release's own change.created
+# event, and that's only meaningful when release is event-chained INTO from a deploy
+# step, not when it's the flow's own root. See 04-multi-env-promotion.yaml for a
+# release that legally has other steps before it.
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+pipelines:
+  manual-release:
+    trigger:
+      source: git
+      event: tag
+      tagPattern: "v[0-9]+\\.[0-9]+\\.[0-9]+"   # REQUIRED when event is "tag" - a
+                                                 # regex (not a glob) the pushed tag
+                                                 # name must match. Backslash escapes
+                                                 # (like \. above) are handled
+                                                 # correctly.
+    steps:
+      - stage: release
+        env: staging   # REQUIRED on every release step

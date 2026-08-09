@@ -1,0 +1,57 @@
+# Example 6: Separate fast-track flow for release/* branches
+#
+# Two flows in one file: the normal push-to-main CI path, plus a distinct flow that
+# fires when a NEW branch matching "release/*" is created - skipping dev entirely and
+# going straight to staging + a governed release. Useful for a team that cuts release
+# branches deliberately rather than promoting every main-branch commit.
+#
+# Flow shape:
+#
+#   push to main       -> [build] -> [test:dev] -> [deploy:dev]
+#   new branch release/* -> [build] -> [deploy:staging] -> [release]
+#
+# `branch.created`'s `branch` pattern genuinely filters which new branches fire this
+# flow - confirmed live: a new `preview/x` branch does NOT fire a flow scoped to
+# "release/*", only a new `release/x` branch does. This used to be broken (any new
+# branch fired regardless of pattern) - fixed, see ../cicd-yaml-reference.md's "Real
+# bugs found" section.
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+test:
+  suite: integration
+
+deploy:
+  lowerEnvironments: [dev]
+  upperEnvironments: [staging]
+
+pipelines:
+  main-flow:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+        env: dev
+      - stage: deploy
+        env: dev
+
+  release-flow:
+    trigger:
+      source: git
+      event: branch.created
+      branch: "release/*"   # glob pattern - matches release/1.2, release/hotfix-1,
+                             # anything under release/. Same syntax push/pull_request
+                             # accept via `branch:`.
+    steps:
+      - stage: build
+      - stage: deploy
+        env: staging
+      - stage: release
+        env: staging

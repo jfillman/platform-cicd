@@ -1,0 +1,73 @@
+# Example 4: Multi-environment promotion with a governed release
+#
+# Promote through dev -> staging automatically, then stop and open a release PR for
+# human review before anything reaches production. This is the shape a real production
+# service typically wants: fast, ungated inner-loop feedback (dev), a staging
+# environment that mirrors prod closely enough to trust, then a deliberate, reviewed,
+# governance-gated promotion step.
+#
+# Flow shape:
+#
+#   push to main -> [build] -> [test:dev] -> [deploy:dev] -> [deploy:staging] -> [release]
+#                                                                                    |
+#                                                                    opens a PR against
+#                                                                    gitops-<app>, gated
+#                                                                    by 4 governance
+#                                                                    checks + 2 required
+#                                                                    reviewers - does NOT
+#                                                                    touch the cluster
+#                                                                    directly (ArgoCD's
+#                                                                    own sync does, once
+#                                                                    the PR merges)
+#
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+  cache:
+    enabled: true   # promotion pipelines rebuild often - worth the dependency cache
+    size: medium
+
+test:
+  suite: integration
+
+deploy:
+  lowerEnvironments: [dev]
+  upperEnvironments: [staging]   # REQUIRED here - the deploy step below targets
+                                  # staging, and that env must be listed in one of
+                                  # these two lists or validate-cicd-config rejects
+                                  # the flow
+
+governance:
+  sast: true          # real Semgrep scan, required to pass before the release PR merges
+  imageScan: true      # real Trivy scan
+  sbom: true            # real cosign SBOM attestation
+  policyCheck: false    # real gitsign commit-signature check - off here, on if your
+                         # org enforces signed commits (see 10-production-grade.yaml)
+
+notifications:
+  slack:
+    enabled: true
+    channel: "#team-releases"
+
+pipelines:
+  main-ci-cd:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+        env: dev
+      - stage: deploy
+        env: dev
+      - stage: deploy
+        env: staging
+      - stage: release
+        env: staging   # REQUIRED on release too, same as deploy - but note it has
+                        # no live routing effect yet (every release promotes to the
+                        # same target regardless of this value) - see
+                        # ../features.md's "What's schema-accepted but not live yet"

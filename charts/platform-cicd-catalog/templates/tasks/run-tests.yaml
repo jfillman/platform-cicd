@@ -40,7 +40,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         # NOT `.build.unitTest.enabled // true` - a real, previously-undiscovered bug
-        # found live (see docs/cicd-yaml-reference.md's own writeup): jq's `//` operator
+        # found live (see docs/user-guide/cicd-yaml-reference.md's own writeup): jq's `//` operator
         # treats `false` the same as `null`/missing and falls through to the default, so
         # an explicit `unitTest.enabled: false` was silently ignored, always resolving to
         # "true" - no Application has ever actually been able to disable unit tests via

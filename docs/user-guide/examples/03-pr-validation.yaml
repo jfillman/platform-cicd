@@ -1,0 +1,46 @@
+# Example 3: Pull request validation
+#
+# A separate flow, distinct from the main push-triggered CI flow, that just proves a PR
+# builds cleanly before merge - no deploy, no test stage. Usually declared alongside a
+# normal push-triggered `ci` flow (both are shown here) - two flows can safely share
+# `build` as their first stage, PaC keys generated files by flow name, not stage name.
+#
+# Flow shape:
+#
+#   pull_request -> [build]           (image tagged with a -pr suffix, separate from
+#                                       the real release-image namespace)
+#   push to main -> [build] -> [test:dev] -> [deploy:dev]   (the normal path)
+#
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+test:
+  suite: integration
+
+pipelines:
+  pr-check:
+    trigger:
+      source: git
+      event: pull_request
+      branch: main   # only validate PRs targeting main
+    steps:
+      - stage: build
+      # image-repo automatically gets a "-pr" suffix for this flow's build
+      # (ghcr.io/<org>/<app>-pr) so a PR build can never collide with, or accidentally
+      # get promoted as, a real release image.
+
+  ci:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+        env: dev
+      - stage: deploy
+        env: dev
