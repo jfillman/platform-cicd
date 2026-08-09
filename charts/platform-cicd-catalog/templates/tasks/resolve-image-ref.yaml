@@ -8,8 +8,8 @@
 #     deploy): image-ref already arrives as a Pipeline param, sourced from the upstream
 #     CDEvent's content. Pass it through unchanged.
 #
-#   - Git-rooted (a tag push or release.created fires deploy or release directly, no
-#     upstream build/test in this run): there is no incoming image-ref. Reconstruct it
+#   - Git-rooted (a tag push fires deploy or release directly, no upstream build/test in
+#     this run): there is no incoming image-ref. Reconstruct it
 #     using the exact same convention build-image.yaml's resolve-build-config step used
 #     when the image was originally built and pushed - <image-repo>:<version>-
 #     <short-sha>, where version comes from the git tag and short-sha is the first 12

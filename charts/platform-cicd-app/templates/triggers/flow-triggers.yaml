@@ -11,11 +11,14 @@ Git-rooted steps (a flow's first step, when trigger.source is "git") are
 deliberately NOT rendered here: PaC creates that PipelineRun directly via the
 .tekton/*.yaml files charts/platform-cicd-catalog/templates/tasks/
 deliver-onboarding-files.yaml generates in the app's own repo, driven by a
-real git event (push/tag/branch.created/release.created) - see
+real git event (push/tag/branch.created/pull_request) - see
 docs/chaining.md's "Why not Pipelines-as-Code for this" section. There is no
 broker hop for that first stage; forcing one through a synthetic
 change.created CDEvent would just be routing PaC's own job back through
-itself for no benefit.
+itself for no benefit. (release.created is deliberately not a supported git
+event at all - confirmed live that Pipelines-as-Code has no support for
+GitHub's "release" webhook, any version; publish a Release and trigger off
+its "tag" event instead, which fires a real push event PaC does support.)
 */ -}}
 
 {{- $appNamespace := include "platform-cicd-app.namespace" . -}}
@@ -31,7 +34,7 @@ itself for no benefit.
 {{- $triggerSource := $rootTrigger.source | default "" -}}
 {{- if eq $triggerSource "" -}}
   {{- $triggerEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
-  {{- if or (eq $triggerEvent "push") (eq $triggerEvent "pull_request") (eq $triggerEvent "branch.created") (eq $triggerEvent "release.created") (eq $triggerEvent "tag") -}}
+  {{- if or (eq $triggerEvent "push") (eq $triggerEvent "pull_request") (eq $triggerEvent "branch.created") (eq $triggerEvent "tag") -}}
     {{- $triggerSource = "git" -}}
   {{- else if ne $triggerEvent "" -}}
     {{- $triggerSource = "event" -}}

@@ -216,7 +216,14 @@ renderer can treat both forms uniformly.
 {{- end -}}
 {{- if eq ($rootTrigger.source | default "") "" -}}
   {{- $defaultEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
-  {{- if or (eq $defaultEvent "push") (eq $defaultEvent "branch.created") (eq $defaultEvent "release.created") (eq $defaultEvent "deploy") -}}
+  {{- /* No release.created - see flow-triggers.yaml's own header for why it was removed
+  entirely (PaC has no support for GitHub "release" webhooks at all). Includes
+  pull_request/tag, unlike an earlier version of this check - validateFlows below has its
+  own, separate re-derivation of the same "is this git-rooted" inference that already had
+  both, so a flow using the legacy `type: tag`/`type: pull_request` shorthand without an
+  explicit `source: git` was inferred as event-chained HERE but git-rooted THERE,
+  depending on which of the two independent checks happened to run. */ -}}
+  {{- if or (eq $defaultEvent "push") (eq $defaultEvent "pull_request") (eq $defaultEvent "branch.created") (eq $defaultEvent "tag") (eq $defaultEvent "deploy") -}}
     {{- $_ := set $rootTrigger "source" "git" -}}
   {{- else if ne $defaultEvent "" -}}
     {{- $_ := set $rootTrigger "source" "event" -}}
@@ -269,7 +276,7 @@ Fails fast with descriptive message if violated, preventing broken renders.
     {{- $triggerSource := $trigger.source | default "" -}}
     {{- if eq $triggerSource "" -}}
       {{- $triggerEvent := $trigger.event | default ($trigger.type | default "") -}}
-      {{- if or (eq $triggerEvent "push") (eq $triggerEvent "pull_request") (eq $triggerEvent "branch.created") (eq $triggerEvent "release.created") (eq $triggerEvent "tag") -}}
+      {{- if or (eq $triggerEvent "push") (eq $triggerEvent "pull_request") (eq $triggerEvent "branch.created") (eq $triggerEvent "tag") -}}
         {{- $triggerSource = "git" -}}
       {{- else if ne $triggerEvent "" -}}
         {{- $triggerSource = "event" -}}

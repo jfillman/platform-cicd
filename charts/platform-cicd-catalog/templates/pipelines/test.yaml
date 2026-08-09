@@ -27,7 +27,7 @@ spec:
     - name: git-tag
       type: string
       default: ""
-      description: "Git tag passed by PaC for a tag/release.created-triggered test-only flow. Accepted for param-list consistency with the other three stages (any of which deliver-onboarding-files.yaml may generate a git-rooted .tekton file for) - not otherwise used, since test has nothing to version."
+      description: "Git tag passed by PaC for a tag-triggered test-only flow. Accepted for param-list consistency with the other three stages (any of which deliver-onboarding-files.yaml may generate a git-rooted .tekton file for) - not otherwise used, since test has nothing to version."
     - name: image-repo
       type: string
       default: ""

@@ -19,8 +19,17 @@ kind: PipelineRun
 metadata:
   generateName: sast
   annotations:
-    pipelinesascode.tekton.dev/on-event: "[pull_request]"
-    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    # on-cel-expression, not on-event/on-target-branch - PaC ignores those two entirely
+    # once a CEL expression is present (confirmed live), so the branch-base and
+    # head-prefix checks below have to carry the whole condition, not just add to it.
+    # release-<sha>-<timestamp> is open-release-pr.yaml's own branch-naming convention -
+    # this is what actually distinguishes a real release-promotion PR from any other PR
+    # against this repo (e.g. the onboarding-resync PR that only touches .tekton/, which
+    # has no promoted image to scan and no attestation to verify). Confirmed live: without
+    # this, every onboarding-resync PR failed these checks for a real but irrelevant
+    # reason (scanning/verifying whatever placeholder or stale image happened to already
+    # be in staging/deployment.yaml).
+    pipelinesascode.tekton.dev/on-cel-expression: 'body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:

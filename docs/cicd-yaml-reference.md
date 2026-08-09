@@ -169,14 +169,32 @@ pushed out to already-onboarded repos, not just a app-side `cicd.yaml` edit.
 
 The `pipelines:` field enables declarative control of multi-stage, self-chaining pipelines. Rather than configuring individual legacy triggers, teams declare named flows with a root trigger source and a sequence of stages. Each flow runs the corresponding catalog Pipeline (`build`, `test`, `deploy`, `release`) - no custom Pipelines or DAG configuration needed.
 
+**Editing `pipelines:` has two independent effects, not one** - easy to forget, confirmed
+live as a real source of confusion while building this: changing `cicd.yaml`'s `pipelines:`
+section and pushing it does NOT, by itself, change which event-chained Triggers exist in
+the cluster. That only happens via `helm upgrade` of the app chart (`charts/
+platform-cicd-app`) picking up the new `cicd.yaml` as its values file - see
+[onboarding.md](onboarding.md) step 5. The git push side (delivering the updated
+git-rooted `.tekton/*.yaml` PipelineRun definitions via onboarding-resync) is fully
+automatic; the cluster-side Trigger/TriggerBinding/TriggerTemplate objects are not -
+re-run `helm upgrade` yourself after any `pipelines:` edit that adds, removes, or
+reorders event-chained steps, or the new stages simply won't fire (the git-rooted root
+stage still will, since that part IS automatic, which is what makes this easy to miss).
+
 ### How flows work
 
 **Trigger sources**: The root trigger can be `git` (pushed webhook from Pipelines-as-Code, for build/release stages) or `event` (CDEvent broker, for downstream chaining). Subsequent stages are always event-chained: each stage's completion emits a CDEvent that the next stage listens for.
 
-**Event chaining rules**:
-- `build` → `test`: triggered by `artifact.published` (image built and pushed)
-- `test` → `deploy`: triggered by `testcaserun.finished` with `outcome: Succeeded`
-- `deploy` → `release`: triggered by `service.deployed`
+**Event chaining rules** - keyed by whichever stage the step actually follows, not by
+the step's own identity, so any of these pairings works in any combination (confirmed
+live, including the less obvious `release` → `test` case):
+- `build` → next: triggered by `artifact.published` (image built and pushed)
+- `test` → next: triggered by `testcaserun.finished` with `outcome: Succeeded` (`test`
+  is the one stage whose domain event fires unconditionally, pass or fail - every other
+  stage's event is already gated at the source, so only this transition needs the
+  outcome check)
+- `deploy` → next: triggered by `service.deployed`
+- `release` → next: triggered by `change.created`
 
 **Tracing across stages**: Each flow gets a `chain-id` and OpenTelemetry `traceparent` at the root stage, threaded through all subsequent stages via CDEvent payloads. The flow-root span covers the entire automated pipeline execution (all stages' durations), not including human review/merge time.
 
@@ -209,7 +227,15 @@ pipelines:
 
 **Example 2: Release-only flow (git-rooted)**
 
-Release can be git-triggered independently for manual release coordination. This opens a PR against the gitops repo to promote whatever's currently in staging:
+Release can be git-triggered independently for manual release coordination - on a tag
+push, not a GitHub Release object. **There is deliberately no `event: release.created`
+option** - confirmed live that Pipelines-as-Code has no support for GitHub's `release`
+webhook at all, at any version (a real delivery came back HTTP 200 with body
+`{"message":"skipping non supported event"}`, filtered out before PaC's own annotation
+matching ever runs - no `cicd.yaml`/Trigger configuration could make this fire).
+Publishing a GitHub Release also creates its underlying tag, which fires a real, working
+`push` event - `event: tag` below is what actually catches that in practice, both for a
+plain `git tag && git push --tags` and for clicking "Publish release" in GitHub's UI:
 
 ```yaml
 apiVersion: platform/v1
@@ -222,12 +248,21 @@ pipelines:
   manual-release:
     trigger:
       source: git
-      event: release.created
+      event: tag
+      tagPattern: "v[0-9]+\\.[0-9]+\\.[0-9]+"
     steps:
       - stage: release
         env: staging
         cluster: prod-cluster
 ```
+
+`cluster` here is accepted (schema-validated, and `validateFlows` confirms it's only used
+on a `release` step) but has **no effect yet** - `open-release-pr.yaml`'s target path is
+currently the literal string `<app-name>/staging/deployment.yaml`, not derived from
+`cluster` or `env` at all. It's a placeholder for the multi-cluster work described in
+[architecture-plan.md](architecture-plan.md), kept in the schema now so today's
+`cicd.yaml` files don't need a breaking change once that lands - don't rely on different
+`cluster` values actually routing anywhere different today.
 
 **Example 3: Build with file-path filtering**
 

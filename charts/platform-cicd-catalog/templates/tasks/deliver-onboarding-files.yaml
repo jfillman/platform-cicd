@@ -133,8 +133,8 @@ spec:
         # PaC's source_branch dynamic var carries the raw ref for a tag push (e.g.
         # refs/tags/v1.2.3), matching what build-image.yaml's version-extraction step
         # already expects to strip - see that Task's own git-tag param description.
-        # NOT independently verified yet against a real GitHub release webhook's PaC
-        # variable set - confirm live before depending on this for release.created.
+        # Confirmed live against a real tag push (only user of this var now that
+        # release.created is gone - see the tag) case's own comment for why).
         GIT_TAG_VAR="${OB} source_branch ${CB}"
 
         generate_flow_file() {
@@ -186,10 +186,13 @@ spec:
               cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.ref.startsWith(\"refs/tags/\") && body.ref.matches(r\"refs/tags/${pattern}\")'"
               tag_param_line="    - { name: git-tag, value: \"${GIT_TAG_VAR}\" }"
               ;;
-            release.created)
-              on_event="[release]"
-              tag_param_line="    - { name: git-tag, value: \"${GIT_TAG_VAR}\" }"
-              ;;
+            # No release.created case - deliberately removed. Confirmed live: PaC has no
+            # support for GitHub's "release" webhook at all, at any version - a real
+            # delivery came back 200 with body {"message":"skipping non supported event"},
+            # filtered out before PaC's own annotation/CEL matching ever runs, so no
+            # on-event/on-cel-expression combination here could ever have made this fire.
+            # Publishing a GitHub Release also creates its underlying tag, which fires a
+            # real, working "tag" push event instead (see above) - use that.
           esac
 
           # Body below is indented 8 spaces to stay inside this step's own `script: |`
@@ -258,7 +261,7 @@ spec:
           trigger_event="$(echo "${flow_json}" | jq -r '.trigger.event // .trigger.type // ""')"
           if [[ -z "${trigger_source}" ]]; then
             case "${trigger_event}" in
-              push|pull_request|branch.created|release.created|tag) trigger_source="git" ;;
+              push|pull_request|branch.created|tag) trigger_source="git" ;;
               *) trigger_source="event" ;;
             esac
           fi
@@ -286,7 +289,7 @@ spec:
           git push --quiet "${clone_url}" "${branch_name}"
           pr_body="$(jq -n \
             --arg title "Onboarding: re-sync .tekton boilerplate" \
-            --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding-templates/.tekton/, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created/release.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
+            --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding-templates/.tekton/, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
             --arg head "${branch_name}" --arg base "main" \
             '{title: $title, body: $body, head: $head, base: $base}')"
           curl --fail --silent --show-error \

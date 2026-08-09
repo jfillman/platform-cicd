@@ -40,7 +40,7 @@ spec:
     - name: git-tag
       type: string
       default: ""
-      description: "Git tag passed by PaC for release.created or tag events (e.g., v1.2.3). Used to construct image-ref for git-rooted release."
+      description: "Git tag passed by PaC for a tag event (e.g., v1.2.3). Used to construct image-ref for git-rooted release."
     - name: image-repo
       type: string
       default: ""

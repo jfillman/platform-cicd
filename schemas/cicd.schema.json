@@ -173,12 +173,12 @@
                   },
                   "event": {
                     "type": "string",
-                    "enum": ["push", "pull_request", "branch.created", "tag", "release.created", "deploy", "artifact.published", "testcaserun.finished", "service.deployed", "change.created"],
-                    "description": "Explicit event identifier for the root trigger. For git sources this is the Git event kind; for event sources it is the CDEvents event type."
+                    "enum": ["push", "pull_request", "branch.created", "tag", "deploy", "artifact.published", "testcaserun.finished", "service.deployed", "change.created"],
+                    "description": "Explicit event identifier for the root trigger. For git sources this is the Git event kind; for event sources it is the CDEvents event type. No release.created - confirmed live that Pipelines-as-Code has no support for GitHub 'release' webhooks at all (any version): a real delivery came back '{\"status\":200,\"message\":\"skipping non supported event\"}', filtered out before PaC's own annotation matching ever runs, so no Trigger config could ever make this fire. Use 'tag' instead - publishing a GitHub Release also creates the underlying tag, which fires a real, working push event."
                   },
                   "type": {
                     "type": "string",
-                    "enum": ["branch.created", "push", "pull_request", "tag", "release.created", "deploy"],
+                    "enum": ["branch.created", "push", "pull_request", "tag", "deploy"],
                     "description": "Legacy shorthand for the git-trigger form. Newer configs should use source+event."
                   },
                   "branch": { "type": "string" },
@@ -215,7 +215,7 @@
               "additionalProperties": false,
               "properties": {
                 "task": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
-                "trigger": { "type": "string", "enum": ["branch.created", "push", "pull_request", "tag", "release.created", "deploy"] },
+                "trigger": { "type": "string", "enum": ["branch.created", "push", "pull_request", "tag", "deploy"] },
                 "branch": { "type": "string" },
                 "branchPattern": { "type": "string" },
                 "tagPattern": { "type": "string" },

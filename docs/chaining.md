@@ -63,14 +63,21 @@ same underlying Kubernetes mechanism, narrowed to one explicit, auditable,
 individually-revocable grant per Application, with no cluster-admin anywhere in the
 picture.
 
-**Verify in Phase 0**: the exact mechanism Tekton Triggers uses to hand off to a
-Trigger's named ServiceAccount (impersonation vs. some other token-based approach) is
-documented above based on how Tekton Triggers has historically implemented
-`serviceAccountName`, but was not independently re-verified against a specific pinned
-release while writing this. Confirm it before treating
-`charts/platform-cicd-app/templates/identity/pipeline-runner.yaml`'s RBAC block as
-correct in a real cluster - if the mechanism differs, this file (and this doc) is the
-one place that needs to change, not any Task or Pipeline.
+**Confirmed live** against Tekton Triggers v0.34.0: `spec.serviceAccountName` impersonation
+works exactly as documented above - `kubectl auth can-i impersonate serviceaccounts/
+pipeline-runner --as=system:serviceaccount:platform-system:cdevents-broker -n
+<app-namespace>` returns `yes`, and a real CDEvent correctly produces a PipelineRun
+running as that Application's own `pipeline-runner`, not the broker's identity.
+
+**A rebuild trap worth knowing**: `platform/broker/cmd/token-review-interceptor` is
+`kind load`-only (see [bootstrap.md](bootstrap.md)'s own section on this) - a source
+change there does nothing live until it's rebuilt, reloaded, and the Deployment is
+restarted. Confirmed live as a real incident, not a hypothetical: a rename of the
+extension key this interceptor sets (`tenant_namespace` -> `app_namespace`, to match
+this file's own terminology above) shipped in source but not in the running binary,
+which meant `extensions.app_namespace == '<namespace>'` silently never matched, for any
+Application, until the binary actually got rebuilt - see [bootstrap.md](bootstrap.md)
+for the fix and why nothing catches this drift automatically.
 
 ## Why an Application is (at least) two namespaces, not one
 
@@ -100,13 +107,36 @@ needs its own, separate grant - see
 (a real gap caught the same way most of this doc's caveats were: by reasoning through
 what actually calls what, not by running it and hoping).
 
-## What flows through the broker (Phase 1)
+## What flows through the broker
 
-- `dev.cdevents.artifact.published.0.3.0` (from `build`) -> fires `test`
+Each stage's own domain event, keyed by whatever stage the current one is chained FROM
+(not by the current stage's own identity - any stage can legally follow any other, see
+`charts/platform-cicd-app/templates/triggers/flow-triggers.yaml`'s `$eventTypeMap`):
+
+- `dev.cdevents.artifact.published.0.3.0` (from `build`) -> fires whatever's next
 - `dev.cdevents.testcaserun.finished.0.3.0`, `outcome=Succeeded` (from `test`) -> fires
-  `deploy`
+  whatever's next (`test` is the one stage whose domain event fires unconditionally,
+  pass or fail, so this is the only chain transition that actually needs the outcome
+  check - see that file's own comment)
+- `dev.cdevents.service.deployed.0.3.0` (from `deploy`) -> fires whatever's next
+- `dev.cdevents.change.created.0.3.0` (from `release`) -> fires whatever's next
 
-`deploy -> release` chaining, and `release`'s own event, are Phase 2 (see the plan).
+All four are live and chainable in both directions covered by `cicd.yaml`'s `pipelines:`
+flows (Phase 3 item 7) - confirmed live end to end, including a `release -> test` chain
+(not a "natural" pairing on paper, but structurally identical to any other transition,
+and this is exactly the case that caught the `outcome`-param bug below).
+
+**Bug found live, fixed**: the `TriggerBinding` `flow-triggers.yaml` generates used to
+include an `outcome` param sourced from `$(body.subject.content.outcome)` for every
+transition, not just from-`test` ones. Tekton's `ApplyEventValuesToParams` treats a
+missing JSONPath as a hard error - since build/deploy/release's own events genuinely have
+no `outcome` field (their existence already implies success, gated at the source), this
+silently aborted *all* param binding, for the *whole* trigger, for every transition except
+specifically chaining from `test`. No PipelineRun was ever created, and nothing about it
+was visible from the PipelineRun list, PaC's own logs, GitHub, or the Repository CR's
+status - only the EventListener sink's own pod logs showed it, and only at exactly the
+moment the failing event arrived, not before. Fixed by deleting the unused param entirely
+(nothing in the resourcetemplate below ever actually reads `$(tt.params.outcome)`).
 
 ## Deeper CDEvents coverage (Phase 3 item 1)
 

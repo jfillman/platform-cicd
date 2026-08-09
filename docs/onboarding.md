@@ -67,7 +67,27 @@ credentials).
    so this can never be silently overridden by a developer's own config, independent of
    which file is passed to `helm install` first or last.
 
-4. **Install the app chart:**
+4. **Provision the dev Deployment (and any other declared env) first.** `deploy-manifests.yaml`
+   expects a `Deployment` named `<app-name>` to already exist in `<type>-<app-name>-<env>`
+   for every environment `cicd.yaml`'s `deploy.lowerEnvironments`/`upperEnvironments` names
+   (it patches the image and waits for rollout - it does not create the Deployment or its
+   namespace). Apply a minimal Deployment/Service manifest by hand; a Crossplane
+   `Application` composition creating this automatically remains a later step (see
+   [architecture-plan.md](architecture-plan.md) - this is the one piece of onboarding the
+   Helm-chart work deliberately did not take over, see that doc's own note on why).
+
+   This has to happen **before** step 5 below, not after - confirmed live: `helm install`
+   fails outright ("namespaces \"<type>-<app-name>-dev\" not found") because
+   `env/deploy-rbac.yaml` grants `pipeline-runner` a namespaced Role inside that env
+   namespace, and Kubernetes can't create a namespaced RBAC object in a namespace that
+   doesn't exist yet. If `cicd.yaml` also declares a `release` stage, do the equivalent for
+   the gitops repo now too - see [release.md](release.md)'s "Create the gitops-\<app-name\>
+   repo" step for the `<app-name>/staging/deployment.yaml` + `service.yaml` it needs
+   pre-seeded (the platform delivers the governance-check `.tekton/` files there
+   automatically in step 6 below, but not these two - it has no way to know your
+   Deployment's shape).
+
+5. **Install the app chart:**
 
    ```
    helm upgrade --install <type>-<app-name>-cicd charts/platform-cicd-app \
@@ -77,15 +97,17 @@ credentials).
 
    This creates `pipeline-runner` and its RBAC, only the stage-transition Triggers
    `cicd.yaml` actually declares, env-deploy RBAC for each declared environment, the
-   build-cache PVC (if `build.cache.enabled`), the release AppProject/Application/DORA
-   RBAC (if `release` is declared), the ephemeral-envs ApplicationSet/PR-token-refresher
-   (if `ephemeralEnvironments.pullRequest.enabled`), the governance policy ConfigMap (if
-   `governance.policyCheck`), and an `ExternalSecret` for `registry-credentials` (see
-   [secrets-management.md](secrets-management.md)). Re-running this same command after
-   editing `cicd.yaml` is exactly how you change an Application's shape later - `helm upgrade`
-   prunes whatever a stage removal makes unnecessary, it doesn't just add.
+   build-cache PVC (always - see that template's own comment for why this one is
+   unconditional even though `build.cache.enabled` gates whether it's actually used), the
+   release AppProject/Application/DORA RBAC (if `release` is declared), the ephemeral-envs
+   ApplicationSet/PR-token-refresher (if `ephemeralEnvironments.pullRequest.enabled`), the
+   governance policy ConfigMap (if `governance.policyCheck`), and an `ExternalSecret` for
+   `registry-credentials` (see [secrets-management.md](secrets-management.md)). Re-running
+   this same command after editing `cicd.yaml` is exactly how you change an Application's
+   shape later - `helm upgrade` prunes whatever a stage removal makes unnecessary, it
+   doesn't just add.
 
-5. **Deliver the `.tekton/` boilerplate.** Trigger a real push to the app repo's `cicd.yaml`
+6. **Deliver the `.tekton/` boilerplate.** Trigger a real push to the app repo's `cicd.yaml`
    once (or wait for the next real one) - `onboarding-templates/.tekton/onboarding-resync.yaml`
    fires on exactly that, and `charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml` opens a PR
    against the app repo (and, if a `gitopsRepoUrl` was given, the gitops repo too) with the
@@ -95,23 +117,36 @@ credentials).
    because it would need standing ArgoCD read access to every Application's source repo as a
    base requirement of onboarding itself - see this same mechanism's own header comment for
    the full reasoning. If you don't want to wait for a real commit, you can also run the
-   `onboarding-resync` Pipeline directly:
+   `onboarding-resync` Pipeline directly (it has no workspaces of its own to declare -
+   `deliver-onboarding-files.yaml` clones into a step-local `mktemp -d`, not the Pipeline's
+   `source` workspace):
 
    ```
-   tkn pipeline start onboarding-resync -n <type>-<app-name>-cicd \
-     -p git-url=<app-repo-url> -p app-namespace=<type>-<app-name>-cicd -p app-name=<app-name> \
-     -p github-owner=<org> -p gitops-repo-url=<gitops-repo-url-or-empty> \
-     --workspace name=source,emptyDir= \
-     --serviceaccount pipeline-runner
+   kubectl create -f - <<EOF
+   apiVersion: tekton.dev/v1
+   kind: PipelineRun
+   metadata:
+     generateName: onboarding-resync-bootstrap-
+     namespace: <type>-<app-name>-cicd
+   spec:
+     pipelineRef:
+       resolver: cluster
+       params:
+         - { name: kind, value: pipeline }
+         - { name: name, value: onboarding-resync }
+         - { name: namespace, value: platform-catalog }
+     params:
+       - { name: git-url, value: "<app-repo-url>" }
+       - { name: app-namespace, value: "<type>-<app-name>-cicd" }
+       - { name: app-name, value: "<app-name>" }
+       - { name: github-owner, value: "<org>" }
+       - { name: gitops-repo-url, value: "<gitops-repo-url-or-empty>" }
+     taskRunTemplate:
+       serviceAccountName: pipeline-runner
+     timeouts:
+       pipeline: "10m"
+   EOF
    ```
-
-6. **Provision the dev Deployment.** `deploy-manifests.yaml` expects a `Deployment` named
-   `<app-name>` to already exist in `<type>-<app-name>-dev` (it patches the image and waits for
-   rollout - it does not create the Deployment). Apply a minimal Deployment/Service
-   manifest by hand; a Crossplane `Application` composition creating this automatically
-   remains a later step (see [architecture-plan.md](architecture-plan.md) - this is the
-   one piece of onboarding the Helm-chart work deliberately did not take over, see that
-   doc's own note on why).
 
 7. Push to `main`. Watch `pipelines-overview.json` and the Mission Control dashboard in
    Grafana.

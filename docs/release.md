@@ -60,17 +60,20 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
      | kubectl apply -f -
    ```
 
-2. **Create the `gitops-<app-name>` repo on GitHub** (e.g. `gitops-nodejs-demo-app`).
-   Push `<app-name>/staging/deployment.yaml` + `service.yaml` (adapted from the app's own
-   dev manifests), and the four governance-check files from
-   `onboarding-templates/.tekton-gitops/` into the new repo's `.tekton/` directory -
-   `pull-request-sast.yaml`/`-image-scan.yaml`/`-sbom.yaml` are fully generic as-is;
-   `pull-request-policy-check.yaml` needs `<APP_NAMESPACE>`/`<APP_NAME>` substituted:
-   ```
-   sed -e 's#<APP_NAMESPACE>#app-nodejs-demo-app-cicd#g' -e 's#<APP_NAME>#nodejs-demo-app#g' \
-     onboarding-templates/.tekton-gitops/pull-request-policy-check.yaml \
-     > <path-to-gitops-repo>/.tekton/pull-request-policy-check.yaml
-   ```
+2. **Create the `gitops-<app-name>` repo on GitHub** (e.g. `gitops-nodejs-demo-app`) and
+   push `<app-name>/staging/deployment.yaml` + `service.yaml` (adapted from the app's own
+   dev manifests) to it - this is the one part of the gitops repo's content the platform
+   has no way to generate for you (it doesn't know your Deployment's shape).
+
+   The four governance-check `.tekton/` files (`pull-request-sast.yaml`/`-image-scan.yaml`/
+   `-sbom.yaml`/`-policy-check.yaml`, with `<APP_NAMESPACE>`/`<APP_NAME>` already
+   substituted) do **not** need to be hand-copied - `deliver-onboarding-files.yaml`'s
+   `deliver-gitops-repo-files` step delivers them via the same onboarding-resync PR
+   mechanism that delivers the app repo's own `.tekton/` files (see
+   [onboarding.md](onboarding.md) step 6), as long as `platformIdentity.gitopsRepoUrl` was
+   given at install time and the `Repository` CR from step 4 below already exists. Confirmed
+   live: a fresh gitops repo with nothing but the two manifests above gets all four
+   governance files opened as a PR automatically on the next onboarding-resync run.
 
 3. **Install the PaC GitHub App on the new repo.** While there, check its permissions
    include `Contents: Read & write` and `Pull requests: Read & write` - PaC's own needs
