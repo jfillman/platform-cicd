@@ -97,6 +97,39 @@ encryption here is a smaller version of the same accepted gap. Revisit if this n
 run somewhere the `caBundle` mechanism can be made to work, or if a later Tekton Triggers
 version behaves differently.
 
+## The token-review-interceptor image is kind-load-only - rebuild it after touching its source
+
+Unlike the toolbox image (public, `docker push`, `IfNotPresent` correctly picks up a new
+push), `ghcr.io/platform-cicd/token-review-interceptor` is never pushed anywhere - step
+4/6 above only `kind load docker-image`s it, matching its narrower blast radius (nothing
+outside this cluster ever needs to pull it). The cost: a source change to
+`platform/broker/cmd/token-review-interceptor/` does nothing to the live Deployment until
+someone re-runs the rebuild+`kind load`+restart sequence - `IfNotPresent` means the node's
+already-loaded image under the same `:latest` tag just keeps getting reused silently.
+
+Hit live and confirmed as the root cause of a real incident: commit `c83b479` ("refactor:
+remove tenent") renamed the CEL extension this interceptor sets from
+`extensions.tenant_namespace` to `extensions.app_namespace`, matching every Trigger's own
+CEL filter (`charts/platform-cicd-app/templates/triggers/flow-triggers.yaml`) - but the
+running interceptor binary predated that commit, so it kept setting the OLD key. Every
+Trigger's `extensions.app_namespace == '<namespace>'` check silently evaluated to false
+forever after - not an error PaC/Tekton logs, just a filter that never matches - so the
+entire CDEvents broker chain (build -> test -> deploy -> release) stopped firing for
+every Application on the cluster, discovered only when a fresh app's first-ever chained
+event never produced a downstream PipelineRun. `body.context.source.startsWith(...)`-only
+filters (no `extensions.*` reference) kept working throughout, which is what made this
+easy to misdiagnose as a CEL/RBAC/payload-validation problem instead - none of those were
+actually broken.
+
+Fix: `docker build` + `kind load docker-image` + `kubectl rollout restart
+deployment/cdevents-broker-auth -n platform-system` - the same three steps
+`hack/bootstrap.sh` step 4/6 already does, just not something anything else triggers
+automatically. Re-run that step (or at least this one image's rebuild+reload+restart)
+after ANY change to `platform/broker/cmd/token-review-interceptor/`, not just once at
+initial bootstrap - this repo has no CI/CD of its own to catch the drift otherwise (see
+`.github/workflows/catalog-ci.yaml`'s own header for why: no public endpoint for
+GitHub-hosted runners to reach this cluster).
+
 ## Manual step: the GitHub App
 
 Pipelines-as-Code needs a GitHub App registered against your GitHub org/account, with

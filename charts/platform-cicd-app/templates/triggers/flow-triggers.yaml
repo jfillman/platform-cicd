@@ -124,7 +124,17 @@ spec:
     - { name: git-url, value: "$(body.subject.content.git-url)" }
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: image-ref, value: "$(body.subject.content.{{ $imageField }})" }
-    - { name: outcome, value: "$(body.subject.content.outcome)" }
+    {{/* No "outcome" param here - it's never consumed downstream (nothing in the
+    resourcetemplate below references $(tt.params.outcome)), and unlike the CEL filter's
+    own outcome check (correctly conditional on $prevStage == "test" above), a binding
+    param's $(body...) JSONPath is evaluated unconditionally for every event. build/
+    deploy/release's own domain events genuinely have no subject.content.outcome field
+    (see this file's own header) - Tekton Triggers' ApplyEventValuesToParams treats a
+    missing JSONPath as a hard error, not an empty value, aborting ALL param binding for
+    the WHOLE trigger. Confirmed live: this silently broke every chain transition except
+    specifically chaining from test, via "failed to replace JSONPath value for param
+    outcome: ... outcome is not found" in the EventListener's own logs - no PipelineRun
+    ever got created, for any flow, until this was removed. */}}
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
     - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
@@ -151,7 +161,6 @@ spec:
     - name: git-url
     - name: git-revision
     - name: image-ref
-    - name: outcome
     - name: chain-id
     - name: traceparent
     - name: flow-start-time
