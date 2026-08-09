@@ -14,10 +14,18 @@ metadata:
     platform.io/catalog: "true"
 spec:
   params:
+    - name: is-flow-root
+      type: string
+      default: "true"
+      description: "true if this pipeline initializes root span data (chain-id, traceparent); false if it inherits from upstream CDEvent"
     - name: git-url
       type: string
     - name: git-revision
       type: string
+    - name: git-tag
+      type: string
+      default: ""
+      description: "Git tag passed by PaC for tag-triggered builds (e.g., refs/tags/v1.2.3). Empty for branch-based triggers."
     - name: image-repo
       type: string
     - name: app-namespace
@@ -89,6 +97,9 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: start-flow-root-span }
           - { name: namespace, value: {{ .Release.Namespace }} }
+      # build is always the first (and only git-rooted) stage of any flow containing it
+      # (per platform-cicd-app validateFlows), so it always creates root span data.
+      # is-flow-root param present for consistency but always true in practice.
 
     - name: start-build-stage-span
       runAfter: [start-flow]
@@ -214,6 +225,7 @@ spec:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: image-repo, value: $(params.image-repo) }
         - { name: git-revision, value: $(params.git-revision) }
+        - { name: git-tag, value: $(params.git-tag) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 

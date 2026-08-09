@@ -89,31 +89,184 @@ spec:
         cd "${workdir}/repo"
         mkdir -p .tekton
 
-        # onboarding-resync.yaml is itself part of what gets delivered - the app repo's
-        # own copy of the trigger that re-invokes this whole mechanism the next time
-        # cicd.yaml changes, kept in sync exactly like push.yaml/pull-request.yaml.
-        for f in push.yaml pull-request.yaml onboarding-resync.yaml; do
-          sed \
-            -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
-            -e "s|<APP_NAME>|${APP_NAME}|g" \
-            -e "s|<IMAGE_REPO>|${image_repo}|g" \
-            -e "s|<GITHUB_OWNER>|${GITHUB_OWNER}|g" \
-            -e "s|<GITOPS_REPO_URL>|${GITOPS_REPO_URL}|g" \
-            "/opt/platform/onboarding-templates/.tekton/${f}" > ".tekton/${f}"
-        done
+        # onboarding-resync.yaml is the one truly platform-required file delivered
+        # unconditionally - the app repo's own copy of the trigger that re-invokes this
+        # whole mechanism the next time cicd.yaml changes. Everything else (build on
+        # push, PR validation, tag releases, ...) is app-specific pipeline BEHAVIOR, not
+        # platform plumbing, so it comes entirely from cicd.yaml's own `pipelines:`
+        # section below instead of being hardcoded here - there is no more implicit
+        # "push to main always builds" default; an app that wants that declares it.
+        sed \
+          -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
+          -e "s|<APP_NAME>|${APP_NAME}|g" \
+          -e "s|<GITHUB_OWNER>|${GITHUB_OWNER}|g" \
+          -e "s|<GITOPS_REPO_URL>|${GITOPS_REPO_URL}|g" \
+          "/opt/platform/onboarding-templates/.tekton/onboarding-resync.yaml" > ".tekton/onboarding-resync.yaml"
+
+        # Every other .tekton/ file comes from named flows under cicd.yaml's
+        # `pipelines:` section - see docs/cicd-yaml-reference.md. Only a flow's
+        # git-rooted first step needs a PaC file here; event-chained later steps (test/
+        # deploy/release-after-deploy) are fired by the in-cluster CDEvents broker
+        # instead - see charts/platform-cicd-app/templates/triggers/flow-triggers.yaml's
+        # own header. Regenerated fresh every run (stale removed first) so a flow
+        # deleted from cicd.yaml also disappears from .tekton/, not just accumulates.
+        rm -f .tekton/flow-*.yaml
+        if [[ -f cicd.yaml ]]; then
+          pipelines_json="$(yq -o=json '.pipelines // {}' cicd.yaml)"
+        else
+          pipelines_json="{}"
+        fi
+
+        # PaC's own dynamic-variable syntax (double-brace-wrapped names like repo_url)
+        # uses the same delimiter Helm's template engine renders THIS file with - writing
+        # it literally here would make Helm try to parse it instead of passing it through
+        # (a real error hit once building this: "unexpected '{' in operand", then again
+        # as "function \"repo_url\" not defined" the first time this exact comment
+        # accidentally spelled it out literally). Built from printf hex escapes instead,
+        # so no literal double-brace sequence ever appears in this file's own source text
+        # for Helm to trip over - only assembled at runtime, in the delivered file's
+        # actual content.
+        OB="$(printf '\x7b\x7b')"
+        CB="$(printf '\x7d\x7d')"
+        GIT_URL_VAR="${OB} repo_url ${CB}"
+        GIT_REVISION_VAR="${OB} revision ${CB}"
+        # PaC's source_branch dynamic var carries the raw ref for a tag push (e.g.
+        # refs/tags/v1.2.3), matching what build-image.yaml's version-extraction step
+        # already expects to strip - see that Task's own git-tag param description.
+        # NOT independently verified yet against a real GitHub release webhook's PaC
+        # variable set - confirm live before depending on this for release.created.
+        GIT_TAG_VAR="${OB} source_branch ${CB}"
+
+        generate_flow_file() {
+          local flow_name="$1" event="$2" branch="$3" tag_pattern="$4" file_paths_json="$5" root_stage="$6"
+          local on_event="" branch_line="" cel_line="" tag_param_line=""
+          # PR-validation builds get their own -pr image repo suffix (kept from the old
+          # static pull-request.yaml template) so they never collide with a real release
+          # tag in the same registry path.
+          local effective_image_repo="${image_repo}"
+
+          case "${event}" in
+            push)
+              on_event="[push]"
+              if [[ -n "${branch}" ]]; then
+                branch_line="    pipelinesascode.tekton.dev/on-target-branch: \"[${branch}]\""
+              fi
+              if [[ "${file_paths_json}" != "[]" ]]; then
+                local expr
+                expr="$(echo "${file_paths_json}" | jq -r 'map(".pathChanged(\"" + . + "\")") | join(" || ")')"
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${expr}'"
+              fi
+              ;;
+            pull_request)
+              on_event="[pull_request]"
+              if [[ -n "${branch}" ]]; then
+                branch_line="    pipelinesascode.tekton.dev/on-target-branch: \"[${branch}]\""
+              fi
+              effective_image_repo="${image_repo}-pr"
+              ;;
+            branch.created)
+              on_event="[push]"
+              cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.created == true && body.ref.startsWith(\"refs/heads/\")'"
+              ;;
+            tag)
+              on_event="[push]"
+              local pattern="${tag_pattern:-v[0-9]+.[0-9]+.[0-9]+}"
+              cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.ref.startsWith(\"refs/tags/\") && body.ref.matches(\"refs/tags/${pattern}\")'"
+              tag_param_line="    - { name: git-tag, value: \"${GIT_TAG_VAR}\" }"
+              ;;
+            release.created)
+              on_event="[release]"
+              tag_param_line="    - { name: git-tag, value: \"${GIT_TAG_VAR}\" }"
+              ;;
+          esac
+
+          # Body below is indented 8 spaces to stay inside this step's own `script: |`
+          # YAML block scalar (Helm - not bash - requires that; bash heredocs don't care
+          # about leading whitespace either way). Helm's own block-scalar parsing already
+          # strips that common 8-space indent when it renders this Task, the same way it
+          # does for every other multi-line script in this file - no extra stripping
+          # needed here, and adding one would double-strip and corrupt nested indentation
+          # (caught live: a bare `sed 's/^        //'` here knocked 8 more spaces off
+          # every already-8-or-more-indented line, flattening volumeClaimTemplate.spec).
+          cat <<YAMLEOF
+        apiVersion: tekton.dev/v1
+        kind: PipelineRun
+        metadata:
+          generateName: ${root_stage}-
+          annotations:
+            pipelinesascode.tekton.dev/on-event: "${on_event}"
+        ${branch_line}
+        ${cel_line}
+            pipelinesascode.tekton.dev/max-keep-runs: "5"
+        spec:
+          pipelineRef:
+            resolver: cluster
+            params:
+              - { name: kind, value: pipeline }
+              - { name: name, value: ${root_stage} }
+              - { name: namespace, value: platform-catalog }
+          params:
+            - { name: git-url, value: "${GIT_URL_VAR}" }
+            - { name: git-revision, value: "${GIT_REVISION_VAR}" }
+            - { name: image-repo, value: "${effective_image_repo}" }
+            - { name: app-namespace, value: "${APP_NAMESPACE}" }
+            - { name: app-name, value: "${APP_NAME}" }
+        ${tag_param_line}
+          workspaces:
+            - name: source
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 1Gi
+          taskRunTemplate:
+            serviceAccountName: pipeline-runner
+          timeouts:
+            pipeline: "1h"
+        YAMLEOF
+        }
+
+        flow_names="$(echo "${pipelines_json}" | jq -r 'keys[]' 2>/dev/null || true)"
+        while IFS= read -r flow_name; do
+          [[ -z "${flow_name}" ]] && continue
+          flow_json="$(echo "${pipelines_json}" | jq -c --arg n "${flow_name}" '.[$n]')"
+          [[ "$(echo "${flow_json}" | jq -r 'type')" != "object" ]] && continue
+
+          trigger_source="$(echo "${flow_json}" | jq -r '.trigger.source // ""')"
+          trigger_event="$(echo "${flow_json}" | jq -r '.trigger.event // .trigger.type // ""')"
+          if [[ -z "${trigger_source}" ]]; then
+            case "${trigger_event}" in
+              push|pull_request|branch.created|release.created|tag) trigger_source="git" ;;
+              *) trigger_source="event" ;;
+            esac
+          fi
+          # Only a flow's git-rooted first step is generated here - event-chained flows
+          # (trigger.source: event) and multi-step flows' later steps are entirely the
+          # broker/flow-triggers.yaml's responsibility, not PaC's.
+          [[ "${trigger_source}" != "git" ]] && continue
+
+          branch="$(echo "${flow_json}" | jq -r '.trigger.branch // ""')"
+          tag_pattern="$(echo "${flow_json}" | jq -r '.trigger.tagPattern // ""')"
+          file_paths_json="$(echo "${flow_json}" | jq -c '.trigger.filePathPattern // []')"
+          root_stage="$(echo "${flow_json}" | jq -r '.steps[0].stage // "build"')"
+
+          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" > ".tekton/flow-${flow_name}.yaml"
+          echo "app repo: generated .tekton/flow-${flow_name}.yaml (${trigger_event} -> ${root_stage})"
+        done <<< "${flow_names}"
 
         if git status --porcelain | grep -q .; then
           git config user.name "platform-cicd onboarding automation"
           git config user.email "onboarding@platform-cicd.invalid"
-          branch="onboarding-resync-$(date +%s)"
-          git checkout -b "${branch}"
-          git add .tekton/push.yaml .tekton/pull-request.yaml .tekton/onboarding-resync.yaml
-          git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton boilerplate from the platform catalog\n\nRegenerated from onboarding-templates/.tekton/ - see docs/onboarding.md. No developer action needed beyond merging.')"
-          git push --quiet "${clone_url}" "${branch}"
+          branch_name="onboarding-resync-$(date +%s)"
+          git checkout -b "${branch_name}"
+          git add .tekton/
+          git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton boilerplate from the platform catalog\n\nRegenerated onboarding-resync.yaml plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml'"'"'s pipelines: - see docs/onboarding.md. No developer action needed beyond merging.')"
+          git push --quiet "${clone_url}" "${branch_name}"
           pr_body="$(jq -n \
             --arg title "Onboarding: re-sync .tekton boilerplate" \
-            --arg body "Regenerated push.yaml/pull-request.yaml from the platform catalog's onboarding-templates/.tekton/ - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
-            --arg head "${branch}" --arg base "main" \
+            --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding-templates/.tekton/, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created/release.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
+            --arg head "${branch_name}" --arg base "main" \
             '{title: $title, body: $body, head: $head, base: $base}')"
           curl --fail --silent --show-error \
             -X POST -H "Authorization: Bearer ${token}" \

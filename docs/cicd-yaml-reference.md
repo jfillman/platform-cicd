@@ -165,7 +165,182 @@ see [onboarding.md](onboarding.md#keeping-onboarding-boilerplate-in-sync). Re-ru
 that same Pipeline manually is also how a platform-side onboarding-template change gets
 pushed out to already-onboarded repos, not just a app-side `cicd.yaml` edit.
 
-## Local validation before pushing
+## Multi-stage pipeline flows
+
+The `pipelines:` field enables declarative control of multi-stage, self-chaining pipelines. Rather than configuring individual legacy triggers, teams declare named flows with a root trigger source and a sequence of stages. Each flow runs the corresponding catalog Pipeline (`build`, `test`, `deploy`, `release`) - no custom Pipelines or DAG configuration needed.
+
+### How flows work
+
+**Trigger sources**: The root trigger can be `git` (pushed webhook from Pipelines-as-Code, for build/release stages) or `event` (CDEvent broker, for downstream chaining). Subsequent stages are always event-chained: each stage's completion emits a CDEvent that the next stage listens for.
+
+**Event chaining rules**:
+- `build` → `test`: triggered by `artifact.published` (image built and pushed)
+- `test` → `deploy`: triggered by `testcaserun.finished` with `outcome: Succeeded`
+- `deploy` → `release`: triggered by `service.deployed`
+
+**Tracing across stages**: Each flow gets a `chain-id` and OpenTelemetry `traceparent` at the root stage, threaded through all subsequent stages via CDEvent payloads. The flow-root span covers the entire automated pipeline execution (all stages' durations), not including human review/merge time.
+
+### Flow examples
+
+**Example 1: Simple linear flow (build → test → deploy)**
+
+Triggered on every push to main branch, runs build, test, and deploy to dev environment automatically:
+
+```yaml
+apiVersion: platform/v1
+kind: PipelineConfig
+build:
+  agent: nodejs-20
+  script: ./build.sh
+  dockerfile: ./Dockerfile
+
+pipelines:
+  standard-dev:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+      - stage: deploy
+        env: dev
+```
+
+**Example 2: Release-only flow (git-rooted)**
+
+Release can be git-triggered independently for manual release coordination. This opens a PR against the gitops repo to promote whatever's currently in staging:
+
+```yaml
+apiVersion: platform/v1
+kind: PipelineConfig
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+pipelines:
+  manual-release:
+    trigger:
+      source: git
+      event: release.created
+    steps:
+      - stage: release
+        env: staging
+        cluster: prod-cluster
+```
+
+**Example 3: Build with file-path filtering**
+
+Only trigger the pipeline when certain files change:
+
+```yaml
+apiVersion: platform/v1
+kind: PipelineConfig
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+pipelines:
+  api-pipeline:
+    trigger:
+      source: git
+      event: push
+      filePathPattern: ["api/**", "build.sh"]
+    steps:
+      - stage: build
+      - stage: test
+      - stage: deploy
+        env: dev
+```
+
+**Example 4: Multiple environments in one flow**
+
+Promote through dev → staging with automatic tests, then open a release PR for human review before prod:
+
+```yaml
+apiVersion: platform/v1
+kind: PipelineConfig
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+pipelines:
+  main-ci-cd:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+      - stage: deploy
+        env: dev
+      - stage: deploy
+        env: staging
+      - stage: release
+        cluster: prod-cluster
+```
+
+**Example 5: Separate flows for release branches**
+
+Distinct flow for release/* branches - these skip dev testing and go straight to staging + release:
+
+```yaml
+apiVersion: platform/v1
+kind: PipelineConfig
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+pipelines:
+  main-flow:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+      - stage: deploy
+        env: dev
+
+  release-flow:
+    trigger:
+      source: git
+      event: branch.created
+      branch: "release/*"
+    steps:
+      - stage: build
+      - stage: deploy
+        env: staging
+      - stage: release
+        cluster: prod-cluster
+```
+
+### Event-chained flows (downstream chaining)
+
+Stages after the root are always event-chained - they're triggered by CDEvents emitted by the previous stage, not by new git events. This is automatic: when you declare a multi-stage `steps:` list, the platform wires up the event triggers for you.
+
+The **only exception** is if you omit a stage from the flow - say, you configure `build` → `deploy` with no `test` stage. In that case, `deploy` still waits for `artifact.published` from `build`; the platform doesn't create a path for `build` to directly trigger `deploy`. If you need to skip stages conditionally, use the app's own cicd.yaml to enable/disable stages, not the pipelines flow structure.
+
+### Migration from legacy list form
+
+Earlier cicd.yaml files used a list form for the `pipelines:` field:
+
+```yaml
+# Legacy (still supported) list form
+pipelines:
+  - task: build
+    trigger: push
+    branch: main
+  - task: test
+  - task: deploy
+    triggerEnv: dev
+```
+
+This is automatically normalized to the new object form internally. The new form is preferred for clarity, especially when naming flows or using event-based triggers.
+
+### Local validation before pushing
 
 Run `yajsv -s schemas/cicd.schema.json <(yq -o=json . cicd.yaml)` locally (same tool
 `validate-cicd-config` uses) to catch schema errors before a push burns a pipeline run

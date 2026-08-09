@@ -1,0 +1,71 @@
+# catalog/tasks/resolve-image-ref.yaml
+#
+# Determines the image-ref a deploy or release stage should act on. Used by both -
+# reused rather than duplicated once deploy grew the same git-rootability release
+# already had. Two cases per use:
+#
+#   - Event-chained (deploy follows test's artifact-tested handoff; release follows
+#     deploy): image-ref already arrives as a Pipeline param, sourced from the upstream
+#     CDEvent's content. Pass it through unchanged.
+#
+#   - Git-rooted (a tag push or release.created fires deploy or release directly, no
+#     upstream build/test in this run): there is no incoming image-ref. Reconstruct it
+#     using the exact same convention build-image.yaml's resolve-build-config step used
+#     when the image was originally built and pushed - <image-repo>:<version>-
+#     <short-sha>, where version comes from the git tag and short-sha is the first 12
+#     chars of git-revision. This only produces the correct reference because PaC's
+#     revision for a tag/release event is the tag's target commit - the same commit a
+#     prior tag-triggered build would have built and tagged the image with. See
+#     docs/release.md.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: resolve-image-ref
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
+    platform.io/catalog: "true"
+spec:
+  description: Passes through an event-chained image-ref, or reconstructs one from image-repo + git-tag + git-revision for a git-rooted deploy or release.
+  params:
+    - name: image-ref
+      type: string
+      default: ""
+      description: Event-chained image-ref from an upstream CDEvent. Empty for a git-rooted stage.
+    - name: image-repo
+      type: string
+      default: ""
+      description: Destination registry/repo, e.g. ghcr.io/<org>/<app>. Only needed for the git-rooted case.
+    - name: git-tag
+      type: string
+      default: ""
+      description: Git tag passed by PaC for a git-rooted stage (e.g. refs/tags/v1.2.3 or v1.2.3).
+    - name: git-revision
+      type: string
+      default: ""
+  results:
+    - name: image-ref
+  steps:
+    - name: resolve
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        IMAGE_REF='$(params.image-ref)'
+        if [[ -n "${IMAGE_REF}" ]]; then
+          echo -n "${IMAGE_REF}" | tee "$(results.image-ref.path)"
+          exit 0
+        fi
+
+        IMAGE_REPO='$(params.image-repo)'
+        GIT_TAG='$(params.git-tag)'
+        SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
+
+        VERSION="0.0.0"
+        if [[ -n "${GIT_TAG}" ]]; then
+          # Same extraction as build-image.yaml's resolve-build-config: strip refs/tags/
+          # and an optional leading 'v' - refs/tags/v1.2.3 or v1.2.3 both become 1.2.3.
+          VERSION=$(echo "${GIT_TAG}" | sed -E 's|^refs/tags/v?||')
+        fi
+
+        echo -n "${IMAGE_REPO}:${VERSION}-${SHORT_SHA}" | tee "$(results.image-ref.path)"

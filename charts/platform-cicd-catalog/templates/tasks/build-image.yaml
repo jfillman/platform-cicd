@@ -41,6 +41,10 @@ spec:
       description: Destination registry/repo, e.g. ghcr.io/<org>/<app>.
     - name: git-revision
       type: string
+    - name: git-tag
+      type: string
+      default: ""
+      description: "Git tag from PaC (e.g., refs/tags/v1.2.3). Used to extract version for image tag. Empty for branch-based triggers."
     - name: flow-traceparent
       type: string
       description: Root traceparent for the whole flow (from start-flow-root-span) - gives the kaniko-duration span its trace id. See emit-image-ref-and-span's own span-emission comment for why this Task can't wrap kaniko directly.
@@ -82,7 +86,17 @@ spec:
         CFG='$(params.config-json)'
         DOCKERFILE_PATH="$(jq -r '.build.dockerfile' <<< "${CFG}")"
         SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
-        IMAGE_REF="$(params.image-repo):${SHORT_SHA}"
+
+        # Extract version from git tag if provided, otherwise use "0.0.0" (development build)
+        GIT_TAG='$(params.git-tag)'
+        VERSION="0.0.0"
+        if [[ -n "${GIT_TAG}" ]]; then
+          # PaC provides refs/tags/v1.2.3 or refs/tags/v1.2.3-rc.1
+          # Extract: 1.2.3 or 1.2.3-rc.1 (remove refs/tags/ and leading 'v' if present)
+          VERSION=$(echo "${GIT_TAG}" | sed -E 's|^refs/tags/v?||')
+        fi
+
+        IMAGE_REF="$(params.image-repo):${VERSION}-${SHORT_SHA}"
         echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"
         echo -n "${IMAGE_REF}" | tee "$(step.results.image-ref.path)"
         # -n here matters, unlike the two lines above it's not just style: this result is

@@ -1,50 +1,104 @@
+{{- /* Validate all flows before rendering */ -}}
+{{- include "platform-cicd-app.validateFlows" . -}}
+
+{{- /*
+This file only renders Trigger/TriggerBinding/TriggerTemplate objects for
+EVENT-CHAINED steps (index > 0 in a flow) - stages fired by a CDEvent the
+previous stage's `finally` block emits (artifact.published -> test,
+testcaserun.finished -> deploy, service.deployed -> release).
+
+Git-rooted steps (a flow's first step, when trigger.source is "git") are
+deliberately NOT rendered here: PaC creates that PipelineRun directly via the
+.tekton/*.yaml files charts/platform-cicd-catalog/templates/tasks/
+deliver-onboarding-files.yaml generates in the app's own repo, driven by a
+real git event (push/tag/branch.created/release.created) - see
+docs/chaining.md's "Why not Pipelines-as-Code for this" section. There is no
+broker hop for that first stage; forcing one through a synthetic
+change.created CDEvent would just be routing PaC's own job back through
+itself for no benefit.
+*/ -}}
+
 {{- $appNamespace := include "platform-cicd-app.namespace" . -}}
 {{- $flows := .Values.pipelines | default (dict) -}}
-{{- range $flowName, $flow := $flows }}
+{{- range $flowName, $flow := $flows -}}
 {{- $normalizedFlow := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}
 {{- $steps := $normalizedFlow.steps | default (list) -}}
 {{- $stepCount := len $steps -}}
-{{- if gt $stepCount 0 }}
+{{- if gt $stepCount 0 -}}
 {{- $rootTrigger := $normalizedFlow.trigger | default (dict) -}}
-{{- range $index, $step := $steps }}
-{{- $isFirst := eq $index 0 -}}
-{{- $stageName := $step.stage | default "build" -}}
-{{- $triggerName := printf "flow-%s-%s" $flowName $stageName -}}
-{{- $pipelineName := $stageName -}}
-{{- $eventType := "" -}}
-{{- if eq $stageName "build" }}{{- $eventType = "artifact.published" -}}{{- end }}
-{{- if eq $stageName "test" }}{{- $eventType = "testcaserun.finished" -}}{{- end }}
-{{- if eq $stageName "deploy" }}{{- $eventType = "service.deployed" -}}{{- end }}
-{{- if eq $stageName "release" }}{{- $eventType = "change.created" -}}{{- end }}
-{{- $rootTriggerSource := $rootTrigger.source | default "" -}}
-{{- $rootTriggerEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
-{{- $rootTriggerBranch := $rootTrigger.branch | default "" -}}
-{{- $rootTriggerFilePaths := $rootTrigger.filePathPattern | default (list) -}}
-{{- $rootTriggerFilter := "" -}}
-{{- if $isFirst }}
-{{- if eq $rootTriggerSource "" -}}
-  {{- if or (eq $rootTriggerEvent "push") (eq $rootTriggerEvent "branch.created") (eq $rootTriggerEvent "release.created") (eq $rootTriggerEvent "deploy") -}}
-    {{- $rootTriggerSource = "git" -}}
-  {{- else if eq $rootTriggerEvent "" -}}
-    {{- $rootTriggerSource = "event" -}}
-    {{- $rootTriggerEvent = $eventType -}}
-  {{- else -}}
-    {{- $rootTriggerSource = "event" -}}
+
+{{- /* Determine root trigger source, only to know which index 0 to skip */ -}}
+{{- $triggerSource := $rootTrigger.source | default "" -}}
+{{- if eq $triggerSource "" -}}
+  {{- $triggerEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
+  {{- if or (eq $triggerEvent "push") (eq $triggerEvent "pull_request") (eq $triggerEvent "branch.created") (eq $triggerEvent "release.created") (eq $triggerEvent "tag") -}}
+    {{- $triggerSource = "git" -}}
+  {{- else if ne $triggerEvent "" -}}
+    {{- $triggerSource = "event" -}}
   {{- end -}}
 {{- end -}}
-{{- if and (eq $rootTriggerSource "git") (eq $rootTriggerEvent "") }}{{- $rootTriggerEvent = $eventType -}}{{- end }}
-{{- if eq $rootTriggerSource "git" }}
-{{- $rootTriggerFilter = printf "body.context.type == 'dev.cdevents.change.created.0.3.0' && body.subject.content.git-url != '' && body.context.source.startsWith('/platform-cicd/%s/')" $appNamespace -}}
-{{- if and (ne $rootTriggerBranch "") (or (eq $rootTriggerEvent "push") (eq $rootTriggerEvent "branch.created")) }}
-{{- $rootTriggerFilter = printf "%s && body.subject.content.branch == '%s'" $rootTriggerFilter $rootTriggerBranch -}}
+
+{{- range $index, $step := $steps -}}
+{{- $isFirst := eq $index 0 -}}
+{{- $isGitRooted := and $isFirst (eq $triggerSource "git") -}}
+{{- /*
+A first step with trigger.source: event (an arbitrary external CDEvent, not git and
+not the standard build/test/deploy/release chain) has no previous step to look up a
+domain event type from - $eventTypeMap below is keyed by PREVIOUS stage name, which
+doesn't exist at index 0. Not a supported flow shape yet (no CEL filter construction
+exists for "arbitrary external event" root triggers) - skip rather than let `index`
+below fail on a negative offset.
+*/ -}}
+{{- $isUnsupportedEventRoot := and $isFirst (eq $triggerSource "event") -}}
+{{- if and (not $isGitRooted) (not $isUnsupportedEventRoot) -}}
+{{- $stageName := $step.stage | default "build" -}}
+{{- /*
+Includes the step's own position ($index) - now that any stage can repeat within a
+flow (e.g. test after test), "flow-<name>-<stage>" alone would collide: two different
+steps both named e.g. "test" would render two Trigger/TriggerBinding/TriggerTemplate
+objects with the identical Kubernetes name, and Helm/kubectl would silently keep only
+the last one applied. The step index makes every occurrence unique regardless of
+whether its stage repeats.
+*/ -}}
+{{- $triggerName := printf "flow-%s-%d-%s" $flowName $index $stageName -}}
+{{- $pipelineName := $stageName -}}
+
+{{- /* Map stage to domain event type this step is chained from */ -}}
+{{- $eventTypeMap := dict "build" "artifact.published" "test" "testcaserun.finished" "deploy" "service.deployed" "release" "change.created" -}}
+{{- $prevStage := (index $steps (sub $index 1)).stage | default "" -}}
+{{- $eventType := get $eventTypeMap $prevStage -}}
+
+{{- /* CEL filter: trigger on the domain event from the previous stage */ -}}
+{{- $celFilter := printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/')" $eventType $appNamespace $appNamespace -}}
+{{- /*
+An explicit outcome check is only needed when chaining from TEST specifically -
+test's testcaserun.finished is the one domain event that fires unconditionally
+(pass or fail), by design, so downstream chaining must filter on outcome itself.
+build/deploy/release's own domain events (artifact.published/service.deployed/
+change.created) are each gated at the SOURCE by a `when: tasks.status in
+[Succeeded, Completed]` on that send-cdevent task (see e.g. build.yaml's own
+artifact.published task) - their mere existence already implies success, so no
+outcome field exists on those events' subject.content to even check. Keyed off
+$prevStage (whatever this step actually chains from), not the current stage's
+identity - a fixed identity check would misfire once any stage can follow any
+other (e.g. deploy chained from release, not test).
+*/ -}}
+{{- if eq $prevStage "test" -}}
+  {{- $celFilter = printf "%s && body.subject.content.outcome == 'Succeeded'" $celFilter -}}
 {{- end -}}
-{{- if and (gt (len $rootTriggerFilePaths) 0) (or (eq $rootTriggerEvent "push") (eq $rootTriggerEvent "branch.created")) }}
-{{- $rootTriggerPathExprs := list -}}
-{{- range $rootTriggerFilePaths }}{{- $rootTriggerPathExprs = append $rootTriggerPathExprs (printf "body.subject.content.path == '%s'" .) -}}{{- end -}}
-{{- if gt (len $rootTriggerPathExprs) 0 }}{{- $rootTriggerFilter = printf "%s && (%s)" $rootTriggerFilter (join $rootTriggerPathExprs " || ") -}}{{- end -}}
-{{- end -}}
-{{- else }}
-{{- $rootTriggerFilter = printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/')" $rootTriggerEvent $appNamespace $appNamespace -}}
+
+{{- /*
+Which subject.content field carries the image reference differs by CDEvents subject
+type: artifact/testCaseRun/change events (build/test/release) use "image", but
+service.deployed (deploy) uses "artifactId" - CDEvents' own real per-subject-type
+vocabulary, not an inconsistency to paper over by renaming one side. Now that any
+stage can chain from any other (not just the fixed build->test->deploy->release
+order), the extraction has to pick the right field for whatever $prevStage actually
+is, not assume "image" always.
+*/ -}}
+{{- $imageField := "image" -}}
+{{- if eq $prevStage "deploy" -}}
+  {{- $imageField = "artifactId" -}}
 {{- end -}}
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -55,14 +109,25 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "triggers"
+    platform.io/flow: {{ $flowName }}
+    platform.io/stage: {{ $stageName }}
 spec:
   params:
     - { name: flow-name, value: {{ $flowName | quote }} }
     - { name: stage-name, value: {{ $stageName | quote }} }
-    - { name: pipeline-run-name, value: {{ printf "%s-%s" $flowName $stageName | quote }} }
+    {{/* $(body.context.id), the incoming CDEvent's own unique id substituted by Tekton Triggers at runtime (dollar-paren, not Helm's double-brace), matches legacy fire-test.yaml's "<stage>-$(body.context.id)" dedup pattern - gives a real per-firing identity so a redelivered CDEvent no-ops, and now that stages can repeat within a flow, two different steps sharing a stage name never collide on it either. */}}
+    - { name: pipeline-run-name, value: {{ printf "%s-%d-%s-$(body.context.id)" $flowName $index $stageName | quote }} }
     - { name: env, value: {{ $step.env | default "dev" | quote }} }
     - { name: cluster, value: {{ $step.cluster | default "" | quote }} }
     - { name: name, value: {{ $step.name | default "" | quote }} }
+    - { name: is-flow-root, value: "false" }
+    - { name: git-url, value: "$(body.subject.content.git-url)" }
+    - { name: git-revision, value: "$(body.subject.content.revision)" }
+    - { name: image-ref, value: "$(body.subject.content.{{ $imageField }})" }
+    - { name: outcome, value: "$(body.subject.content.outcome)" }
+    - { name: chain-id, value: "$(body.context.chainId)" }
+    - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
+    - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
@@ -72,6 +137,8 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "triggers"
+    platform.io/flow: {{ $flowName }}
+    platform.io/stage: {{ $stageName }}
 spec:
   params:
     - name: flow-name
@@ -80,11 +147,22 @@ spec:
     - name: env
     - name: cluster
     - name: name
+    - name: is-flow-root
+    - name: git-url
+    - name: git-revision
+    - name: image-ref
+    - name: outcome
+    - name: chain-id
+    - name: traceparent
+    - name: flow-start-time
   resourcetemplates:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
       metadata:
         name: $(tt.params.pipeline-run-name)
+        labels:
+          platform.io/flow: {{ $flowName }}
+          platform.io/stage: {{ $stageName }}
       spec:
         pipelineRef:
           resolver: cluster
@@ -93,12 +171,23 @@ spec:
             - { name: name, value: {{ $pipelineName }} }
             - { name: namespace, value: {{ $.Values.platformIdentity.catalogNamespace }} }
         params:
+          - { name: is-flow-root, value: $(tt.params.is-flow-root) }
           - { name: app-namespace, value: {{ $appNamespace }} }
           - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
           - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
           - { name: env, value: $(tt.params.env) }
           - { name: cluster, value: $(tt.params.cluster) }
           - { name: name, value: $(tt.params.name) }
+          - { name: git-url, value: $(tt.params.git-url) }
+          - { name: git-revision, value: $(tt.params.git-revision) }
+          - { name: image-ref, value: $(tt.params.image-ref) }
+          - { name: chain-id, value: $(tt.params.chain-id) }
+          - { name: flow-traceparent, value: $(tt.params.traceparent) }
+          - { name: flow-start-time, value: $(tt.params.flow-start-time) }
+        workspaces:
+          - name: source
+            volumeClaimTemplate:
+              spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: 1Gi } } }
         taskRunTemplate: { serviceAccountName: pipeline-runner }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -109,6 +198,8 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "triggers"
+    platform.io/flow: {{ $flowName }}
+    platform.io/stage: {{ $stageName }}
 spec:
   serviceAccountName: pipeline-runner
   interceptors:
@@ -118,92 +209,12 @@ spec:
       params:
         - name: filter
           value: >-
-            {{ $rootTriggerFilter }}
+            {{ $celFilter }}
   bindings:
     - { ref: {{ $triggerName }}-binding }
   template:
     ref: {{ $triggerName }}-template
-{{- else }}
----
-apiVersion: triggers.tekton.dev/v1beta1
-kind: TriggerBinding
-metadata:
-  name: {{ $triggerName }}-binding
-  namespace: {{ $appNamespace }}
-  labels:
-    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
-    platform.io/subcomponent: "triggers"
-spec:
-  params:
-    - { name: flow-name, value: {{ $flowName | quote }} }
-    - { name: stage-name, value: {{ $stageName | quote }} }
-    - { name: pipeline-run-name, value: {{ printf "%s-%s" $flowName $stageName | quote }} }
-    - { name: env, value: {{ $step.env | default "dev" | quote }} }
-    - { name: cluster, value: {{ $step.cluster | default "" | quote }} }
-    - { name: name, value: {{ $step.name | default "" | quote }} }
----
-apiVersion: triggers.tekton.dev/v1beta1
-kind: TriggerTemplate
-metadata:
-  name: {{ $triggerName }}-template
-  namespace: {{ $appNamespace }}
-  labels:
-    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
-    platform.io/subcomponent: "triggers"
-spec:
-  params:
-    - name: flow-name
-    - name: stage-name
-    - name: pipeline-run-name
-    - name: env
-    - name: cluster
-    - name: name
-  resourcetemplates:
-    - apiVersion: tekton.dev/v1
-      kind: PipelineRun
-      metadata:
-        name: $(tt.params.pipeline-run-name)
-      spec:
-        pipelineRef:
-          resolver: cluster
-          params:
-            - { name: kind, value: pipeline }
-            - { name: name, value: {{ $pipelineName }} }
-            - { name: namespace, value: {{ $.Values.platformIdentity.catalogNamespace }} }
-        params:
-          - { name: app-namespace, value: {{ $appNamespace }} }
-          - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
-          - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
-          - { name: env, value: $(tt.params.env) }
-          - { name: cluster, value: $(tt.params.cluster) }
-          - { name: name, value: $(tt.params.name) }
-        taskRunTemplate: { serviceAccountName: pipeline-runner }
----
-apiVersion: triggers.tekton.dev/v1beta1
-kind: Trigger
-metadata:
-  name: {{ $triggerName }}
-  namespace: {{ $appNamespace }}
-  labels:
-    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
-    platform.io/subcomponent: "triggers"
-spec:
-  serviceAccountName: pipeline-runner
-  interceptors:
-    - ref: { name: cdevents-broker-auth, kind: ClusterInterceptor }
-      params: [{ name: audience, value: cdevents-broker }]
-    - ref: { name: cel, kind: ClusterInterceptor }
-      params:
-        - name: filter
-          value: >-
-            body.context.type == 'dev.cdevents.{{ $eventType }}.0.3.0' &&
-            extensions.app_namespace == '{{ $appNamespace }}' &&
-            body.context.source.startsWith('/platform-cicd/{{ $appNamespace }}/')
-  bindings:
-    - { ref: {{ $triggerName }}-binding }
-  template:
-    ref: {{ $triggerName }}-template
-{{- end }}
+{{ end }}
 {{- end }}
 {{- end }}
 {{- end }}

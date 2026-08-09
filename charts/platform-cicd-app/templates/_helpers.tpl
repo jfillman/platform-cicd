@@ -149,6 +149,9 @@ renderer can treat both forms uniformly.
       {{- if hasKey $entry "branchPattern" -}}
         {{- $_ := set $rootTrigger "branchPattern" $entry.branchPattern -}}
       {{- end -}}
+      {{- if hasKey $entry "tagPattern" -}}
+        {{- $_ := set $rootTrigger "tagPattern" $entry.tagPattern -}}
+      {{- end -}}
       {{- if hasKey $entry "filePathPattern" -}}
         {{- $_ := set $rootTrigger "filePathPattern" $entry.filePathPattern -}}
       {{- end -}}
@@ -181,6 +184,9 @@ renderer can treat both forms uniformly.
     {{- end -}}
     {{- if hasKey $flow.trigger "branchPattern" -}}
       {{- $_ := set $rootTrigger "branchPattern" (get $flow.trigger "branchPattern") -}}
+    {{- end -}}
+    {{- if hasKey $flow.trigger "tagPattern" -}}
+      {{- $_ := set $rootTrigger "tagPattern" (get $flow.trigger "tagPattern") -}}
     {{- end -}}
     {{- if hasKey $flow.trigger "filePathPattern" -}}
       {{- $_ := set $rootTrigger "filePathPattern" (get $flow.trigger "filePathPattern") -}}
@@ -227,6 +233,99 @@ selection) - most valuable there, where many Applications' Applications/AppProje
 coexist in one shared namespace, but applied everywhere for consistency per
 docs/naming-conventions.md.
 */}}
+{{/*
+platform-cicd-app.validateFlows - validates pipeline flow definitions against
+architectural constraints. Rules:
+- Any stage (build/test/deploy/release) may be git-rooted (source: git) - all four
+  Pipelines' start-flow task is idempotent (generates a new trace root when fired
+  directly, passes through when event-chained), so none of them are special-cased here
+  anymore. See start-flow-root-span.yaml.
+- build, if present in a flow at all, must be its first step - nothing else emits an
+  event build could sensibly be chained from, and nothing chains FROM build via this
+  rule either (build must be root when present).
+- Release as git-root must still be first (only) step in flow - it's architecturally
+  terminal for the GIT-ROOTED case specifically (a git-rooted release creates a new
+  trace root with nothing before it to chain from); this does NOT restrict where an
+  EVENT-CHAINED release can appear - test/deploy/release/repeats of any of them may
+  precede or follow each other in any combination once past a required leading build.
+  Deliberately no "release must follow deploy" or "release must be last" rule -
+  flow-triggers.yaml's event-type lookup is keyed by whatever the PREVIOUS step's
+  stage actually is, not a fixed position, so any ordering already works structurally.
+- Cluster param only valid for release stage
+- Env param required for deploy and release stages
+
+Fails fast with descriptive message if violated, preventing broken renders.
+*/}}
+{{- define "platform-cicd-app.validateFlows" -}}
+{{- $flows := .Values.pipelines | default (dict) -}}
+{{- range $flowName, $flow := $flows -}}
+  {{- $normalized := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}
+  {{- $trigger := $normalized.trigger | default (dict) -}}
+  {{- $steps := $normalized.steps | default (list) -}}
+  {{- $stepCount := len $steps -}}
+
+  {{- if gt $stepCount 0 -}}
+    {{- /* Determine trigger source */ -}}
+    {{- $triggerSource := $trigger.source | default "" -}}
+    {{- if eq $triggerSource "" -}}
+      {{- $triggerEvent := $trigger.event | default ($trigger.type | default "") -}}
+      {{- if or (eq $triggerEvent "push") (eq $triggerEvent "pull_request") (eq $triggerEvent "branch.created") (eq $triggerEvent "release.created") (eq $triggerEvent "tag") -}}
+        {{- $triggerSource = "git" -}}
+      {{- else if ne $triggerEvent "" -}}
+        {{- $triggerSource = "event" -}}
+      {{- end -}}
+    {{- end -}}
+
+    {{- $firstStage := (index $steps 0).stage | default "build" -}}
+
+    {{- /* Validate git-rooted stages */ -}}
+    {{- if eq $triggerSource "git" -}}
+      {{- if eq $firstStage "release" -}}
+        {{- if gt $stepCount 1 -}}
+          {{- fail (printf "Flow '%s': git-rooted release must be first (and only) step in flow to create a new trace root. For release that continues existing trace, make it event-chained (final step after deploy)." $flowName) -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+
+    {{- /* Validate each step */ -}}
+    {{- range $index, $step := $steps -}}
+      {{- $stageName := $step.stage | default "" -}}
+
+      {{- /* Validate env requirement */ -}}
+      {{- if or (eq $stageName "deploy") (eq $stageName "release") -}}
+        {{- if not $step.env -}}
+          {{- fail (printf "Flow '%s' step %d (%s): env is required for %s stage" $flowName (add $index 1) $stageName $stageName) -}}
+        {{- end -}}
+      {{- end -}}
+
+      {{- /* Validate cluster only for release */ -}}
+      {{- if and $step.cluster (ne $stageName "release") -}}
+        {{- fail (printf "Flow '%s' step %d: cluster is only valid for release stage, not %s" $flowName (add $index 1) $stageName) -}}
+      {{- end -}}
+
+      {{- /* Validate trigger only on first step */ -}}
+      {{- if and (gt $index 0) $step.trigger -}}
+        {{- fail (printf "Flow '%s' step %d: trigger can only be defined on first step, not step %d (%s)" $flowName 1 (add $index 1) $stageName) -}}
+      {{- end -}}
+
+      {{- /* Validate build can only ever be the first step */ -}}
+      {{- if and (eq $stageName "build") (gt $index 0) -}}
+        {{- fail (printf "Flow '%s' step %d: build can only be the first step of a flow, not step %d - nothing chains into build. Give it its own flow, or move it to step 1." $flowName (add $index 1) (add $index 1)) -}}
+      {{- end -}}
+    {{- end -}}
+
+    {{- /* Validate tag patterns for tag-triggered flows */ -}}
+    {{- $triggerEvent := $trigger.event | default ($trigger.type | default "") -}}
+    {{- if eq $triggerEvent "tag" -}}
+      {{- $tagPattern := $trigger.tagPattern | default "" -}}
+      {{- if not $tagPattern -}}
+        {{- fail (printf "Flow '%s': trigger.tagPattern is required when event is 'tag' (e.g., 'v[0-9]+.[0-9]+.[0-9]+')" $flowName) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "platform-cicd-app.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
