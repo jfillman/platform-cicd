@@ -71,7 +71,7 @@ platform-cicd/
 │   ├── tempo/ · loki/ · kube-prometheus-stack/   (Helm values overlays)
 │   └── grafana/dashboards/     # pipelines-overview.json, pipeline-detail.json, (Phase 2) dora.json
 ├── schemas/cicd.schema.json    # JSON Schema for the developer-facing cicd.yaml
-├── charts/platform-cicd-catalog/files/onboarding-templates/   # boilerplate PaC trigger files, delivered via ConfigMap
+├── charts/platform-cicd-app/files/onboarding-templates/   # boilerplate PaC trigger files, delivered via a per-Application ConfigMap
 └── docs/
 ```
 

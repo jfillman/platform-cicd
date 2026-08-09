@@ -52,8 +52,18 @@ spec:
               path: github-token-broker-token
               audience: github-installation-token
               expirationSeconds: 600
-    # templates/configmaps/onboarding-templates.yaml - one ConfigMap per destination
-    # repo, matching this Task's own two-step split below.
+    # charts/platform-cicd-app/templates/configmaps/onboarding-templates.yaml - rendered
+    # by the APP chart (one copy per Application), NOT this catalog chart, even though
+    # this Task itself is a shared, cluster-resolved definition. A Pod can only
+    # volume-mount a ConfigMap from its own namespace, and this Task's Pod always
+    # executes in the CALLING PipelineRun's namespace (whichever Application triggered
+    # it) - never platform-catalog, regardless of where the Task definition itself was
+    # resolved from. A fixed ConfigMap name works here specifically because Kubernetes
+    # resolves it within whatever namespace the Pod actually ends up in - the same
+    # shared Task definition transparently mounts a DIFFERENT Application's own copy
+    # for each Application, no per-tenant Task change needed. See that ConfigMap
+    # template's own header for the fuller reasoning (including a discarded
+    # cross-namespace-kubectl-read alternative and why it was dropped).
     - name: onboarding-templates-app-repo
       configMap:
         name: onboarding-templates-app-repo

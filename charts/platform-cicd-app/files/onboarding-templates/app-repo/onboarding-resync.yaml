@@ -1,4 +1,4 @@
-# charts/platform-cicd-catalog/files/onboarding-templates/app-repo/onboarding-resync.yaml
+# charts/platform-cicd-app/files/onboarding-templates/app-repo/onboarding-resync.yaml
 #
 # BOILERPLATE - see push.yaml for the general explanation. This one is different in
 # kind from push.yaml/pull-request.yaml: instead of running this app's own build, it
@@ -16,10 +16,10 @@
 # change and this Application's copy goes stale - see docs/onboarding.md's "Keeping
 # onboarding boilerplate in sync" section, closed by this same re-sync path rather than
 # left as a separate, still-unsolved problem. Templates now live at
-# charts/platform-cicd-catalog/files/onboarding-templates/ and are delivered to
-# deliver-onboarding-files.yaml via a ConfigMap, not baked into the toolbox image - a
-# template edit takes effect on the catalog chart's next `helm upgrade`, no image
-# rebuild needed.
+# charts/platform-cicd-app/files/onboarding-templates/ and are delivered to
+# deliver-onboarding-files.yaml via a ConfigMap (one copy per Application, rendered by
+# the app chart), not baked into the toolbox image - a template edit takes effect on
+# THIS Application's own next `helm upgrade`, no image rebuild needed.
 #
 # <APP_NAMESPACE>, <APP_NAME>, <GITHUB_OWNER>, and (if this Application declared a release stage)
 # <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml itself when it

@@ -73,7 +73,7 @@ spec:
   volumes:
     - name: slack-webhook
       secret:
-        secretName: slack-webhook-url
+        secretName: app-secrets
         optional: true
   steps:
     # onError: continue - a real bug found live (see image-scan.yaml's identical fix,

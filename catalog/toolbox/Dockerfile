@@ -106,17 +106,19 @@ COPY schemas/cicd.schema.json /opt/platform/schemas/cicd.schema.json
 # Onboarding boilerplate (Phase 3 item 7's PaC-delivery mechanism - see
 # catalog/tasks/deliver-onboarding-files.yaml and docs/onboarding.md) used to be baked in
 # here the same way catalog/lib and the schema still are - moved to a ConfigMap
-# (charts/platform-cicd-catalog/templates/configmaps/onboarding-templates.yaml, sourced
-# from charts/platform-cicd-catalog/files/onboarding-templates/) instead, deliberately
-# the OPPOSITE choice from schema.json below. The two look alike (both platform-owned,
-# both delivered into a tenant's own repo/validation path) but differ in one way that
-# matters: onboarding-resync.yaml's whole job is already "auto-propagate a platform
-# template change into every onboarded repo" - baking these in meant that propagation
-# silently depended on an image rebuild+push AND on :latest/IfNotPresent actually
-# re-pulling on every node, the same staleness class that once left a stale image
-# reference live in the stalled-pipeline-detector CronJob for days. A ConfigMap ties a
-# template edit to the catalog chart's own `helm upgrade` instead, so it can't drift from
-# what's actually installed. schemas/cicd.schema.json below stays baked in on purpose -
+# (charts/platform-cicd-app/templates/configmaps/onboarding-templates.yaml, one copy per
+# Application, sourced from charts/platform-cicd-app/files/onboarding-templates/)
+# instead, deliberately the OPPOSITE choice from schema.json below. Baking these in
+# meant a template edit silently depended on an image rebuild+push AND on
+# :latest/IfNotPresent actually re-pulling on every node, the same staleness class that
+# once left a stale image reference live in the stalled-pipeline-detector CronJob for
+# days. A ConfigMap ties a template edit to a real `helm upgrade` instead - of the APP
+# chart, per Application, not a single shared catalog-chart release (a first version
+# tried a single shared ConfigMap in the catalog chart, which would have needed a
+# cross-namespace kubectl read plus new RBAC to actually work, since a Pod can only
+# volume-mount a ConfigMap from its own namespace - dropped in favor of this simpler,
+# per-Application shape, consistent with how every other per-tenant resource in this
+# platform already works). schemas/cicd.schema.json below stays baked in on purpose -
 # see its own comment for why forcing an explicit rebuild is the right call THERE.
 
 # Non-root by default - every catalog Task should run under Pod Security Standards

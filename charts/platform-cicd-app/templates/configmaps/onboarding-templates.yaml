@@ -1,0 +1,66 @@
+# templates/configmaps/onboarding-templates.yaml
+#
+# Delivers the raw boilerplate files deliver-onboarding-files.yaml (a shared catalog
+# Task) commits into this Application's own repos - previously baked into the toolbox
+# image (COPY onboarding-templates/ ...), which meant a template edit only took effect
+# on the next image rebuild+push, and was silently invisible until then if a node
+# happened to be serving a cached :latest layer (the same class of staleness that once
+# masked a stale image reference in the stalled-pipeline-detector CronJob for days).
+#
+# Rendered by the APP chart, not the catalog chart - one copy per Application,
+# deliberately. deliver-onboarding-files.yaml is a shared Task, cluster-resolved from
+# platform-catalog, but its Pod always executes in the CALLING PipelineRun's own
+# namespace (this Application's `-cicd` namespace) - and a Kubernetes Pod can only
+# volume-mount a ConfigMap from its own namespace, full stop, no cross-namespace mount
+# exists. A first version of this tried a single shared ConfigMap in platform-catalog,
+# which would have failed the moment any tenant actually fired onboarding-resync -
+# caught before that happened, but only after also building (and then discarding) a
+# kubectl-based cross-namespace read-plus-RBAC workaround. Settled here instead,
+# consistent with every other per-tenant resource in this platform (build-cache,
+# app-secrets, registry-credentials): a plain volume mount, one copy per Application,
+# no special-case RBAC. The real tradeoff, accepted deliberately: a template edit here
+# takes effect on THIS Application's own next `helm upgrade`, not automatically for
+# every already-onboarded Application the moment the catalog chart changes - but no
+# other app-chart-rendered resource in this platform propagates that way either
+# (cicd.yaml's own pipelines: changes need the same per-tenant `helm upgrade` to take
+# effect on the Trigger side - see docs/onboarding.md), so this isn't actually giving
+# up a property anything else here has.
+#
+# Two ConfigMaps, not one: deliver-onboarding-files.yaml's two steps
+# (deliver-app-repo-files / deliver-gitops-repo-files) each need a DIFFERENT, disjoint
+# subset of these files, and a plain directory-glob (`for f in .../*.yaml`) is how each
+# step tells "its" files apart - keeping that split at the source directory
+# (files/onboarding-templates/app-repo/ vs .../gitops-repo/) means a new gitops-check
+# template just needs to be dropped in the right directory, no code change anywhere
+# else to pick it up on the next `helm upgrade`.
+#
+# .Files.Glob/.AsConfig read raw bytes at execution time and insert them as a plain
+# string value - never re-parsed as more template source - so these files' own literal
+# PaC double-brace dynamic-variable syntax (repo_url, revision) passes through
+# untouched. Contrast deliver-onboarding-files.yaml's own script, which has to
+# hex-escape that same syntax with printf, because THAT file's script block is part of
+# the catalog chart's own template source text and gets parsed directly - unlike this
+# comment, which learned that the hard way once already: spelling the two-brace
+# sequence out literally, even inside a YAML comment, breaks parsing exactly the same
+# way (real error hit here: "function \"repo_url\" not defined").
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onboarding-templates-app-repo
+  labels:
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    platform.io/subcomponent: "onboarding"
+  namespace: {{ include "platform-cicd-app.namespace" . }}
+data:
+  {{- (.Files.Glob "files/onboarding-templates/app-repo/*").AsConfig | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onboarding-templates-gitops-repo
+  labels:
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    platform.io/subcomponent: "onboarding"
+  namespace: {{ include "platform-cicd-app.namespace" . }}
+data:
+  {{- (.Files.Glob "files/onboarding-templates/gitops-repo/*").AsConfig | nindent 2 }}

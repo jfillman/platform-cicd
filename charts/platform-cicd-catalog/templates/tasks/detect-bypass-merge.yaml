@@ -19,10 +19,11 @@
 #
 # Always alerts (does not check notifications.slack.enabled the way notify-slack.yaml
 # does) - a security bypass event shouldn't be silenceable via a routine notification
-# preference. Uses the same per-Application slack-webhook-url Secret notify-slack.yaml
-# already established (Phase 3 item 3) and the same design-language visual conventions
-# (docs/design-language.md), since this PipelineRun executes under the same Application
-# namespace/ServiceAccount as every other gitops-repo governance check.
+# preference. Uses the same per-Application app-secrets Secret (docs/app-secrets.md,
+# reading the slack-webhook-url key) notify-slack.yaml already established and the same
+# design-language visual conventions (docs/design-language.md), since this PipelineRun
+# executes under the same Application namespace/ServiceAccount as every other
+# gitops-repo governance check.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -52,7 +53,7 @@ spec:
               expirationSeconds: 600
     - name: slack-webhook
       secret:
-        secretName: slack-webhook-url
+        secretName: app-secrets
         optional: true
   steps:
     - name: check

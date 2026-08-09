@@ -111,7 +111,7 @@ credentials).
 
 6. **Deliver the `.tekton/` boilerplate.** Trigger a real push to the app repo's `cicd.yaml`
    once (or wait for the next real one) - `onboarding-resync.yaml` (delivered from
-   `charts/platform-cicd-catalog/files/onboarding-templates/app-repo/`) fires on exactly
+   `charts/platform-cicd-app/files/onboarding-templates/app-repo/`) fires on exactly
    that, and `charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml` opens a PR
    against the app repo (and, if a `gitopsRepoUrl` was given, the gitops repo too) with the
    generated `.tekton/*.yaml` files. Merge it once; you never hand-edit these files. This
@@ -162,12 +162,15 @@ onboarding templates changing (nothing re-delivered already-onboarded repos' cop
 Both are the same problem now: `onboarding-resync.yaml` fires whenever `cicd.yaml`
 changes on a push to `main` (a real, documented Pipelines-as-Code CEL extension,
 `"cicd.yaml".pathChanged()` - not a custom filter), and re-delivers the current
-`charts/platform-cicd-catalog/files/onboarding-templates/` content regardless of which
+`charts/platform-cicd-app/files/onboarding-templates/` content regardless of which
 side went stale. Those templates are baked into a ConfigMap
-(`charts/platform-cicd-catalog/templates/configmaps/onboarding-templates.yaml`), not the
-toolbox image, so an edit takes effect on the catalog chart's next `helm upgrade` - no
-image rebuild needed. `git status --porcelain` inside `deliver-onboarding-files.yaml`
-skips opening a PR when nothing actually changed, so this is safe to fire often.
+(`charts/platform-cicd-app/templates/configmaps/onboarding-templates.yaml`, one copy
+per Application), not the toolbox image, so an edit takes effect on that Application's
+own next `helm upgrade` - no image rebuild needed, though (unlike the shared catalog
+chart) it does mean updating N already-onboarded Applications individually to actually
+propagate a template change, the same as any other app-chart-rendered resource.
+`git status --porcelain` inside `deliver-onboarding-files.yaml` skips opening a PR when
+nothing actually changed, so this is safe to fire often.
 
 For the app chart's own resources (Triggers, RBAC, etc.) re-rendering on a `cicd.yaml`
 change: that's a separate `helm upgrade` invocation, not automated yet by this same

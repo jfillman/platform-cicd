@@ -59,7 +59,7 @@ spec:
   volumes:
     - name: slack-webhook
       secret:
-        secretName: slack-webhook-url
+        secretName: app-secrets
         optional: true
   steps:
     # onError: continue - a real bug found live: Tekton's DEFAULT behavior is to skip

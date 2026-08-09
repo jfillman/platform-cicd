@@ -46,8 +46,8 @@ catalog/          shared Tekton catalog - Pipelines, Tasks, StepActions, bash li
 platform/broker/   the internal CDEvents relay: EventListener + TokenReview interceptor (Go)
 observability/     dashboards + reference Helm values; observability/kind-observe/ is what's actually applied (see docs/bootstrap.md)
 schemas/           cicd.schema.json - the developer-facing config contract
-charts/platform-cicd-catalog/files/onboarding-templates/app-repo/     boilerplate PaC trigger files delivered to each app repo (via a ConfigMap, not baked into the toolbox image)
-charts/platform-cicd-catalog/files/onboarding-templates/gitops-repo/  boilerplate PaC governance-check files delivered to each gitops repo (release stage)
+charts/platform-cicd-app/files/onboarding-templates/app-repo/     boilerplate PaC trigger files delivered to each app repo (via a per-Application ConfigMap, not baked into the toolbox image)
+charts/platform-cicd-app/files/onboarding-templates/gitops-repo/  boilerplate PaC governance-check files delivered to each gitops repo (release stage)
 hack/              bootstrap against the shared kind-observe dev cluster
 docs/              design docs - read chaining.md and tracing.md first
 docs/user-guide/   application-developer docs - cicd.yaml reference, quickstart, examples
