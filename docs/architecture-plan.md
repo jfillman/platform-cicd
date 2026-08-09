@@ -71,7 +71,7 @@ platform-cicd/
 │   ├── tempo/ · loki/ · kube-prometheus-stack/   (Helm values overlays)
 │   └── grafana/dashboards/     # pipelines-overview.json, pipeline-detail.json, (Phase 2) dora.json
 ├── schemas/cicd.schema.json    # JSON Schema for the developer-facing cicd.yaml
-├── onboarding-templates/.tekton/   # boilerplate PaC trigger files generated per repo (push/pr/tag)
+├── charts/platform-cicd-catalog/files/onboarding-templates/   # boilerplate PaC trigger files, delivered via ConfigMap
 └── docs/
 ```
 
@@ -99,7 +99,7 @@ platform-cicd/
 **Phase 2 — Full chaining + ephemeral envs + DORA**
 - Extend chaining and trace-stitching across the full build→test→deploy→release sequence.
 - Port PR-based ephemeral environments via ArgoCD ApplicationSet's `pullRequest` generator (cheap, high-value, doesn't depend on Crossplane).
-- CDEvents idempotency/dedup (deterministic PipelineRun naming from the CDEvent id - **done, built into Phase 1's `send-cdevent`/`tenant-triggers-template.yaml` already**) and a stalled-pipeline detector (expected-next-stage-didn't-start-within-N-minutes alert - not yet built), since at-least-once delivery is a real gap otherwise.
+- CDEvents idempotency/dedup (deterministic PipelineRun naming from the CDEvent id - **done, built into `send-cdevent`/`charts/platform-cicd-app/templates/triggers/flow-triggers.yaml`**) and a stalled-pipeline detector (expected-next-stage-didn't-start-within-N-minutes alert - done, see `docs/stalled-pipeline-detector.md`), since at-least-once delivery is a real gap otherwise.
 - DORA exporter + Grafana DORA panel row, MTTR visually marked experimental.
 
 **Phase 3 — Self-service onboarding + branch-based ephemeral envs + real governance**

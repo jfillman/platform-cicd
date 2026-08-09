@@ -48,6 +48,27 @@ Defaults to "small" if unset, matching docs/cicd-yaml-reference.md.
 {{- end -}}
 
 {{/*
+platform-cicd-app.sourceVolumeSize - t-shirt size lookup for build.sourceVolume.size,
+same shape as cacheSize above but a separate, larger dictionary: this backs the
+ephemeral per-PipelineRun `source` workspace (checked-out repo + build output + kaniko
+context), not the persistent per-app dependency cache. Used by
+charts/platform-cicd-app/templates/triggers/flow-triggers.yaml (event-chained stages,
+rendered here at Helm time) - the git-rooted-stage equivalent in
+charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml can't use this
+helper (that file emits YAML at Tekton *runtime* into a tenant's own repo, not at Helm
+render time), so it necessarily duplicates this same dictionary as bash.
+*/}}
+{{- define "platform-cicd-app.sourceVolumeSize" -}}
+{{- $size := .size | default "small" -}}
+{{- if eq $size "small" -}}2Gi
+{{- else if eq $size "medium" -}}5Gi
+{{- else if eq $size "large" -}}10Gi
+{{- else if eq $size "xlarge" -}}20Gi
+{{- else -}}2Gi
+{{- end -}}
+{{- end -}}
+
+{{/*
 platform-cicd-app.envNamespace - the one general namespace pattern this whole platform
 uses: `<type>-<app-name>-<env>`, where every namespace an Application ever gets (its own
 CI/CD execution namespace, a deploy target, release staging, a PR ephemeral env) is a
@@ -112,14 +133,14 @@ renderer can treat both forms uniformly.
     {{- if hasKey $entry "env" -}}
       {{- $_ := set $step "env" $entry.env -}}
     {{- end -}}
+    {{- if hasKey $entry "suite" -}}
+      {{- $_ := set $step "suite" $entry.suite -}}
+    {{- end -}}
     {{- if hasKey $entry "cluster" -}}
       {{- $_ := set $step "cluster" $entry.cluster -}}
     {{- end -}}
     {{- if hasKey $entry "name" -}}
       {{- $_ := set $step "name" $entry.name -}}
-    {{- end -}}
-    {{- if hasKey $entry "approvalRequired" -}}
-      {{- $_ := set $step "approvalRequired" $entry.approvalRequired -}}
     {{- end -}}
     {{- if eq $idx 0 -}}
       {{- if hasKey $entry "trigger" -}}
@@ -201,14 +222,14 @@ renderer can treat both forms uniformly.
       {{- if hasKey $entry "env" -}}
         {{- $_ := set $step "env" $entry.env -}}
       {{- end -}}
+      {{- if hasKey $entry "suite" -}}
+        {{- $_ := set $step "suite" $entry.suite -}}
+      {{- end -}}
       {{- if hasKey $entry "cluster" -}}
         {{- $_ := set $step "cluster" $entry.cluster -}}
       {{- end -}}
       {{- if hasKey $entry "name" -}}
         {{- $_ := set $step "name" $entry.name -}}
-      {{- end -}}
-      {{- if hasKey $entry "approvalRequired" -}}
-        {{- $_ := set $step "approvalRequired" $entry.approvalRequired -}}
       {{- end -}}
       {{- $steps = append $steps $step -}}
     {{- end -}}
@@ -259,12 +280,27 @@ architectural constraints. Rules:
   flow-triggers.yaml's event-type lookup is keyed by whatever the PREVIOUS step's
   stage actually is, not a fixed position, so any ordering already works structurally.
 - Cluster param only valid for release stage
-- Env param required for deploy and release stages
+- Env param required for deploy, release, and test stages - test needs it too now
+  (which environment's build the test is actually exercising), even though nothing
+  downstream deploys anywhere on test's behalf.
+- A deploy step's env must appear in deploy.lowerEnvironments/upperEnvironments -
+  deploy-rbac.yaml only grants pipeline-runner rights into namespaces from that same
+  list, so a step targeting an env missing from it would otherwise fail late, deep
+  inside deploy-manifests, with a bare Forbidden RBAC error instead of a fast, readable
+  validate-cicd-config-style rejection.
+- A test step needs a resolvable suite name: either its own `suite` or the top-level
+  test.suite. Required specifically so two test steps in one flow (legal - see the
+  "any stage may repeat" rule above) can be told apart; falls back to the top-level
+  value so the common single-suite case doesn't need to repeat it per step.
 
 Fails fast with descriptive message if violated, preventing broken renders.
 */}}
 {{- define "platform-cicd-app.validateFlows" -}}
 {{- $flows := .Values.pipelines | default (dict) -}}
+{{- $defaultSuite := .Values.test.suite | default "" -}}
+{{- $lowerEnvs := .Values.deploy.lowerEnvironments | default (list) -}}
+{{- $upperEnvs := .Values.deploy.upperEnvironments | default (list) -}}
+{{- $deployEnvs := concat $lowerEnvs $upperEnvs -}}
 {{- range $flowName, $flow := $flows -}}
   {{- $normalized := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}
   {{- $trigger := $normalized.trigger | default (dict) -}}
@@ -299,9 +335,22 @@ Fails fast with descriptive message if violated, preventing broken renders.
       {{- $stageName := $step.stage | default "" -}}
 
       {{- /* Validate env requirement */ -}}
-      {{- if or (eq $stageName "deploy") (eq $stageName "release") -}}
+      {{- if or (eq $stageName "deploy") (eq $stageName "release") (eq $stageName "test") -}}
         {{- if not $step.env -}}
           {{- fail (printf "Flow '%s' step %d (%s): env is required for %s stage" $flowName (add $index 1) $stageName $stageName) -}}
+        {{- end -}}
+      {{- end -}}
+
+      {{- /* Validate deploy step's env is actually provisioned (deploy-rbac.yaml only
+      grants access to envs listed under deploy.lowerEnvironments/upperEnvironments) */ -}}
+      {{- if and (eq $stageName "deploy") $step.env (not (has $step.env $deployEnvs)) -}}
+        {{- fail (printf "Flow '%s' step %d: deploy env '%s' is not listed under deploy.lowerEnvironments or deploy.upperEnvironments - pipeline-runner has no RBAC into that namespace, this would fail at deploy time with a Forbidden error instead. Add it to one of those lists." $flowName (add $index 1) $step.env) -}}
+      {{- end -}}
+
+      {{- /* Validate test step has a resolvable suite name */ -}}
+      {{- if eq $stageName "test" -}}
+        {{- if and (not $step.suite) (not $defaultSuite) -}}
+          {{- fail (printf "Flow '%s' step %d: test stage needs a suite name - set this step's own `suite`, or a top-level `test.suite` shared by all test steps." $flowName (add $index 1)) -}}
         {{- end -}}
       {{- end -}}
 

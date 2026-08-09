@@ -96,7 +96,7 @@ names like `sastgdn8r` instead of `sast-gdn8r` - confirmed live: the five gitops
 governance-check trigger files (`sast`, `policy-check`, `image-scan`, `sbom`,
 `bypass-check`) were missing the trailing dash, while the app-repo side (`build-`,
 `pr-validate-`, `onboarding-resync-`) already had it right. **Fixed** - all eight
-`generateName` values in `onboarding-templates/.tekton*/` now end in `-`.
+`generateName` values in `charts/platform-cicd-catalog/files/onboarding-templates/` now end in `-`.
 
 **Confirmed live, and this is a genuine, unavoidable trade-off, not an oversight**:
 Pipelines-as-Code derives the GitHub Check context name directly from

@@ -50,6 +50,18 @@
               "description": "T-shirt size for this app's own cache PVC (small=1Gi, medium=2.5Gi, large=5Gi, xlarge=8Gi - same dictionary as the old cd-pipelines-user Helm chart's buildSpec.cacheSize). One PVC per app, specifically so this can vary per app. Chosen at onboarding time, not resizable live afterward - kind-observe's default storage class has allowVolumeExpansion: false, so changing this later means recreating the PVC (and losing its cached content), not a live resize."
             }
           }
+        },
+        "sourceVolume": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "size": {
+              "type": "string",
+              "enum": ["small", "medium", "large", "xlarge"],
+              "default": "small",
+              "description": "T-shirt size for the ephemeral `source` workspace every stage's PipelineRun gets (small=2Gi, medium=5Gi, large=10Gi, xlarge=20Gi). This is the checked-out git repo plus build.script's own output plus kaniko's build context - distinct from build.cache (a separate, persistent, per-app dependency-download cache). Exists because a large build can genuinely fill this workspace's disk ('no space left on device'), not because of anything cache-related. Not per-stage: one size applies to every stage's source workspace for this app (build/test/deploy/release all declare the same `source` workspace shape), since build is normally the only stage large enough to need this, and a single per-app knob is simpler than one per stage. Not resizable live - each PipelineRun's workspace is a fresh, ephemeral volumeClaimTemplate-backed PVC (unlike build.cache's persistent one), so a size change just takes effect on the next run, nothing to migrate."
+            }
+          }
         }
       }
     },
@@ -81,7 +93,7 @@
           "type": "string",
           "enum": ["deployment", "rollout"],
           "default": "deployment",
-          "description": "deployment = native k8s Deployment rollout; rollout = Argo Rollouts (canary/blue-green)."
+          "description": "deployment = native k8s Deployment rollout; rollout = Argo Rollouts (canary/blue-green). Schema-validated and reserved for future use, but rollout has NO effect yet - every deploy is a plain Deployment `set image` regardless of this value. Kept in the schema now, same as pipelines[].steps[].cluster, so today's cicd.yaml files don't need a breaking change once Argo Rollouts support lands."
         }
       }
     },
@@ -153,6 +165,27 @@
       }
     },
 
+    "secrets": {
+      "type": "array",
+      "default": [],
+      "description": "Optional. Each entry pulls one key out of this Application's own backend secret store (assumed provisioned alongside the Application itself - see docs/app-secrets.md - NOT something platform-cicd creates) and lands it as a key in this Application's app-secrets Kubernetes Secret, synced by a real ExternalSecret. Open-ended by design: a brand-new secret purpose (SAST creds, a DB password, anything else a future Task needs) is a new list entry here, not a schema/template change - whatever Task consumes it just needs to know which `name` to look for. Empty by default: the SecretStore/ExternalSecret are only rendered at all when this list is non-empty, so an Application that doesn't use this feature gets no dangling resources pointed at a secrets namespace that may not exist for it.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Logical name. Becomes the key inside the app-secrets Kubernetes Secret this renders - a consuming Task mounts app-secrets and reads this exact filename. Also the default for `key` below, so the common case (the name you want to use here already matches the name it has in your backend store) needs only this one field."
+          },
+          "key": {
+            "type": "string",
+            "description": "Key name as it actually exists in the app's own backend secret store object. Defaults to `name` when omitted - only set this when the backend key is named differently than you want it exposed as."
+          }
+        }
+      }
+    },
+
     "pipelines": {
       "type": "object",
       "description": "Optional named pipeline flows. Each flow can define a root trigger and an ordered list of stages, allowing app teams to describe build -> test -> deploy -> release sequences without writing Tekton YAML directly. The legacy list form used by earlier config files is also accepted and normalized by the chart.",
@@ -198,11 +231,13 @@
                   "required": ["stage"],
                   "properties": {
                     "stage": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
-                    "after": { "type": "string" },
                     "env": { "type": "string" },
+                    "suite": {
+                      "type": "string",
+                      "description": "Only meaningful on a test step. Overrides the top-level test.suite for this specific step - needed when a flow has more than one test step (they'd otherwise be indistinguishable). Falls back to test.suite when omitted; one of the two must resolve to a value, since a test run always needs a name."
+                    },
                     "cluster": { "type": "string" },
-                    "name": { "type": "string" },
-                    "approvalRequired": { "type": "boolean", "default": false }
+                    "name": { "type": "string" }
                   }
                 }
               }
@@ -221,10 +256,10 @@
                 "tagPattern": { "type": "string" },
                 "filePathPattern": { "type": "array", "items": { "type": "string" } },
                 "env": { "type": "string" },
+                "suite": { "type": "string" },
                 "cluster": { "type": "string" },
                 "name": { "type": "string" },
-                "triggerEnv": { "type": "string" },
-                "approvalRequired": { "type": "boolean", "default": false }
+                "triggerEnv": { "type": "string" }
               }
             }
           }

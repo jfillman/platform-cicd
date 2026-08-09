@@ -1,7 +1,8 @@
 # templates/pipelines/onboarding-resync.yaml (Phase 3 item 7) - one Task, wrapped in a
 # Pipeline only because every PaC trigger in this platform references a Pipeline via the
-# cluster resolver, matching the existing convention (see onboarding-templates/.tekton/
-# onboarding-resync.yaml, the trigger file that fires this).
+# cluster resolver, matching the existing convention (see
+# files/onboarding-templates/app-repo/onboarding-resync.yaml, the trigger file that
+# fires this).
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:

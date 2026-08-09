@@ -14,7 +14,7 @@
 #
 # Optional, not mandatory - build.yaml's when: clause on this Task's pipelineTask skips it
 # entirely for teams doing the whole build inside a multi-stage Dockerfile instead (no
-# separate build.sh at all). See docs/cicd-yaml-reference.md and validate-cicd-config.yaml's
+# separate build.sh at all). See docs/user-guide/cicd-yaml-reference.md and validate-cicd-config.yaml's
 # has-build-script result.
 apiVersion: tekton.dev/v1
 kind: Task
@@ -58,7 +58,7 @@ spec:
       description: Resolved build-agent image (catalog/tasks/resolve-build-agent-image.yaml) - build.sh runs inside this, same image run-tests.yaml uses.
     - name: app-name
       type: string
-      description: Selects this app's own build-cache-<app-name> PVC (platform/broker/manifests/app-build-cache-pvc-template.yaml) - not used for anything else in this Task.
+      description: Selects this app's own build-cache-<app-name> PVC (charts/platform-cicd-app/templates/env/build-cache-pvc.yaml) - not used for anything else in this Task.
     - name: flow-traceparent
       type: string
       description: Root traceparent for the whole flow (from start-flow-root-span) - gives this Task's span its trace id. Always provided by build.yaml (this Task always runs with real flow/stage context, unlike governance-gate-stub which is also called from context-less PR checks).

@@ -25,6 +25,8 @@ build:
   cache:
     enabled: false
     size: small
+  sourceVolume:
+    size: small
 
 test:
   enabled: true
@@ -78,6 +80,22 @@ pipelines: {}
 
 # Stage presence is derived from `.Values.pipelines` flow definitions. The older
 # top-level `pipeline:` array is no longer used by the chart.
+
+# Optional. Each entry pulls one key out of this Application's own backend secret store
+# into an ExternalSecret-synced app-secrets Kubernetes Secret. See
+# docs/app-secrets.md and appSecretStore below (which says WHERE that backend store is
+# assumed to live). Empty by default - the SecretStore/ExternalSecret templates only
+# render at all when this is non-empty.
+secrets: []
+
+# WHERE this Application's own backend secret store is: a real Kubernetes Secret living
+# in this Application's own EXISTING dev environment namespace (<type>-<app-name>-dev,
+# no new namespace convention needed) - see docs/app-secrets.md. The ClusterSecretStore
+# pointed at that namespace is rendered by the control-plane chart's own
+# appSecretStores list, not this chart - this value only names the backend Secret
+# OBJECT within that namespace, which this chart's own ExternalSecret needs to know.
+appSecretStore:
+  secretName: app-secrets    # the ONE backend Secret object in <type>-<app-name>-dev, holding every key this Application's cicd.yaml might ever declare under secrets:
 
 # Shared platform infrastructure this chart's templates need to reach - not really
 # per-app config, kept here (rather than under platformIdentity) since these are

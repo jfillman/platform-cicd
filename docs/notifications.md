@@ -33,26 +33,32 @@ rather than a broken feature. Confirmed live before fixing: no Application has e
 secret, and `kubectl get externalsecret,clustersecretstore -A` returns nothing anywhere -
 External Secrets Operator is installed but has zero configured backends, so the
 architecture doc's original "populated by ESO at onboarding" plan for this secret was
-never actually built. Fixed with a plain `secret` volume (`optional: true`, so Applications
-without it still start cleanly - not a new failure mode, matches the script's existing
-skip behavior), not a full ESO SecretStore pipeline for one demo webhook.
+never actually built. Fixed at the time with a plain `secret` volume (`optional: true`,
+so Applications without it still start cleanly - not a new failure mode, matches the
+script's existing skip behavior), not a full ESO SecretStore pipeline for one demo
+webhook.
+
+**That tradeoff was revisited once a second real consumer needed the identical
+mechanism** - see [app-secrets.md](app-secrets.md). The volume mount is unchanged in
+shape (still `optional: true`, still one file per Secret data key), but now sources
+from `app-secrets` (ESO-synced from the Application's own backend store) instead of a
+hand-created, per-Application Secret.
 
 ## Onboarding an Application (per app)
 
-1. **Enable it in `cicd.yaml`**:
+1. **Enable it in `cicd.yaml`**, declaring the secret alongside it:
    ```yaml
+   secrets:
+     - name: slack-webhook-url
    notifications:
      slack:
        enabled: true
        channel: "#your-channel"
    ```
-2. **Create the Secret yourself**, in the Application's own namespace - the data key must be
-   literally named `slack-webhook-url` (a Secret volume mount creates one file per key,
-   named after the key, and the script reads exactly that filename):
-   ```
-   kubectl create secret generic slack-webhook-url -n platform-cicd-demo \
-     --from-literal=slack-webhook-url=<your real Slack incoming-webhook URL>
-   ```
+2. **Populate the Application's own backend secret store** with a `slack-webhook-url`
+   key holding a real Slack incoming-webhook URL - see
+   [app-secrets.md](app-secrets.md) for where that store is assumed to live.
+
    Nothing else to apply - `notify-slack.yaml`'s volume mount is already wired into
    every pipeline via the existing, unconditional `notify` finally task.
 

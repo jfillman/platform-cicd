@@ -51,6 +51,17 @@ needing a genuinely different registry credential would get its own key in
 `platform-secrets` and its own `ExternalSecret` referencing that key - not built now,
 since no Application needs it yet.
 
+## Application-owned secrets: one ClusterSecretStore per Application
+
+The bridge above is for platform-wide, genuinely-shared credentials. An Application's
+own secrets (a Slack webhook, SAST scan credentials, ...) use a *different* mechanism -
+[app-secrets.md](app-secrets.md) - because they don't share a backend: each
+Application's own dev environment namespace is its secret backend, so this renders one
+additional `ClusterSecretStore` per Application (control-plane's own `appSecretStores`
+values list) instead of adding another key to this shared one. Opt in per Application
+via `cicd.yaml`'s `secrets:` list plus a one-time entry in control-plane's
+`appSecretStores`.
+
 ## What this deliberately is not
 
 Not a real vault: `platform-secrets` Secrets are ordinary Kubernetes Secrets (etcd-backed,

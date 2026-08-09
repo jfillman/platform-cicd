@@ -5,9 +5,10 @@ to an earlier OpenShift/Istio-based platform - see the architecture plan referen
 below for what changed and why.
 
 **Platform-as-a-service model**: application developers write one file,
-[`cicd.yaml`](docs/cicd-yaml-reference.md), at their repo root. They never see, write,
-or edit Tekton YAML. Everything else - triggering, chaining, tracing, dashboards - is
-the platform's job.
+[`cicd.yaml`](docs/user-guide/cicd-yaml-reference.md), at their repo root. They never
+see, write, or edit Tekton YAML. Everything else - triggering, chaining, tracing,
+dashboards - is the platform's job. Start at
+[docs/user-guide/](docs/user-guide/README.md) if that's you.
 
 ## Architecture, in one page
 
@@ -45,10 +46,11 @@ catalog/          shared Tekton catalog - Pipelines, Tasks, StepActions, bash li
 platform/broker/   the internal CDEvents relay: EventListener + TokenReview interceptor (Go)
 observability/     dashboards + reference Helm values; observability/kind-observe/ is what's actually applied (see docs/bootstrap.md)
 schemas/           cicd.schema.json - the developer-facing config contract
-onboarding-templates/.tekton/   boilerplate PaC trigger files generated per app repo
-onboarding-templates/.tekton-gitops/   boilerplate PaC governance-check files generated per gitops repo (release stage)
+charts/platform-cicd-catalog/files/onboarding-templates/app-repo/     boilerplate PaC trigger files delivered to each app repo (via a ConfigMap, not baked into the toolbox image)
+charts/platform-cicd-catalog/files/onboarding-templates/gitops-repo/  boilerplate PaC governance-check files delivered to each gitops repo (release stage)
 hack/              bootstrap against the shared kind-observe dev cluster
 docs/              design docs - read chaining.md and tracing.md first
+docs/user-guide/   application-developer docs - cicd.yaml reference, quickstart, examples
 ```
 
 ## Getting started

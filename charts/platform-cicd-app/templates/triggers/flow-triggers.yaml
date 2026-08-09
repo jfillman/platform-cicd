@@ -103,6 +103,16 @@ is, not assume "image" always.
 {{- if eq $prevStage "deploy" -}}
   {{- $imageField = "artifactId" -}}
 {{- end -}}
+
+{{- /*
+Only meaningful for a test step - falls back to the top-level test.suite so the
+common single-suite case doesn't need to repeat it on every step (same fallback
+validateFlows already requires resolve to something for a test stage). Threaded
+through unconditionally for every stage the same way cluster/name already are;
+build/deploy/release's Pipelines simply don't declare a `suite` param and Tekton
+tolerates the unused extra value, same as those two today.
+*/ -}}
+{{- $effectiveSuite := $step.suite | default ($.Values.test.suite | default "") -}}
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
@@ -121,6 +131,7 @@ spec:
     {{/* $(body.context.id), the incoming CDEvent's own unique id substituted by Tekton Triggers at runtime (dollar-paren, not Helm's double-brace), matches legacy fire-test.yaml's "<stage>-$(body.context.id)" dedup pattern - gives a real per-firing identity so a redelivered CDEvent no-ops, and now that stages can repeat within a flow, two different steps sharing a stage name never collide on it either. */}}
     - { name: pipeline-run-name, value: {{ printf "%s-%d-%s-$(body.context.id)" $flowName $index $stageName | quote }} }
     - { name: env, value: {{ $step.env | default "dev" | quote }} }
+    - { name: suite, value: {{ $effectiveSuite | quote }} }
     - { name: cluster, value: {{ $step.cluster | default "" | quote }} }
     - { name: name, value: {{ $step.name | default "" | quote }} }
     - { name: is-flow-root, value: "false" }
@@ -158,6 +169,7 @@ spec:
     - name: stage-name
     - name: pipeline-run-name
     - name: env
+    - name: suite
     - name: cluster
     - name: name
     - name: is-flow-root
@@ -188,6 +200,7 @@ spec:
           - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
           - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
           - { name: env, value: $(tt.params.env) }
+          - { name: suite, value: $(tt.params.suite) }
           - { name: cluster, value: $(tt.params.cluster) }
           - { name: name, value: $(tt.params.name) }
           - { name: git-url, value: $(tt.params.git-url) }
@@ -199,7 +212,7 @@ spec:
         workspaces:
           - name: source
             volumeClaimTemplate:
-              spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: 1Gi } } }
+              spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: {{ include "platform-cicd-app.sourceVolumeSize" (dict "size" $.Values.build.sourceVolume.size) }} } } }
         taskRunTemplate: { serviceAccountName: pipeline-runner }
 ---
 apiVersion: triggers.tekton.dev/v1beta1

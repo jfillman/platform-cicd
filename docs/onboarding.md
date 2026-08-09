@@ -37,9 +37,11 @@ credentials).
    [bootstrap.md](bootstrap.md) - to be installed on that repo first). Same manual step as
    before; not something a Helm chart owns.
 
-2. **Add `cicd.yaml`** to the repo root (see [examples/cicd.yaml](examples/cicd.yaml)) -
-   this is the only file the developer maintains going forward, and it's also what you're
-   about to pass to `helm install` below.
+2. **Add `cicd.yaml`** to the repo root (see
+   [user-guide/quickstart.md](user-guide/quickstart.md) and
+   [user-guide/examples/](user-guide/examples/README.md)) - this is the only file the
+   developer maintains going forward, and it's also what you're about to pass to
+   `helm install` below.
 
 3. **Write a small `platform-identity.yaml`** - the handful of infra-identity values that
    aren't really pipeline configuration, so `schemas/cicd.schema.json` never needs to
@@ -108,8 +110,9 @@ credentials).
    doesn't just add.
 
 6. **Deliver the `.tekton/` boilerplate.** Trigger a real push to the app repo's `cicd.yaml`
-   once (or wait for the next real one) - `onboarding-templates/.tekton/onboarding-resync.yaml`
-   fires on exactly that, and `charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml` opens a PR
+   once (or wait for the next real one) - `onboarding-resync.yaml` (delivered from
+   `charts/platform-cicd-catalog/files/onboarding-templates/app-repo/`) fires on exactly
+   that, and `charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml` opens a PR
    against the app repo (and, if a `gitopsRepoUrl` was given, the gitops repo too) with the
    generated `.tekton/*.yaml` files. Merge it once; you never hand-edit these files. This
    replaces both the old fully-manual copy-paste step and an earlier considered design (an
@@ -155,13 +158,16 @@ credentials).
 
 Two things used to go stale silently, with no mechanism to catch either: an Application's
 `cicd.yaml` changing (nothing re-rendered the app chart), and the platform's own
-`onboarding-templates/.tekton/*.yaml` changing (nothing re-delivered already-onboarded
-repos' copies). Both are the same problem now: `onboarding-resync.yaml` fires whenever
-`cicd.yaml` changes on a push to `main` (a real, documented Pipelines-as-Code CEL
-extension, `"cicd.yaml".pathChanged()` - not a custom filter), and re-delivers the
-current `onboarding-templates/.tekton/*` content regardless of which side went stale.
-`git status --porcelain` inside `deliver-onboarding-files.yaml` skips opening a PR when
-nothing actually changed, so this is safe to fire often.
+onboarding templates changing (nothing re-delivered already-onboarded repos' copies).
+Both are the same problem now: `onboarding-resync.yaml` fires whenever `cicd.yaml`
+changes on a push to `main` (a real, documented Pipelines-as-Code CEL extension,
+`"cicd.yaml".pathChanged()` - not a custom filter), and re-delivers the current
+`charts/platform-cicd-catalog/files/onboarding-templates/` content regardless of which
+side went stale. Those templates are baked into a ConfigMap
+(`charts/platform-cicd-catalog/templates/configmaps/onboarding-templates.yaml`), not the
+toolbox image, so an edit takes effect on the catalog chart's next `helm upgrade` - no
+image rebuild needed. `git status --porcelain` inside `deliver-onboarding-files.yaml`
+skips opening a PR when nothing actually changed, so this is safe to fire often.
 
 For the app chart's own resources (Triggers, RBAC, etc.) re-rendering on a `cicd.yaml`
 change: that's a separate `helm upgrade` invocation, not automated yet by this same

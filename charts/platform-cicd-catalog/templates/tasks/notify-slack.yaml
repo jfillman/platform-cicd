@@ -10,11 +10,20 @@
 # volume/volumeMount for it - so even an Application that fully configured
 # notifications.slack.enabled: true and created the Secret exactly as this comment
 # describes would still never get a real notification, silently swallowed by the
-# script's own graceful "no secret mounted" skip path. See docs/notifications.md for the
-# fix and the one-time-per-Application onboarding step. The Secret volume is
-# `optional: true` deliberately - most Applications won't have this Secret at all, and
-# the pod must still start cleanly for them (matches the script's own existing
-# graceful-skip behavior for that case, not a new failure mode).
+# script's own graceful "no secret mounted" skip path. Fixed at the time with a plain
+# per-Application `secret` volume, deliberately NOT a full ESO SecretStore pipeline "for
+# one demo webhook" (that decision's own words). That tradeoff was revisited once a
+# second real use case (SAST scan credentials) needed the identical
+# pull-a-key-from-my-own-backend-store mechanism - see docs/app-secrets.md. The volume
+# now mounts app-secrets (charts/platform-cicd-app/templates/secrets/
+# app-secrets-external-secret.yaml, ESO-synced from this Application's own backend
+# store) instead of a hand-created Secret. The mount mechanics are unchanged - a Secret
+# volume creates one file per data key either way, so the script below still just reads
+# a file literally named slack-webhook-url; only where that key's VALUE comes from
+# changed. The Secret volume is `optional: true` deliberately - most Applications won't
+# declare this key in secrets: at all, and the pod must still start cleanly for them
+# (matches the script's own existing graceful-skip behavior for that case, not a new
+# failure mode).
 #
 # Message format follows docs/design-language.md (Phase 3 item 3 follow-up) - one blue
 # accent, a muted red only on failure, icons used only as a single `⚠` on failure, a
@@ -70,7 +79,7 @@ spec:
   volumes:
     - name: slack-webhook
       secret:
-        secretName: slack-webhook-url
+        secretName: app-secrets
         optional: true
   steps:
     - name: notify

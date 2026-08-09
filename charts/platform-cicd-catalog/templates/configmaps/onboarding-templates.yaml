@@ -1,0 +1,48 @@
+# templates/configmaps/onboarding-templates.yaml
+#
+# Delivers the raw boilerplate files deliver-onboarding-files.yaml commits into tenant
+# repos - previously baked into the toolbox image (COPY onboarding-templates/ ...), which
+# meant a template edit only took effect on the next image rebuild+push, and was silently
+# invisible until then if a node happened to be serving a cached :latest layer (the same
+# class of staleness that once masked a stale image reference in the
+# stalled-pipeline-detector CronJob for days). A ConfigMap ties this content to the
+# catalog chart's own `helm upgrade` instead - the same "no separate sync, no second
+# copy" principle docs/user-guide/cicd-yaml-reference.md already states for cicd.yaml
+# itself.
+#
+# Two ConfigMaps, not one: deliver-onboarding-files.yaml's two steps
+# (deliver-app-repo-files / deliver-gitops-repo-files) each need a DIFFERENT, disjoint
+# subset of these files, and a plain directory-glob (`for f in .../*.yaml`) is how each
+# step already tells "its" files apart - keeping that split at the source directory
+# (files/onboarding-templates/app-repo/ vs .../gitops-repo/) means a new gitops-check
+# template just needs to be dropped in the right directory, no code change anywhere else
+# to pick it up on the next `helm upgrade`.
+#
+# .Files.Glob/.AsConfig read raw bytes at execution time and insert them as a plain
+# string value - never re-parsed as more template source - so these files' own literal
+# PaC double-brace dynamic-variable syntax (repo_url, revision) passes through
+# untouched. Contrast deliver-onboarding-files.yaml's own script, which has to
+# hex-escape that same syntax with printf, because THAT file's script block is part of
+# this chart's own template source text and gets parsed directly - unlike this comment,
+# which learned that the hard way once already: spelling the two-brace sequence out
+# literally, even inside a YAML comment, breaks parsing exactly the same way (real error
+# hit here: "function \"repo_url\" not defined").
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onboarding-templates-app-repo
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
+    platform.io/catalog: "true"
+data:
+  {{- (.Files.Glob "files/onboarding-templates/app-repo/*").AsConfig | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onboarding-templates-gitops-repo
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
+    platform.io/catalog: "true"
+data:
+  {{- (.Files.Glob "files/onboarding-templates/gitops-repo/*").AsConfig | nindent 2 }}

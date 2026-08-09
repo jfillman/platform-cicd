@@ -66,3 +66,31 @@ secretStore:
   name: platform-secret-store
   kind: ClusterSecretStore
   sourceNamespace: platform-secrets
+
+# Per-Application secret stores (docs/app-secrets.md) - a DIFFERENT mechanism from
+# secretStore above, not another entry in it: an Application's own secrets (Slack
+# webhook, SAST creds, ...) come from that ONE Application's own backend, not the
+# platform-wide shared namespace registry-credentials uses, so each needs its own
+# ClusterSecretStore with its own remoteNamespace. ClusterSecretStore is cluster-scoped
+# (no `spec.kubernetes.remoteNamespace` templating possible at the app-chart level the
+# way a namespaced SecretStore would allow), so these are rendered HERE, once per
+# Application, from this list - not by the per-Application app chart itself.
+#
+# remoteNamespace is always <type>-<appName>-dev - reusing the Application's own
+# existing dev environment namespace as its secret backend (no new namespace
+# convention), per the user's explicit direction. Each list entry becomes one
+# ClusterSecretStore named "<type>-<appName>-secret-store" -
+# charts/platform-cicd-app/templates/secrets/app-secrets-external-secret.yaml computes
+# and references that exact same name, so adding an app here and installing that app's
+# own chart with a matching `secrets:` list in its cicd.yaml are the only two steps
+# needed - no name to keep in sync by hand beyond type+appName, which both charts
+# already require anyway.
+#
+# Empty by default - adding an Application here (and re-running `helm upgrade` on this
+# chart) is a deliberate, manual, one-time-per-Application step, matching this
+# platform's existing "manual by design" secrets philosophy above (populating
+# platform-secrets is exactly as manual).
+appSecretStores: []
+# appSecretStores:
+#   - type: app
+#     appName: cicd-flow-test-app

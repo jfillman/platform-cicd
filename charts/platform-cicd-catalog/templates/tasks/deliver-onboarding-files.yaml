@@ -7,7 +7,7 @@
 # scoped GitHub App installation token per target repo (never a standing credential),
 # open a PR rather than pushing directly to a default branch, and let PaC's own already-
 # trusted webhook auth be the thing that decides when this Task should run at all - see
-# onboarding-templates/.tekton/onboarding-resync.yaml's own header for exactly which
+# files/onboarding-templates/app-repo/onboarding-resync.yaml's own header for exactly which
 # events trigger it (a cicd.yaml change on the app repo).
 #
 # Deliberately NOT touching the gitsign-enforced path: policy-check's gitsign
@@ -52,6 +52,14 @@ spec:
               path: github-token-broker-token
               audience: github-installation-token
               expirationSeconds: 600
+    # templates/configmaps/onboarding-templates.yaml - one ConfigMap per destination
+    # repo, matching this Task's own two-step split below.
+    - name: onboarding-templates-app-repo
+      configMap:
+        name: onboarding-templates-app-repo
+    - name: onboarding-templates-gitops-repo
+      configMap:
+        name: onboarding-templates-gitops-repo
   steps:
     - name: deliver-app-repo-files
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -59,6 +67,9 @@ spec:
       volumeMounts:
         - name: github-token-broker-token
           mountPath: /var/run/secrets/platform
+          readOnly: true
+        - name: onboarding-templates-app-repo
+          mountPath: /opt/platform/onboarding-templates/app-repo
           readOnly: true
       env:
         - name: GITHUB_TOKEN_BROKER_URL
@@ -101,10 +112,10 @@ spec:
           -e "s|<APP_NAME>|${APP_NAME}|g" \
           -e "s|<GITHUB_OWNER>|${GITHUB_OWNER}|g" \
           -e "s|<GITOPS_REPO_URL>|${GITOPS_REPO_URL}|g" \
-          "/opt/platform/onboarding-templates/.tekton/onboarding-resync.yaml" > ".tekton/onboarding-resync.yaml"
+          "/opt/platform/onboarding-templates/app-repo/onboarding-resync.yaml" > ".tekton/onboarding-resync.yaml"
 
         # Every other .tekton/ file comes from named flows under cicd.yaml's
-        # `pipelines:` section - see docs/cicd-yaml-reference.md. Only a flow's
+        # `pipelines:` section - see docs/user-guide/cicd-yaml-reference.md. Only a flow's
         # git-rooted first step needs a PaC file here; event-chained later steps (test/
         # deploy/release-after-deploy) are fired by the in-cluster CDEvents broker
         # instead - see charts/platform-cicd-app/templates/triggers/flow-triggers.yaml's
@@ -113,9 +124,23 @@ spec:
         rm -f .tekton/flow-*.yaml
         if [[ -f cicd.yaml ]]; then
           pipelines_json="$(yq -o=json '.pipelines // {}' cicd.yaml)"
+          source_volume_size_raw="$(yq -r '.build.sourceVolume.size // "small"' cicd.yaml)"
         else
           pipelines_json="{}"
+          source_volume_size_raw="small"
         fi
+        # T-shirt lookup for build.sourceVolume.size - same dictionary as
+        # charts/platform-cicd-app/templates/_helpers.tpl's sourceVolumeSize helper, but
+        # necessarily duplicated as bash rather than shared: this script generates YAML
+        # committed straight into the APP's own repo at Tekton runtime, outside Helm's
+        # render pass entirely, so it has no access to that helper.
+        case "${source_volume_size_raw}" in
+          small) SOURCE_VOLUME_STORAGE="2Gi" ;;
+          medium) SOURCE_VOLUME_STORAGE="5Gi" ;;
+          large) SOURCE_VOLUME_STORAGE="10Gi" ;;
+          xlarge) SOURCE_VOLUME_STORAGE="20Gi" ;;
+          *) SOURCE_VOLUME_STORAGE="2Gi" ;;
+        esac
 
         # PaC's own dynamic-variable syntax (double-brace-wrapped names like repo_url)
         # uses the same delimiter Helm's template engine renders THIS file with - writing
@@ -139,7 +164,36 @@ spec:
 
         generate_flow_file() {
           local flow_name="$1" event="$2" branch="$3" tag_pattern="$4" file_paths_json="$5" root_stage="$6"
+          local root_env="$7" root_suite="$8" root_cluster="$9" root_name="${10}"
           local on_event="" branch_line="" cel_line="" tag_param_line=""
+          # deploy/release/test can all be a flow's git-rooted first step (e.g. a tag
+          # push deploying straight to prod, or a test-only flow on a scratch branch -
+          # see validateFlows's own header). Their Pipelines read env/suite/cluster/name
+          # as regular params either way, same as the event-chained path - only emitted
+          # when actually set, so build/other stages' generated files don't carry stray
+          # empty params. Previously this whole param quartet was missing here entirely:
+          # a git-rooted deploy declaring `env: staging` silently deployed to "dev"
+          # instead (deploy.yaml's own Tekton-level default), since nothing here ever
+          # passed the declared value through - confirmed by reading deploy.yaml's param
+          # list, not yet hit in practice since the one git-rooted deploy example in the
+          # docs never overrides the default.
+          local root_param_lines=""
+          if [[ -n "${root_env}" ]]; then
+            root_param_lines="${root_param_lines}
+            - { name: env, value: \"${root_env}\" }"
+          fi
+          if [[ -n "${root_suite}" ]]; then
+            root_param_lines="${root_param_lines}
+            - { name: suite, value: \"${root_suite}\" }"
+          fi
+          if [[ -n "${root_cluster}" ]]; then
+            root_param_lines="${root_param_lines}
+            - { name: cluster, value: \"${root_cluster}\" }"
+          fi
+          if [[ -n "${root_name}" ]]; then
+            root_param_lines="${root_param_lines}
+            - { name: name, value: \"${root_name}\" }"
+          fi
           # PR-validation builds get their own -pr image repo suffix (kept from the old
           # static pull-request.yaml template) so they never collide with a real release
           # tag in the same registry path.
@@ -171,7 +225,22 @@ spec:
               ;;
             branch.created)
               on_event="[push]"
-              cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.created == true && body.ref.startsWith(\"refs/heads/\")'"
+              local branch_expr=""
+              if [[ -n "${branch}" ]]; then
+                # branch.created has no PaC on-target-branch annotation to lean on (that
+                # matcher is for an existing branch's own pushes, not "was this ref just
+                # created") - confirmed live the previous version of this cel_line ignored
+                # trigger.branch entirely, so e.g. Example 5's `branch: "release/*"` never
+                # actually filtered: ANY newly created branch fired the flow. Fold the same
+                # glob syntax push/pull_request already accept via on-target-branch into
+                # CEL instead: escape regex metacharacters, then turn the glob's own "*"
+                # into ".*". Raw string (r"...") for the same reason as the tag case below
+                # - a pattern containing a literal "." would otherwise need double-escaping.
+                local branch_regex
+                branch_regex="$(echo "${branch}" | sed -E 's/[.+?^${}()|\[\]\\]/\\&/g; s/\*/.*/g')"
+                branch_expr=" && body.ref.matches(r\"refs/heads/${branch_regex}\")"
+              fi
+              cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.created == true && body.ref.startsWith(\"refs/heads/\")${branch_expr}'"
               ;;
             tag)
               on_event="[push]"
@@ -235,7 +304,7 @@ spec:
             - { name: image-repo, value: "${effective_image_repo}" }
             - { name: app-namespace, value: "${APP_NAMESPACE}" }
             - { name: app-name, value: "${APP_NAME}" }
-        ${tag_param_line}
+        ${tag_param_line}${root_param_lines}
           workspaces:
             - name: source
               volumeClaimTemplate:
@@ -243,7 +312,7 @@ spec:
                   accessModes: ["ReadWriteOnce"]
                   resources:
                     requests:
-                      storage: 1Gi
+                      storage: ${SOURCE_VOLUME_STORAGE}
           taskRunTemplate:
             serviceAccountName: pipeline-runner
           timeouts:
@@ -274,8 +343,12 @@ spec:
           tag_pattern="$(echo "${flow_json}" | jq -r '.trigger.tagPattern // ""')"
           file_paths_json="$(echo "${flow_json}" | jq -c '.trigger.filePathPattern // []')"
           root_stage="$(echo "${flow_json}" | jq -r '.steps[0].stage // "build"')"
+          root_env="$(echo "${flow_json}" | jq -r '.steps[0].env // ""')"
+          root_suite="$(echo "${flow_json}" | jq -r '.steps[0].suite // ""')"
+          root_cluster="$(echo "${flow_json}" | jq -r '.steps[0].cluster // ""')"
+          root_name="$(echo "${flow_json}" | jq -r '.steps[0].name // ""')"
 
-          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" > ".tekton/flow-${flow_name}.yaml"
+          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" > ".tekton/flow-${flow_name}.yaml"
           echo "app repo: generated .tekton/flow-${flow_name}.yaml (${trigger_event} -> ${root_stage})"
         done <<< "${flow_names}"
 
@@ -289,7 +362,7 @@ spec:
           git push --quiet "${clone_url}" "${branch_name}"
           pr_body="$(jq -n \
             --arg title "Onboarding: re-sync .tekton boilerplate" \
-            --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding-templates/.tekton/, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
+            --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding templates, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
             --arg head "${branch_name}" --arg base "main" \
             '{title: $title, body: $body, head: $head, base: $base}')"
           curl --fail --silent --show-error \
@@ -307,6 +380,9 @@ spec:
       volumeMounts:
         - name: github-token-broker-token
           mountPath: /var/run/secrets/platform
+          readOnly: true
+        - name: onboarding-templates-gitops-repo
+          mountPath: /opt/platform/onboarding-templates/gitops-repo
           readOnly: true
       env:
         - name: GITHUB_TOKEN_BROKER_URL
@@ -337,7 +413,7 @@ spec:
         cd "${workdir}/repo"
         mkdir -p .tekton
 
-        for f in /opt/platform/onboarding-templates/.tekton-gitops/*.yaml; do
+        for f in /opt/platform/onboarding-templates/gitops-repo/*.yaml; do
           base="$(basename "${f}")"
           sed \
             -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
@@ -351,11 +427,11 @@ spec:
           branch="onboarding-resync-$(date +%s)"
           git checkout -b "${branch}"
           git add .tekton/
-          git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton governance-check boilerplate\n\nRegenerated from onboarding-templates/.tekton-gitops/ - see docs/onboarding.md. No developer action needed beyond merging.')"
+          git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton governance-check boilerplate\n\nRegenerated from the platform catalog'"'"'s onboarding templates - see docs/onboarding.md. No developer action needed beyond merging.')"
           git push --quiet "${clone_url}" "${branch}"
           pr_body="$(jq -n \
             --arg title "Onboarding: re-sync governance-check boilerplate" \
-            --arg body "Regenerated the 5 governance-check .tekton files from the platform catalog's onboarding-templates/.tekton-gitops/ - see docs/onboarding.md." \
+            --arg body "Regenerated the 5 governance-check .tekton files from the platform catalog's onboarding templates - see docs/onboarding.md." \
             --arg head "${branch}" --arg base "main" \
             '{title: $title, body: $body, head: $head, base: $base}')"
           curl --fail --silent --show-error \

@@ -1,8 +1,9 @@
 # templates/rbac/catalog-read-only.yaml (see docs/catalog-versioning.md)
 #
 # Every Application's pipeline-runner SA needs to READ Pipelines/Tasks/StepActions in
-# {{ .Release.Namespace }} via Tekton's cluster resolver (see onboarding-templates/.tekton/
-# and charts/platform-cicd-app/templates/triggers/*.yaml, both of which reference
+# {{ .Release.Namespace }} via Tekton's cluster resolver (see
+# files/onboarding-templates/app-repo/onboarding-resync.yaml and
+# charts/platform-cicd-app/templates/triggers/*.yaml, both of which reference
 # {kind: pipeline, name: ..., namespace: <this release's namespace>}). Bound to a group
 # (system:serviceaccounts by default - every ServiceAccount cluster-wide) rather than
 # granted per-Application at onboarding, because the catalog holds no secrets and read

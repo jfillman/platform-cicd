@@ -104,13 +104,20 @@ COPY catalog/lib/build-agents.env /opt/platform/lib/build-agents.env
 COPY schemas/cicd.schema.json /opt/platform/schemas/cicd.schema.json
 
 # Onboarding boilerplate (Phase 3 item 7's PaC-delivery mechanism - see
-# catalog/tasks/deliver-onboarding-files.yaml and docs/onboarding.md) is baked in the
-# same way catalog/lib and the schema already are, rather than cloned from platform-cicd
-# at Task runtime - this Task runs triggered off a tenant's own app repo, which has no
-# reason to hold read access to this platform's own source repo, and baking it in means
-# a template change only takes effect on the next toolbox image build, matching every
-# other pinned-version convention in this file.
-COPY onboarding-templates/ /opt/platform/onboarding-templates/
+# catalog/tasks/deliver-onboarding-files.yaml and docs/onboarding.md) used to be baked in
+# here the same way catalog/lib and the schema still are - moved to a ConfigMap
+# (charts/platform-cicd-catalog/templates/configmaps/onboarding-templates.yaml, sourced
+# from charts/platform-cicd-catalog/files/onboarding-templates/) instead, deliberately
+# the OPPOSITE choice from schema.json below. The two look alike (both platform-owned,
+# both delivered into a tenant's own repo/validation path) but differ in one way that
+# matters: onboarding-resync.yaml's whole job is already "auto-propagate a platform
+# template change into every onboarded repo" - baking these in meant that propagation
+# silently depended on an image rebuild+push AND on :latest/IfNotPresent actually
+# re-pulling on every node, the same staleness class that once left a stale image
+# reference live in the stalled-pipeline-detector CronJob for days. A ConfigMap ties a
+# template edit to the catalog chart's own `helm upgrade` instead, so it can't drift from
+# what's actually installed. schemas/cicd.schema.json below stays baked in on purpose -
+# see its own comment for why forcing an explicit rebuild is the right call THERE.
 
 # Non-root by default - every catalog Task should run under Pod Security Standards
 # "restricted" without needing per-Task overrides.
