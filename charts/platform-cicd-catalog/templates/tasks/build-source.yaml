@@ -55,7 +55,7 @@ spec:
       description: Output of validate-cicd-config's config-json result.
     - name: agent-image
       type: string
-      description: Resolved build-agent image (catalog/tasks/resolve-build-agent-image.yaml) - build.sh runs inside this, same image run-tests.yaml uses.
+      description: Resolved build-agent image (catalog/tasks/validate-cicd-config.yaml's agent-image result) - build.sh runs inside this, same image run-tests.yaml uses.
     - name: app-name
       type: string
       description: Selects this app's own build-cache-<app-name> PVC (charts/platform-cicd-app/templates/env/build-cache-pvc.yaml) - not used for anything else in this Task.

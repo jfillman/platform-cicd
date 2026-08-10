@@ -209,6 +209,18 @@ spec:
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
     - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
+    {{/* Performance pass (see docs/release.md): lets deploy/release skip their own
+    clone-repo+validate-config and inherit cicd.yaml's already-validated content
+    instead - see catalog/tasks/resolve-notify-config.yaml. Threaded unconditionally for
+    every stage the same way chain-id/traceparent already are above - test.yaml doesn't
+    declare a config-json param at all (it always validates its own config regardless),
+    and Tekton tolerates the unused extra value, same established pattern as `suite`
+    below. Always a plain string (customData.platform.config_json is JSON-as-a-string,
+    the same shape as traceparent/flow_start_time, not a nested JSON object) -
+    deliberately not relying on Tekton Triggers' JSONPath extraction serializing a
+    nested object correctly, since nothing else in this platform has ever needed that
+    and it isn't a proven pattern here. */}}
+    - { name: config-json, value: "$(body.customData.platform.config_json)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
@@ -236,6 +248,7 @@ spec:
     - name: chain-id
     - name: traceparent
     - name: flow-start-time
+    - name: config-json
   resourcetemplates:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
@@ -266,10 +279,25 @@ spec:
           - { name: chain-id, value: $(tt.params.chain-id) }
           - { name: flow-traceparent, value: $(tt.params.traceparent) }
           - { name: flow-start-time, value: $(tt.params.flow-start-time) }
+          - { name: config-json, value: $(tt.params.config-json) }
+        {{- /*
+        Only test actually touches the source workspace (integration-test needs a real
+        checkout) - deploy/release both dropped their unconditional clone-repo+
+        validate-config in favor of resolve-notify-config, which works fine with no
+        workspace bound at all for the event-chained case this file exclusively handles
+        (see deploy.yaml/release.yaml's own headers and resolve-notify-config.yaml).
+        Omitting the binding entirely here - not just leaving it empty - is what skips
+        the PVC provisioning cost for every deploy/release PipelineRun this file creates,
+        which is the actual point: this was one full clone+PVC-provision+PVC-teardown
+        per stage, on every single flow transition, for a workspace two of the four
+        stages never read from at all.
+        */ -}}
+        {{- if eq $stageName "test" }}
         workspaces:
           - name: source
             volumeClaimTemplate:
               spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: {{ include "platform-cicd-app.sourceVolumeSize" (dict "size" $.Values.build.sourceVolume.size) }} } } }
+        {{- end }}
         taskRunTemplate: { serviceAccountName: pipeline-runner }
 ---
 apiVersion: triggers.tekton.dev/v1beta1

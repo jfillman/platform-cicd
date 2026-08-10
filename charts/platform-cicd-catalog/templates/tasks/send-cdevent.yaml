@@ -48,6 +48,15 @@ spec:
         (cdevents_map_outcome in cdevents.sh) and merged into subject-content-json as
         "outcome" before sending - existing call sites that leave this empty are
         unaffected, no merge happens. See docs/chaining.md.
+    - name: config-json
+      type: string
+      default: "{}"
+      description: >-
+        Optional. Forwarded into the emitted event's customData.platform.config_json for
+        a downstream stage to inherit (see catalog/tasks/resolve-notify-config.yaml) -
+        only test's and deploy's own finally send-cdevent calls (testcaserun.finished,
+        service.deployed) set this to something real. Every other call site leaves the
+        default; nothing reads it downstream of those.
   # Audience-bound projected ServiceAccount token, verified by the broker's TokenReview
   # interceptor (platform/broker/cmd/token-review-interceptor) - there is no platform-
   # minted credential anywhere in this Task. Declared here, not via any cluster-wide
@@ -86,6 +95,8 @@ spec:
           value: $(params.flow-start-time)
         - name: TEKTON_STATUS
           value: $(params.tekton-status)
+        - name: PLATFORM_CONFIG_JSON
+          value: $(params.config-json)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail

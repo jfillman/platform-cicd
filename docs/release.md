@@ -25,6 +25,43 @@ deploy (dev) succeeds
      into <type>-<app-name>-staging - the release Pipeline never touches the cluster directly
 ```
 
+## Performance: no clone, no schema re-validation, for the common (event-chained) case
+
+Neither `deploy.yaml` (deploys via `kubectl set image`) nor `release.yaml`
+(`open-release-pr.yaml` does its own separate clone of the *gitops* repo, a different
+repo entirely) ever reads from the app repo's own source tree. Both used to
+unconditionally clone it and run full JSON-schema validation on `cicd.yaml` anyway,
+purely so `notify-slack`'s finally step could read two fields off it - a full clone plus
+a dynamically-provisioned PVC, on every single stage transition, for a workspace that
+was otherwise dead weight.
+
+Fixed: `cicd.yaml`'s already-validated content is now forwarded stage-to-stage through
+the CDEvents chain instead (`customData.platform.config_json` - see docs/chaining.md),
+ultimately sourced from `test`'s own `validate-config` (which always runs regardless,
+needed for `resolve-agent-image`/`integration-test`). `deploy.yaml`/`release.yaml`'s
+`source` workspace is `optional: true`, and `flow-triggers.yaml` skips binding it
+entirely for the common event-chained case, which is what actually avoids the PVC
+provisioning cost, not just a clone. `catalog/tasks/resolve-notify-config.yaml` is the
+arbiter: pass through the inherited value, or (only for a git-rooted deploy/release,
+where a real workspace is bound) clone and read `cicd.yaml` directly off it - there's no
+separate `clone-repo` task any more. That last point isn't a style choice: Tekton
+rejects a Pipeline at *admission* time if any task references an optional Pipeline
+workspace through its own *required* Task-level workspace, regardless of `when`-gating -
+confirmed live the hard way (the shared, hub-resolved `git-clone` catalog Task declares
+its workspace required, so it can never coexist with an optional Pipeline workspace, no
+matter how it's gated). See `resolve-notify-config.yaml`'s own header for the full story.
+
+**Tradeoff, deliberate**: that git-rooted fallback read is *not* schema-validated the way
+`validate-config` does it - `deploy.yaml`/`release.yaml` dropped `validate-config`
+entirely, since nothing else in either pipeline ever consumed its output. This relies on
+`cicd.yaml` having already been schema-validated earlier in the app's lifecycle
+(`onboarding-resync` validates it when generating the `.tekton/` files in the first
+place, and `build` validates it again for any flow that includes a `build` step) - a
+malformed `cicd.yaml` reaching a git-rooted `deploy`/`release` with no earlier validation
+in its own history is a real, if narrow, gap. Revisit if that ever proves to matter in
+practice (every real git-rooted deploy/release use case today is tag-triggered - see
+`resolve-image-ref.yaml`'s own header).
+
 ## How the GitHub App's private key stays out of Application namespaces
 
 The GitHub App used for git operations (clone/push/PR-open) is the same App PaC already

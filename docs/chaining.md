@@ -138,6 +138,54 @@ status - only the EventListener sink's own pod logs showed it, and only at exact
 moment the failing event arrived, not before. Fixed by deleting the unused param entirely
 (nothing in the resourcetemplate below ever actually reads `$(tt.params.outcome)`).
 
+### `customData.platform.config_json` - cicd.yaml, forwarded instead of re-read
+
+Performance pass: `deploy`/`release` used to unconditionally clone the whole app repo
+and run full JSON-schema validation on `cicd.yaml`, purely to get `notify-slack` a
+`config-json` - `deploy-manifests.yaml`/`open-release-pr.yaml`/`mark-release-pending.yaml`
+never touch the source tree for anything else. That's a full clone + a dynamically-
+provisioned PVC on every single stage transition, for a workspace two of the four stages
+never actually read from.
+
+Fixed by threading `cicd.yaml`'s already-validated content through the same
+`customData.platform` object `traceparent`/`flow_start_time` already use (a plain JSON-
+as-a-string value, same shape as those two - not a nested object, deliberately not
+relying on Tekton Triggers' JSONPath extraction serializing a nested object correctly,
+since nothing else here has ever needed that). `test`'s own `validate-config` always
+runs regardless (needed for `resolve-agent-image`/`integration-test`), so its
+`testcaserun.finished` event forwards the real value for free; `deploy` forwards
+whatever it received (or freshly resolved) in its own `service.deployed` event so
+`release` can inherit it too.
+
+`deploy.yaml`/`release.yaml` no longer have a dedicated `clone-repo` task at all, and
+their `source` workspace is `optional: true` - `flow-triggers.yaml` omits the workspace
+binding entirely for these two stages' `TriggerTemplate`s (only `test` still gets one),
+so the common event-chained case skips the clone and its PVC provisioning outright.
+`catalog/tasks/resolve-notify-config.yaml` is the piece that makes this safe: it's the
+only thing `notify-slack` reads `config-json` from in these two pipelines now, and it
+deliberately has **no result-dependency on validate-config** (only Pipeline params and
+its own possibly-unbound workspace, checked via `$(workspaces.source.bound)`) - Tekton
+skips a task's downstream consumers whenever it references a result from a task that was
+itself `when`-skipped, so anything `notify` needs to always be able to reach can never be
+wired through a task that might not run.
+
+**A real, live-confirmed Tekton gotcha shaped this design**: the first version kept a
+separate `when`-gated `clone-repo` task (skipped whenever `$(params.chain-id)` was
+non-empty) alongside the `optional: true` Pipeline workspace - Tekton rejected every
+such PipelineRun at *admission* time, before any `when` expression is ever evaluated:
+`"[User error] Optional workspace not supported by task: pipeline workspace \"source\"
+is marked optional but pipeline task \"clone-repo\" requires it be provided"`. The
+shared, hub-resolved `git-clone` catalog Task declares its own workspace as required,
+and Tekton's Pipeline-workspace-compatibility check has no concept of "this task might
+be skipped at runtime" - an optional Pipeline workspace is only valid if *every* task
+referencing it also declares that workspace optional at the Task level, `when`-gating or
+not. Fixed by folding the clone into `resolve-notify-config` itself (whose own
+workspace is already `optional: true`) rather than relying on a separate, unconditionally-
+required-workspace Task ever being skippable. See that Task's own header for the full
+reasoning, and `docs/release.md` for the `deploy`/`release`-specific tradeoffs (namely:
+these two stages no longer re-validate `cicd.yaml`'s schema at all, relying on `build`/
+`onboarding-resync` having already done so earlier in the app's lifecycle).
+
 ## Deeper CDEvents coverage (Phase 3 item 1)
 
 Every stage's domain-specific event above (`artifact.published`, `testcaserun.finished`,

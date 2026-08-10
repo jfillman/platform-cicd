@@ -135,19 +135,8 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
 
-    - name: resolve-agent-image
-      runAfter: [validate-config]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: resolve-build-agent-image }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-
     - name: integration-test
-      runAfter: [resolve-agent-image, start-test-stage-span]
+      runAfter: [validate-config, start-test-stage-span]
       taskRef:
         resolver: cluster
         params:
@@ -158,7 +147,7 @@ spec:
         - { name: source, workspace: source }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: agent-image, value: $(tasks.validate-config.results.agent-image) }
         - { name: image-ref, value: $(params.image-ref) }
         - { name: env, value: $(params.env) }
         - { name: suite, value: $(params.suite) }
@@ -213,6 +202,13 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        # Forwarded to deploy so it can skip its own clone+validate-config just to get
+        # notify-slack's config-json - test always validates its own config already (see
+        # integration-test above), so this is free. validate-config is a plain (never
+        # when-gated) task in this Pipeline, so referencing its result from a finally
+        # task here is always safe - see resolve-notify-config.yaml's own header for why
+        # that safety property matters and doesn't hold for deploy/release themselves.
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 

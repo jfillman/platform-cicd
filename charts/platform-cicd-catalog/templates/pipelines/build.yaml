@@ -137,30 +137,8 @@ spec:
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
-    - name: resolve-agent-image
-      runAfter: [validate-config]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: resolve-build-agent-image }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-
-    - name: extract-governance-flags
-      runAfter: [validate-config]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: extract-governance-flags }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-
     - name: unit-test
-      runAfter: [resolve-agent-image, start-build-stage-span]
+      runAfter: [validate-config, start-build-stage-span]
       taskRef:
         resolver: cluster
         params:
@@ -171,7 +149,7 @@ spec:
         - { name: source, workspace: source }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: agent-image, value: $(tasks.validate-config.results.agent-image) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
@@ -185,7 +163,7 @@ spec:
     # unless tests pass, same fail-fast guarantee as before this split, just with the
     # independent compile step no longer serialized behind tests.
     - name: build-source
-      runAfter: [resolve-agent-image, start-build-stage-span]
+      runAfter: [validate-config, start-build-stage-span]
       when:
         - { input: $(tasks.validate-config.results.has-build-script), operator: in, values: ["true"] }
       taskRef:
@@ -198,7 +176,7 @@ spec:
         - { name: source, workspace: source }
       params:
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-        - { name: agent-image, value: $(tasks.resolve-agent-image.results.agent-image) }
+        - { name: agent-image, value: $(tasks.validate-config.results.agent-image) }
         - { name: app-name, value: $(params.app-name) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
@@ -232,17 +210,17 @@ spec:
     # Real (not stub) SAST as of Phase 3 item 8.4 - runAfter deliberately does NOT
     # include build-image: sast-scan reads source, not the built image, so it doesn't
     # need to wait for build-source/unit-test/build-image at all - only clone-repo.
-    # Runs concurrently with resolve-agent-image/unit-test/build-source instead of
-    # serialized behind the whole compile+test+publish sequence, a real speed win now
-    # that this is a real scan (previously irrelevant for the stub, which did no work).
-    # Reads the SAME shared `source` workspace those concurrent tasks also touch or
-    # write to - accepted as safe, not just assumed: Semgrep's default rulesets already
-    # exclude node_modules/vendor-style dependency directories, so a build.script that's
-    # mid-`npm ci` on this same tree doesn't change what actually gets scanned.
+    # Runs concurrently with unit-test/build-source instead of serialized behind the
+    # whole compile+test+publish sequence, a real speed win now that this is a real scan
+    # (previously irrelevant for the stub, which did no work). Reads the SAME shared
+    # `source` workspace those concurrent tasks also touch or write to - accepted as
+    # safe, not just assumed: Semgrep's default rulesets already exclude node_modules/
+    # vendor-style dependency directories, so a build.script that's mid-`npm ci` on this
+    # same tree doesn't change what actually gets scanned.
     - name: sast-scan
       runAfter: [clone-repo, start-build-stage-span]
       when:
-        - { input: $(tasks.extract-governance-flags.results.sast), operator: in, values: ["true"] }
+        - { input: $(tasks.validate-config.results.sast), operator: in, values: ["true"] }
       taskRef:
         resolver: cluster
         params:
@@ -268,7 +246,7 @@ spec:
     - name: image-scan
       runAfter: [build-image]
       when:
-        - { input: $(tasks.extract-governance-flags.results.image-scan), operator: in, values: ["true"] }
+        - { input: $(tasks.validate-config.results.image-scan), operator: in, values: ["true"] }
       taskRef:
         resolver: cluster
         params:
@@ -289,7 +267,7 @@ spec:
     - name: generate-sbom
       runAfter: [build-image]
       when:
-        - { input: $(tasks.extract-governance-flags.results.sbom), operator: in, values: ["true"] }
+        - { input: $(tasks.validate-config.results.sbom), operator: in, values: ["true"] }
       taskRef:
         resolver: cluster
         params:

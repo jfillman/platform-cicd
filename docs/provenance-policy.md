@@ -231,9 +231,12 @@ Two things had to be confirmed live, not assumed, to get this working correctly:
    example files - confirmed live by testing both).
 
 The required list itself (`git-clone`, `validate-cicd-config`, `start-flow-root-span`,
-`start-stage-span`, `send-cdevent`, `resolve-build-agent-image`,
-`extract-governance-flags`, `run-tests`, `build-image`, `end-stage-span`, `notify-slack`)
-is every Task that **unconditionally** runs in `build.yaml` - the three `when:`-gated
+`start-stage-span`, `send-cdevent`, `run-tests`, `build-image`, `end-stage-span`,
+`notify-slack`) is every Task that **unconditionally** runs in `build.yaml`
+(`resolve-build-agent-image`/`extract-governance-flags` used to be two more entries here
+- both folded into `validate-cicd-config` as a performance pass, see docs/chaining.md's
+Task-count note, so the live-derived list below is simply shorter now, no policy change
+needed) - the three `when:`-gated
 governance-stub tasks (`sast-scan`/`image-scan`/`generate-sbom`, all resolving to the same
 `governance-gate-stub` Task CRD) are deliberately excluded, since they're legitimately
 skipped whenever an Application's `cicd.yaml` disables that gate - including them would make

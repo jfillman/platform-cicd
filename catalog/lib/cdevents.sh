@@ -42,6 +42,17 @@ _BROKER_TOKEN_PATH="/var/run/secrets/platform/broker-token"
 cdevent_send() {
   local event_type="$1" subject_type="$2" subject_id="$3" subject_content_json="$4"
 
+  # PLATFORM_CONFIG_JSON is optional, unlike chain-id/traceparent/flow-start-time above -
+  # only test's and deploy's own finally send-cdevent calls (testcaserun.finished,
+  # service.deployed) set it to something real, letting deploy/release skip their own
+  # clone-repo+validate-config and inherit cicd.yaml's already-validated content instead
+  # (see resolve-notify-config.yaml). Every other call site (pipelinerun.started/
+  # finished, build's artifact.published, release's change.created) leaves it unset -
+  # deliberately defaulted with bash `:-`, not `:?` like the three required fields above,
+  # since nothing downstream of those call sites ever reads it.
+  local config_json="${PLATFORM_CONFIG_JSON:-}"
+  [[ -z "${config_json}" ]] && config_json='{}'
+
   local sa_token
   sa_token="$(cat "${_BROKER_TOKEN_PATH}")"
 
@@ -65,6 +76,7 @@ cdevent_send() {
     --arg chainId "${PLATFORM_CHAIN_ID:?PLATFORM_CHAIN_ID must be set - propagated from the triggering event, or generated at flow start}" \
     --arg traceparent "${PLATFORM_TRACEPARENT:?PLATFORM_TRACEPARENT must be set - see otel.sh}" \
     --arg flowStartTime "${PLATFORM_FLOW_START_TIME:?PLATFORM_FLOW_START_TIME must be set - propagated from the triggering event, or set at flow start (see otel_flow_root_begin in otel.sh)}" \
+    --arg configJson "${config_json}" \
     --argjson content "${subject_content_json}" \
     '{
       context: {
@@ -82,7 +94,7 @@ cdevent_send() {
         content: $content
       },
       customData: {
-        platform: { traceparent: $traceparent, flow_start_time: $flowStartTime }
+        platform: { traceparent: $traceparent, flow_start_time: $flowStartTime, config_json: $configJson }
       },
       customDataContentType: "application/json"
     }')"

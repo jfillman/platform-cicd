@@ -1,0 +1,115 @@
+# catalog/tasks/resolve-notify-config.yaml
+#
+# Produces the config-json that notify-slack.yaml needs, for deploy.yaml/release.yaml
+# specifically - the two stages that no longer unconditionally clone the app repo and
+# run full schema validation just to get it (performance pass - see docs/release.md).
+# Two cases, mirroring the idempotent pattern already established by
+# start-flow-root-span.yaml/resolve-image-ref.yaml (pass through an event-chained value,
+# or compute one fresh when there's nothing upstream in this run):
+#
+#   - Event-chained (the common case - deploy follows test, release follows deploy):
+#     config-json arrives as a Pipeline param, forwarded stage to stage through each
+#     finally block's send-cdevent (see cdevents.sh's customData.platform.config_json) -
+#     ultimately sourced from test's own validate-config, which always runs regardless
+#     (needed for resolve-agent-image/integration-test, see test.yaml). No source
+#     workspace is bound in this case at all (see flow-triggers.yaml) - deliberately, to
+#     skip the clone+PVC-provisioning cost entirely, which is the actual point of this
+#     Task existing.
+#
+#   - Git-rooted (deploy or release fired directly by a git event, e.g. a tag push - no
+#     upstream stage ran in this PipelineRun): deliver-onboarding-files.yaml always binds
+#     a real source workspace for this case. This Task does its OWN clone of just
+#     cicd.yaml's containing repo - deliberately NOT the shared catalog/hub git-clone
+#     Task deploy.yaml/release.yaml used to call separately (see "Why not the shared
+#     git-clone Task" below) - then reads cicd.yaml off it. Deliberately NOT re-running
+#     full JSON-schema validation here (unlike validate-config) - cicd.yaml was already
+#     schema-validated once when onboarding-resync generated the very .tekton file that
+#     triggered this run, and this Task's output only ever feeds a Slack notification,
+#     never a correctness gate downstream.
+#
+# Why not the shared git-clone Task: a real, live-confirmed Tekton constraint, not a
+# style choice. The plan was a separate `when`-gated clone-repo task (skipped whenever
+# this Task's own workspace would be left unbound) alongside an `optional: true` Pipeline
+# workspace - but Tekton rejects that PipelineRun at ADMISSION time, before any `when`
+# expression is ever evaluated: "[User error] Optional workspace not supported by task:
+# pipeline workspace \"source\" is marked optional but pipeline task \"clone-repo\"
+# requires it be provided". The hub-resolved git-clone Task declares its own `output`
+# workspace as required (not optional), and Tekton's Pipeline-workspace-compatibility
+# check has no concept of "this task might be skipped at runtime" - an optional Pipeline
+# workspace is only valid if EVERY task that references it also declares that workspace
+# optional at the Task level. Folding the clone into this Task (whose own workspace
+# below is already `optional: true`) is what actually satisfies that check.
+#
+# Never itself when-gated/skipped, and deliberately has NO result-dependency on
+# validate-config (deploy.yaml/release.yaml don't run it at all any more) - only Pipeline
+# params and its own possibly-unbound workspace. This matters: Tekton skips a task's
+# downstream consumers whenever that task references a *result* from another task that
+# was itself skipped via `when:` (confirmed against Tekton's own docs - "resource-
+# dependent Tasks will be skipped because of missing Results from the skipped parent
+# Task"), and notify-slack's finally-block reference to this Task's result must ALWAYS
+# resolve regardless of git-rooted vs event-chained. Depending only on params and a
+# workspace (checked at runtime via $(workspaces.source.bound), never on a maybe-skipped
+# task's result) is what keeps this Task itself unconditionally safe to reference.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: resolve-notify-config
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
+    platform.io/catalog: "true"
+spec:
+  description: >-
+    Passes through an event-chained config-json inherited from an upstream stage, or
+    clones just enough to read cicd.yaml directly (best-effort, not schema-validated)
+    for a git-rooted deploy/release with no upstream stage in this run.
+  params:
+    - name: config-json
+      type: string
+      default: "{}"
+      description: Event-chained config-json forwarded from an upstream stage. "{}" when git-rooted (nothing upstream in this run - clone and read the workspace instead).
+    - name: git-url
+      type: string
+      default: ""
+      description: Only used for the git-rooted case (workspace bound but empty) - same git-url this Pipeline itself received.
+    - name: git-revision
+      type: string
+      default: ""
+      description: Only used for the git-rooted case - same git-revision this Pipeline itself received.
+  workspaces:
+    - name: source
+      optional: true
+      description: Only bound for a git-rooted run (see deploy.yaml/release.yaml) - left unbound for the common event-chained case, which is what lets the Pipeline skip PVC provisioning entirely.
+  results:
+    - name: config-json
+  steps:
+    - name: resolve
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [[ "$(workspaces.source.bound)" == "true" ]]; then
+          WS="$(workspaces.source.path)"
+          CONFIG_FILE="${WS}/cicd.yaml"
+          if [[ ! -f "${CONFIG_FILE}" ]]; then
+            # Real bug, found live: a freshly-provisioned PVC's directory isn't owned by
+            # this container's non-root UID (65532 - see the toolbox Dockerfile), so
+            # git's own "dubious ownership" protection refuses to operate on it at all
+            # ("fatal: detected dubious ownership in repository at ..."). The shared
+            # git-clone catalog Task never hits this (it must handle it internally); this
+            # Task's own inline clone needs the same exception explicitly.
+            git config --global --add safe.directory "${WS}"
+            # This Task owns the clone for the git-rooted case (see this file's own
+            # header for why it can't just call the shared git-clone Task) - a plain
+            # clone+checkout, not a shallow/sparse fetch, matching what clone-repo used
+            # to do here before this Task existed.
+            git clone --quiet '$(params.git-url)' "${WS}"
+            git -C "${WS}" checkout --quiet '$(params.git-revision)'
+          fi
+          if [[ -f "${CONFIG_FILE}" ]]; then
+            yq -o=json '.' "${CONFIG_FILE}" | tee "$(results.config-json.path)" > /dev/null
+            exit 0
+          fi
+          echo "warning: ${CONFIG_FILE} not found even after cloning - falling back to the incoming config-json param." >&2
+        fi
+        echo -n '$(params.config-json)' | tee "$(results.config-json.path)" > /dev/null

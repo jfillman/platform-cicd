@@ -89,11 +89,12 @@ exactly this reason, see the comment in `charts/platform-cicd-catalog/templates/
 Phase 3 item 8.2 added task-level spans (nested under the current stage span) to the
 build pipeline's variable-duration tasks: `unit-test`, `build-source`, `build-image`,
 and - once real, items 8.4/8.5/8.7 - `sast-scan`, `image-scan`, `generate-sbom`.
-Deliberately NOT instrumented: `validate-config`, `start-flow`, `start`/`end-*-stage-
-span`, `pipelinerun-started`/`finished`, `extract-governance-flags`, `notify`,
-`send-cdevent` - all low-single-digit-second tasks where otel-cli's own per-invocation
-overhead isn't worth it, and `clone-repo` (a third-party hub-resolved catalog Task with
-no step of ours to instrument).
+Deliberately NOT instrumented: `validate-config` (also resolves `agent-image` and the
+governance flags now - see docs/chaining.md's Task-count note), `start-flow`, `start`/
+`end-*-stage-span`, `pipelinerun-started`/`finished`, `notify`, `send-cdevent` - all
+low-single-digit-second tasks where otel-cli's own per-invocation overhead isn't worth
+it, and `clone-repo` (a third-party hub-resolved catalog Task with no step of ours to
+instrument).
 
 Tasks that do real work inside a non-toolbox image (the resolved `build.agent` image for
 `build-source`/`unit-test`, or `sast-scan`'s own `semgrep/semgrep` step) can't call
