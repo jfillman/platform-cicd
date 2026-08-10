@@ -68,7 +68,8 @@ whether its stage repeats.
 
 {{- /* Map stage to domain event type this step is chained from */ -}}
 {{- $eventTypeMap := dict "build" "artifact.published" "test" "testcaserun.finished" "deploy" "service.deployed" "release" "change.created" -}}
-{{- $prevStage := (index $steps (sub $index 1)).stage | default "" -}}
+{{- $prevIndex := sub $index 1 -}}
+{{- $prevStage := (index $steps $prevIndex).stage | default "" -}}
 {{- $eventType := get $eventTypeMap $prevStage -}}
 
 {{- /*
@@ -96,8 +97,39 @@ prefix of the other (e.g. "release" and "release-fast") would still cross-match 
 real collision for any flow currently declared on this platform, exact chain-id-to-flow
 tracking would close it fully but is real added complexity for a currently-hypothetical
 case.
+
+Still not enough on its own - found live the same day via a real, still-running loop: a
+flow-name prefix alone doesn't distinguish WHICH STEP within that same flow emitted the
+event, only which flow. Any flow with two steps sharing a stage name (e.g. this app's
+"ci" flow's deliberate two `test` steps, added specifically to exercise per-step-index
+Trigger naming) produces two Triggers with an otherwise byte-for-byte identical CEL
+filter - both just "a testcaserun.finished+Succeeded event from flow ci" - so EITHER
+test step completing fired BOTH the next test step's trigger and deploy's trigger at
+once, live-confirmed via the EventListener's own logs showing a single incoming event's
+one `/triggers-eventid` firing both `flow-ci-2-test` and `flow-ci-3-deploy`
+simultaneously. Since deploy's own domain event type differs, this didn't loop through
+deploy directly, but every fresh test run re-matched its own trigger too, running
+forever with no termination condition - functionally the same failure mode as the
+cross-flow loop above, just one level narrower in scope (sibling step within a flow,
+not sibling flow).
+
+Fixed by tightening the source match from the flow prefix down to the EXACT previous
+step that must have emitted it: `<flowName>-<prevIndex>-<prevStage>-`, matching this
+same file's own pipeline-run-name binding pattern below precisely. The one exception is
+when the previous step is the flow's own git-rooted root (index 0) - those PipelineRuns
+don't carry an index/stage segment at all, only `generateName: ${flow_name}-`
+(deliver-onboarding-files.yaml, deliberately keyed by flow name alone so two flows
+sharing a root stage, e.g. two different push flows both rooted at build, don't collide
+on `.tekton/`'s own generateName uniqueness requirement) - so that specific case keeps
+the older, looser flow-only prefix, the only shape a git-rooted PipelineRun's name can
+actually take.
 */ -}}
-{{- $celFilter := printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/%s-')" $eventType $appNamespace $appNamespace $flowName -}}
+{{- $prevStepIsGitRoot := and (eq $prevIndex 0) (eq $triggerSource "git") -}}
+{{- $sourcePrefix := printf "%s-%d-%s-" $flowName $prevIndex $prevStage -}}
+{{- if $prevStepIsGitRoot -}}
+  {{- $sourcePrefix = printf "%s-" $flowName -}}
+{{- end -}}
+{{- $celFilter := printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/%s')" $eventType $appNamespace $appNamespace $sourcePrefix -}}
 {{- /*
 An explicit outcome check is only needed when chaining from TEST specifically -
 test's testcaserun.finished is the one domain event that fires unconditionally
