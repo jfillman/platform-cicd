@@ -79,7 +79,21 @@ spec:
         - name: STATUS
           value: $(params.status)
         - name: NAMESPACE
-          value: $(context.pipelineRun.namespace)
+          # $(context.pipelineRun.namespace) does NOT resolve here - a real bug found
+          # live: that variable is only valid from WITHIN a Pipeline's own spec (e.g.
+          # this Task's own pipeline-run-name param above, threaded in from each
+          # calling Pipeline's finally block via $(context.pipelineRun.name)), never
+          # inside a Task's own field values directly. Left completely unsubstituted
+          # (the literal string, not an error) every real TaskRun hit this - every
+          # kubectl call below then targeted a namespace literally named
+          # "$(context.pipelineRun.namespace)", failing instantly and silently under
+          # set -e. Confirmed by comparing a real failing TaskRun's own rendered env
+          # (still showed the raw, unresolved placeholder) against every manual
+          # reproduction, which only ever "worked" because a real namespace string was
+          # supplied by hand. $(context.taskRun.namespace) is the correct Task-level
+          # equivalent - a TaskRun always runs in the same namespace as its owning
+          # PipelineRun, so this is equivalent to what was intended.
+          value: $(context.taskRun.namespace)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
