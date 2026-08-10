@@ -30,6 +30,10 @@ spec:
       type: string
     - name: revision
       type: string
+    - name: pr-number
+      type: string
+      default: ""
+      description: "PaC's raw pull_request.number webhook body field - only used to post the PR comment in this Pipeline's finally block."
   tasks:
     - name: extract-promoted-image
       taskRef:
@@ -52,3 +56,20 @@ spec:
           - { name: namespace, value: {{ .Release.Namespace }} }
       params:
         - { name: image-ref, value: $(tasks.extract-promoted-image.results.image-ref) }
+
+  finally:
+    - name: comment-pr
+      when:
+        - { input: $(params.pr-number), operator: notin, values: [""] }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: comment-pr-check-result }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: repo-url, value: $(params.repo-url) }
+        - { name: pr-number, value: $(params.pr-number) }
+        - { name: gate-name, value: sast }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: status, value: $(tasks.status) }

@@ -59,19 +59,7 @@ spec:
     - name: image-ref
       type: string
       default: ""
-      description: Full image ref, when the calling Pipeline already has one as a plain param (test/deploy/release). Leave empty for build - see image-repo below.
-    - name: image-repo
-      type: string
-      default: ""
-      description: >-
-        build only. NOT a reference to build-image's own result on purpose - Tekton
-        skips a finally task entirely if any of its params references a result from a
-        task that failed or didn't run (confirmed against Tekton's own docs before
-        relying on this), which would silently break "notify always fires, even on
-        build-image failure" for exactly the failure case a log excerpt matters most for.
-        image-repo is a plain Pipeline param, always available regardless of build-image's
-        outcome - the script derives the same 12-char-SHA-tagged ref build-image.yaml
-        itself computes, from inputs that don't depend on that task having succeeded.
+      description: Full image ref, when the calling Pipeline already has one as a plain param (test/deploy/release). Leave empty for build - resolved via a live TaskRun lookup instead, see the script's own comment.
     - name: env
       type: string
       default: ""
@@ -106,8 +94,6 @@ spec:
           value: $(params.git-revision)
         - name: IMAGE_REF
           value: $(params.image-ref)
-        - name: IMAGE_REPO
-          value: $(params.image-repo)
         - name: ENV_NAME
           value: $(params.env)
       script: |
@@ -145,8 +131,11 @@ spec:
         fi
 
         # Repo short-name derived the same way open-release-pr.yaml already derives its
-        # owner segment - not reimplemented differently. 12-char SHA matches this
-        # platform's existing truncation convention from build-image.yaml.
+        # owner segment - not reimplemented differently. This 12-char SHA is purely for
+        # the Commit field's own display convention (matches sast-scan.yaml/
+        # image-scan.yaml's identical GIT_REVISION:0:12 usage) - independent of, and
+        # deliberately not kept in sync with, build-image.yaml's own 7-char SHORT_SHA
+        # image-tag convention below.
         REPO_SHORT="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
         SHORT_SHA="${GIT_REVISION:0:12}"
         COMMIT_URL="${GIT_URL}/commit/${GIT_REVISION}"
@@ -161,10 +150,22 @@ spec:
         # real, correct link the moment someone is.
         DASHBOARD_URL="http://localhost:9097/#/namespaces/${APP_NAMESPACE}/pipelineruns/${PIPELINE_RUN_NAME}"
 
-        # build only - see the image-repo param's own comment for why this is derived
-        # here instead of referencing build-image's result directly.
-        if [[ -z "${IMAGE_REF}" && -n "${IMAGE_REPO}" ]]; then
-          IMAGE_REF="${IMAGE_REPO}:${SHORT_SHA}"
+        # build only - a live, best-effort lookup of build-image's own real result,
+        # same resilience pattern as pr_url/log_excerpt below rather than a Tekton-level
+        # $(tasks.build-image.results.image-ref) param reference: Tekton skips a finally
+        # task entirely if any of its params references a result from a task that
+        # failed or didn't run (confirmed against Tekton's own docs), which would
+        # silently break "notify always fires, even on build-image failure" for exactly
+        # the failure case a log excerpt matters most for. This used to hand-reconstruct
+        # a guessed ref instead (image-repo param + a bare SHA, no version) - a real bug,
+        # doubly wrong once build-image.yaml started tagging with a real <version>-<sha>
+        # instead of a fixed placeholder: querying build-image's own TaskRun result
+        # directly reports the EXACT tag that was actually pushed when it succeeded, and
+        # naturally comes back empty - no special-casing needed, same as pr_url - when
+        # build-image never ran or failed.
+        if [[ -z "${IMAGE_REF}" && "${STAGE_NAME}" == "build" ]]; then
+          IMAGE_REF="$(kubectl get taskrun -n "${APP_NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=build-image" \
+            -o jsonpath='{.items[0].status.results[?(@.name=="image-ref")].value}' 2>/dev/null || true)"
         fi
 
         # release only - a live, best-effort lookup (same resilience pattern as the

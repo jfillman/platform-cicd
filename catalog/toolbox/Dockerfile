@@ -37,6 +37,11 @@
 # root; cosign's --ca-roots flag verifies against a local file directly, no TUF needed -
 # see that Task's own header comment for the full reasoning).
 #
+# libxml2-utils (xmllint) - used by build-image.yaml's resolve-build-config step to pull
+# the real <version> out of a Maven app's pom.xml for untagged (non-tag-triggered) builds,
+# the same source-of-truth pattern the old cd-pipelines platform's task-get-tag.yaml used
+# (package.json's version needs only jq, already present above).
+#
 # Build context MUST be the repo root (paths below are repo-root-relative):
 #   docker build -f catalog/toolbox/Dockerfile -t ghcr.io/jfillman/platform-cicd-toolbox:latest .
 #
@@ -60,7 +65,7 @@ ARG EC_VERSION=0.9.88
 ARG COSIGN_VERSION=3.1.2
 ARG TRIVY_VERSION=0.73.0
 
-RUN apk add --no-cache bash curl jq git openssl ca-certificates util-linux coreutils
+RUN apk add --no-cache bash curl jq git openssl ca-certificates util-linux coreutils libxml2-utils
 
 RUN set -euo pipefail; \
     case "$(uname -m)" in \

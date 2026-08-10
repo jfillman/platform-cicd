@@ -572,17 +572,47 @@ list (the failure happens inside cosign's own attestation discovery/identity mat
 before `ec`/Conforma ever runs - reproduced identically with and without the SBOM rule
 packages included) and not caused by `--type` shorthand ambiguity (an explicit full
 predicate-type URI, `https://slsa.dev/provenance/v0.2`, produced the identical error).
-Root cause not fully diagnosed - looks like a genuine cosign 3.x behavior where any
-"new bundle format" attestation present on an image affects identity verification for
-*other*, differently-typed attestations on that same image, not a simple `--type`
-filtering bug.
+Root cause narrowed further (2026-08-10 session), still not a cosign fix, but the actual
+trigger condition is now understood precisely rather than "a genuine cosign 3.x
+behavior." Confirmed live via `cosign tree` against a real, repeatedly-checked image: a
+single digest carried **nine separate CycloneDX SBOM attestations**, each attached via
+cosign's newer OCI-referrers mechanism, alongside the one real SLSA provenance
+attestation attached via the older tag-based (`.att`) mechanism. The immediate cause was
+`generate-sbom.yaml` running unconditionally on every release-PR check (sbom-check.yaml's
+own design) with no check for an existing attestation - any image digest checked by more
+than one PR (duplicate/retried release PRs against the same promoted commit, e.g. from a
+webhook redelivery storm) accumulated a new SBOM attestation on every single check, never
+deduplicated. Confirmed `--type`/`--predicate-type` filtering works correctly in
+isolation - `cosign download attestation --predicate-type slsaprovenance` against the
+same contaminated digest cleanly returns exactly the one real attestation, no
+cross-contamination. The bug is specifically in `cosign verify-attestation`'s own
+attestation-*discovery* step (which apparently walks OCI-referrer-attached artifacts
+alongside tag-based ones regardless of `--type`) failing closed on every non-matching
+referrer it finds, before ever reaching the one real match - not a `--type` filtering
+bug, confirming the earlier finding, just now with a concrete mechanism instead of "a
+genuine cosign 3.x behavior."
+Fixed: `generate-sbom.yaml` now checks `cosign download attestation --predicate-type
+cyclonedx` first and skips generation if one already exists for that exact digest, so a
+digest can never accumulate more than one SBOM attestation going forward. This does NOT
+fully resolve the conflict - the doc's own prior testing already established that even a
+*single* coexisting SBOM attestation was sufficient to trigger it - but it stops the
+active compounding and removes the specific, controllable trigger this session traced it
+to. Fully resolving `verify-attestation`'s own discovery bug would mean either patching/
+downgrading cosign, or bypassing `verify-attestation` entirely in favor of manually
+verifying a `cosign download attestation`-fetched bundle's certificate against Fulcio
+directly (a real rewrite of security-sensitive verification logic, deliberately not
+attempted this session without more consideration - see this platform's own "a little
+duplication is safer than re-touching an already-verified, security-sensitive Task"
+precedent elsewhere).
 
 **Current state, until this is resolved**: `sbom.found`/`sbom_cyclonedx.cdx_supported_
 version` are deliberately left out of `verify-image-provenance.yaml`'s `config.include`
 (see that file's own comment), and `nodejs-demo-app/cicd.yaml` has `governance.sbom` back
 to `false` - do not enable both `governance.sbom` and `governance.policyCheck` for the
-same app until this conflict is actually fixed. SBOM generation itself works correctly
-and independently (verified live: a real, discoverable CycloneDX attestation via `cosign
-tree`/`cosign download attestation` against a real freshly-built image, in both the
-`build.yaml` and gitops-repo PR-check call sites) - it's specifically the *coexistence*
-with provenance verification that's broken, not the SBOM feature on its own.
+same app until this conflict is actually fixed; note the idempotency fix above reduces
+how often the conflict triggers but does not eliminate it. SBOM generation itself works
+correctly and independently (verified live: a real, discoverable CycloneDX attestation
+via `cosign tree`/`cosign download attestation` against a real freshly-built image, in
+both the `build.yaml` and gitops-repo PR-check call sites) - it's specifically the
+*coexistence* with provenance verification that's broken, not the SBOM feature on its
+own.

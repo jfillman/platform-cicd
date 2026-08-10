@@ -86,9 +86,18 @@ spec:
         # github.com", so an unescaped "+" there would silently turn into a quantifier
         # and fail to match its own literal string - a real bug this hit live, not a
         # hypothetical.
+        # grep -v legitimately matches nothing when an app has no real signers
+        # configured (the common, default case) - under set -o pipefail, grep's own
+        # "no lines matched" exit 1 then becomes the WHOLE pipeline's exit status,
+        # which set -e treats as a hard script abort right here, silently, before ever
+        # reaching the deliberate "FAIL: ... empty allowlist" message below. Confirmed
+        # live: the real symptom was a bare "exited with code 1: Error" with zero
+        # output on the PR check, not the intended graceful failure message. `|| true`
+        # neutralizes grep's own exit code without masking a genuine kubectl failure -
+        # pipefail still reports kubectl's non-zero status if THAT fails for real.
         allowed_emails="$(kubectl get configmap "${APP_NAME}-policy-config" -n "${APP_NAMESPACE}" \
           -o jsonpath='{.data.allowed-commit-signers}' \
-          | grep -vE '^\s*(#.*)?$' | sed -E 's/^\s+|\s+$//g')"
+          | { grep -vE '^\s*(#.*)?$' || true; } | sed -E 's/^\s+|\s+$//g')"
 
         if [[ -z "${allowed_emails}" ]]; then
           echo "FAIL: ${APP_NAME}-policy-config in ${APP_NAMESPACE} has no allowed-commit-signers entries - refusing to verify against an empty allowlist" >&2

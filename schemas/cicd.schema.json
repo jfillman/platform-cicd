@@ -134,11 +134,11 @@
       "properties": {
         "sast": { "type": "boolean", "default": false },
         "imageScan": { "type": "boolean", "default": false },
-        "policyCheck": { "type": "boolean", "default": false },
+        "policyCheck": { "type": "boolean", "default": false, "description": "Controls only the build-time shift-left copy of this scan, if one exists. The release-gate commit-signature check (catalog/tasks/verify-commit-signature.yaml) runs unconditionally on every release PR regardless of this flag - release gates are enforced, not app-configurable. Populate allowedCommitSigners below either way." },
         "sbom": { "type": "boolean", "default": false },
         "allowedCommitSigners": {
           "type": "array",
-          "description": "Plain email addresses gitsign's --certificate-identity-regexp is built from at verify time (see catalog/tasks/verify-commit-signature.yaml) - only used when policyCheck is true. One entry per allowed human signer; no regex syntax needed here.",
+          "description": "Plain email addresses gitsign's --certificate-identity-regexp is built from at verify time (see catalog/tasks/verify-commit-signature.yaml). Always consulted by the release-gate commit-signature check regardless of policyCheck's value - an app that leaves this empty fails that check on every release. One entry per allowed human signer; no regex syntax needed here.",
           "items": { "type": "string", "format": "email" },
           "default": []
         }

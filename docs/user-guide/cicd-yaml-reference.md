@@ -107,13 +107,16 @@ ephemeralEnvironments:
 governance:
   sast: false                    # Optional, default false. Real Semgrep scan.
   imageScan: false               # Optional, default false. Real Trivy scan.
-  policyCheck: false             # Optional, default false. Real gitsign commit
-                                 # signature verification against
-                                 # allowedCommitSigners below.
+  policyCheck: false             # Optional, default false. Only gates a build-time
+                                 # shift-left copy of this check, if one exists - the
+                                 # release-gate gitsign commit-signature check itself
+                                 # always runs regardless of this flag (release gates
+                                 # are enforced, not app-configurable).
   sbom: false                    # Optional, default false. Real cosign SBOM
                                  # attestation.
   allowedCommitSigners: []       # Optional, default []. Plain email addresses (not
-                                 # regex) - only consulted when policyCheck is true.
+                                 # regex) - always consulted by the release-gate check;
+                                 # leaving this empty fails that check on every release.
 
 # --- notifications: optional block. ---
 notifications:

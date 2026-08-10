@@ -12,11 +12,21 @@
 #     this run): there is no incoming image-ref. Reconstruct it
 #     using the exact same convention build-image.yaml's resolve-build-config step used
 #     when the image was originally built and pushed - <image-repo>:<version>-
-#     <short-sha>, where version comes from the git tag and short-sha is the first 12
-#     chars of git-revision. This only produces the correct reference because PaC's
-#     revision for a tag/release event is the tag's target commit - the same commit a
-#     prior tag-triggered build would have built and tagged the image with. See
-#     docs/release.md.
+#     <short-sha>, where version comes from the git tag and short-sha is the first 7
+#     chars of git-revision (must stay in sync with build-image.yaml's own SHORT_SHA
+#     length - a mismatch here silently reconstructs a ref that was never pushed). This
+#     only produces the correct reference because PaC's revision for a tag/release event
+#     is the tag's target commit - the same commit whose earlier, untagged build already
+#     read that commit's own package.json/pom.xml version (build-image.yaml's fallback
+#     for a non-tag trigger) - so as long as the pushed git tag matches the version the
+#     app's manifest carried at that commit, both sides agree. See docs/release.md.
+#
+#     NOTE: this Task's own git-rooted-without-a-tag branch below still falls back to a
+#     fixed "0.0.0" rather than reading the manifest the way build-image.yaml now does -
+#     deliberately left as-is (no `source` workspace wired into this Task or its callers
+#     yet, and every real, documented git-rooted deploy/release use case is tag-
+#     triggered anyway - see docs/user-guide/examples/05-release-on-tag.yaml). Revisit if
+#     a genuine non-tag git-rooted deploy/release ever shows up in practice.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -59,7 +69,7 @@ spec:
 
         IMAGE_REPO='$(params.image-repo)'
         GIT_TAG='$(params.git-tag)'
-        SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
+        SHORT_SHA="$(cut -c1-7 <<< "$(params.git-revision)")"
 
         VERSION="0.0.0"
         if [[ -n "${GIT_TAG}" ]]; then

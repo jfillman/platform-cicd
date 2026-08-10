@@ -85,16 +85,33 @@ spec:
         set -euo pipefail
         CFG='$(params.config-json)'
         DOCKERFILE_PATH="$(jq -r '.build.dockerfile' <<< "${CFG}")"
-        SHORT_SHA="$(cut -c1-12 <<< "$(params.git-revision)")"
+        SHORT_SHA="$(cut -c1-7 <<< "$(params.git-revision)")"
+        SRC="$(workspaces.source.path)"
 
-        # Extract version from git tag if provided, otherwise use "0.0.0" (development build)
+        # Version selection: a tag push is authoritative - use it directly, same as the
+        # old cd-pipelines platform's task-get-tag.yaml. Any other trigger derives the
+        # version from the app repo's own manifest instead of a fixed placeholder, so
+        # dev/main-branch images carry a real, traceable version rather than always
+        # "0.0.0" - same manifest lookup + precedence order (package.json before
+        # pom.xml) as that same prior Task.
         GIT_TAG='$(params.git-tag)'
-        VERSION="0.0.0"
         if [[ -n "${GIT_TAG}" ]]; then
           # PaC provides refs/tags/v1.2.3 or refs/tags/v1.2.3-rc.1
           # Extract: 1.2.3 or 1.2.3-rc.1 (remove refs/tags/ and leading 'v' if present)
           VERSION=$(echo "${GIT_TAG}" | sed -E 's|^refs/tags/v?||')
+        elif [[ -f "${SRC}/package.json" ]]; then
+          VERSION="$(jq -r '.version' "${SRC}/package.json")"
+        elif [[ -f "${SRC}/pom.xml" ]]; then
+          VERSION="$(xmllint --xpath '/*[local-name()="project"]/*[local-name()="version"]/text()' "${SRC}/pom.xml" 2>/dev/null || true)"
+          # Maven's CI-friendly-versions pattern (<version>${revision}</version>, the
+          # real value under <properties><revision>) - same fallback task-get-tag.yaml
+          # used, since a literal "${revision}" string is not a usable image tag.
+          if [[ "${VERSION}" == '${revision}' ]]; then
+            VERSION="$(xmllint --xpath '/*[local-name()="project"]/*[local-name()="properties"]/*[local-name()="revision"]/text()' "${SRC}/pom.xml" 2>/dev/null || true)"
+          fi
+          VERSION="${VERSION%%-*}"
         fi
+        [[ -z "${VERSION:-}" ]] && VERSION="0.0.0"
 
         IMAGE_REF="$(params.image-repo):${VERSION}-${SHORT_SHA}"
         echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"

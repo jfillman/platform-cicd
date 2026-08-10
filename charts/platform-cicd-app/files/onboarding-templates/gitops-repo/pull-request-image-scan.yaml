@@ -8,6 +8,9 @@
 # No <APP_NAMESPACE>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
 # from PaC's own template vars, and extract-promoted-image.yaml clones the gitops repo
 # into its own scratch dir internally rather than a shared Pipeline workspace.
+#
+# pr-number - see pull-request-sast.yaml's own comment for why this is here (feeds the
+# finally-block PR comment, catalog/tasks/comment-pr-check-result.yaml).
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -27,6 +30,7 @@ spec:
   params:
     - { name: repo-url, value: "{{ repo_url }}" }
     - { name: revision, value: "{{ revision }}" }
+    - { name: pr-number, value: "{{ body.pull_request.number }}" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:

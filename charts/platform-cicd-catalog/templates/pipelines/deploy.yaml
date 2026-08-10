@@ -157,34 +157,8 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
 
-    - name: extract-governance-flags
-      runAfter: [validate-config]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: extract-governance-flags }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-
-    - name: policy-check
-      runAfter: [extract-governance-flags]
-      when:
-        - { input: $(tasks.extract-governance-flags.results.policy-check), operator: in, values: ["true"] }
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: governance-gate-stub }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: gate-name, value: policy-check }
-        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
-        - { name: stage-span-id, value: $(tasks.start-deploy-stage-span.results.span-id) }
-
     - name: deploy
-      runAfter: [policy-check, start-deploy-stage-span, resolve-image-ref]
+      runAfter: [start-deploy-stage-span, resolve-image-ref]
       taskRef:
         resolver: cluster
         params:

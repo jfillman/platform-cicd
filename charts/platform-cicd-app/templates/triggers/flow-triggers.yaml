@@ -71,8 +71,33 @@ whether its stage repeats.
 {{- $prevStage := (index $steps (sub $index 1)).stage | default "" -}}
 {{- $eventType := get $eventTypeMap $prevStage -}}
 
-{{- /* CEL filter: trigger on the domain event from the previous stage */ -}}
-{{- $celFilter := printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/')" $eventType $appNamespace $appNamespace -}}
+{{- /*
+CEL filter: trigger on the domain event from the previous stage - and ONLY from this
+flow's own chain, not any other flow's. A real, live-confirmed bug (found via a real
+runaway trace, not hypothetically): this filter used to check event-type + namespace
+only, with no flow-name/chain scoping at all. Every stage's own send-cdevent (test.yaml/
+deploy.yaml/release.yaml's finally blocks) fires the same domain event type regardless
+of which flow triggered it, so any app with two or more flows that share overlapping
+stage-transition event types (deploy->release->test in one flow, ...->deploy in another
+- exactly this app's "ci" and "release-then-test") had every stage of EVERY flow
+cross-triggering every OTHER flow's same-event-type step, with no way to terminate:
+release-then-test's `release` fired on ci's own `deploy` completing (both just emit
+service.deployed), release-then-test's `test` then fired ci's `deploy` again via
+testcaserun.finished, looping forever - confirmed live via a real trace with 24 test +
+20 deploy + 14 release spans under one chain, still actively growing over an hour later.
+Fixed by also requiring the event's source (which encodes the EMITTING PipelineRun's own
+name - catalog/lib/cdevents.sh's `source: /platform-cicd/<namespace>/<pipelinerun-name>`)
+to start with THIS flow's own name prefix - every PipelineRun this platform creates,
+git-rooted or event-chained alike, is already named/generateName'd `<flowName>-...` (see
+deliver-onboarding-files.yaml's generateName and this same file's own pipeline-run-name
+binding param below), so this needs no new data on the event, just a tighter check on
+data already there. Known, accepted limitation: two flow names where one is a literal
+prefix of the other (e.g. "release" and "release-fast") would still cross-match - not a
+real collision for any flow currently declared on this platform, exact chain-id-to-flow
+tracking would close it fully but is real added complexity for a currently-hypothetical
+case.
+*/ -}}
+{{- $celFilter := printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/%s-')" $eventType $appNamespace $appNamespace $flowName -}}
 {{- /*
 An explicit outcome check is only needed when chaining from TEST specifically -
 test's testcaserun.finished is the one domain event that fires unconditionally

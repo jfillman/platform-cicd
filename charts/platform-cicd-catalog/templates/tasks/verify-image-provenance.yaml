@@ -223,9 +223,14 @@ spec:
         # structurally available for a future rule to consume, even though no current
         # base-policy rule checks it - see docs/provenance-policy.md for why this
         # platform deliberately isn't duplicating gitsign's own email check here.
+        # Same live bug found and fixed in verify-commit-signature.yaml's identical
+        # extraction: grep -v legitimately matches nothing when no signers are
+        # configured, and under pipefail that becomes the pipeline's exit status,
+        # which set -e treats as a silent hard abort of this whole script - `|| true`
+        # neutralizes grep's own exit code without masking a real kubectl failure.
         allowed_emails_json="$(kubectl get configmap "${APP_NAME}-policy-config" -n "${APP_NAMESPACE}" \
           -o jsonpath='{.data.allowed-commit-signers}' 2>/dev/null \
-          | grep -vE '^\s*(#.*)?$' | sed -E 's/^\s+|\s+$//g' \
+          | { grep -vE '^\s*(#.*)?$' || true; } | sed -E 's/^\s+|\s+$//g' \
           | jq -R -s -c 'split("\n") | map(select(length > 0))')"
 
         # Platform-wide required-tasks list - NOT per-Application (unlike allowed-commit-

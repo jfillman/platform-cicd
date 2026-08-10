@@ -14,6 +14,12 @@
 # attestation.yaml both clone/query in their own scratch space, no shared Pipeline
 # workspace required (unlike this file's own pre-redesign version, which needed one to
 # hand source off to a re-scan step).
+#
+# pr-number ({{ body.pull_request.number }}, PaC's raw webhook body field access - same
+# pattern pull-request-merged.yaml already uses) feeds this Pipeline's finally block,
+# which posts a real PR comment reporting the check's own outcome (pass or fail) via
+# catalog/tasks/comment-pr-check-result.yaml - on top of the GitHub Check PaC already
+# reports natively.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -41,6 +47,7 @@ spec:
   params:
     - { name: repo-url, value: "{{ repo_url }}" }
     - { name: revision, value: "{{ revision }}" }
+    - { name: pr-number, value: "{{ body.pull_request.number }}" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:

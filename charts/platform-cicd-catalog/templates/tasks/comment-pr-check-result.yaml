@@ -1,0 +1,158 @@
+# catalog/tasks/comment-pr-check-result.yaml
+#
+# Posts a real PR comment reporting a governance check's own outcome - on top of the
+# GitHub Check PaC already reports natively, a human reviewing the PR gets the actual
+# failure detail, a gate-specific recommendation, and the exact `/retest` command to
+# re-run it, right in the PR's own conversation instead of having to go dig through a
+# Tekton Dashboard/pod logs. Posts on success too (a short confirming comment), not just
+# failure - both were explicitly requested.
+#
+# Invoked from each governance-check Pipeline's own `finally:` block (sast-check.yaml/
+# image-scan-check.yaml/policy-check.yaml/sbom-check.yaml), same placement as
+# notify-slack.yaml elsewhere in this platform - a finally task still runs even if an
+# earlier task in the same Pipeline failed, which is exactly the case that matters most
+# here.
+#
+# Auth: same shared-broker GitHub App installation-token mechanism open-release-pr.yaml/
+# detect-bypass-merge.yaml already use (catalog/lib/github-app.sh) - the App's private
+# key never leaves platform-system, this Task only ever gets a token scoped to the one
+# gitops repo it's already running against.
+#
+# Failure detail is a live, best-effort pod-log lookup (same resilience pattern
+# notify-slack.yaml's own log_excerpt already established), not a per-Task result field -
+# deliberately avoids adding a new result to every one of the four different
+# verification Tasks (verify-sast-attestation/image-scan/verify-commit-signature/
+# verify-image-provenance/generate-sbom), which would mean five separate schema changes
+# for the same information already sitting in each Task's own pod log.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: comment-pr-check-result
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
+    platform.io/catalog: "true"
+spec:
+  description: Posts a PR comment reporting a governance check's real outcome - failure detail + a gate-specific recommendation + the /retest command on failure, a short confirmation on success.
+  params:
+    - name: repo-url
+      type: string
+      description: The gitops repo's own URL - PaC's `repo_url`.
+    - name: pr-number
+      type: string
+      description: "PaC's raw pull_request.number webhook body field - the check Pipelines don't otherwise carry a PR number, only repo-url/revision."
+    - name: gate-name
+      type: string
+      description: sast/image-scan/policy-check/sbom - must match the real `/retest <name>` PaC expects (docs/release.md).
+    - name: pipeline-run-name
+      type: string
+      description: $(context.pipelineRun.name) from the calling Pipeline - used to find which of its own child TaskRuns failed.
+    - name: status
+      type: string
+      description: $(tasks.status) from the calling Pipeline's finally block.
+  volumes:
+    - name: github-token-broker-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: github-token-broker-token
+              audience: github-installation-token
+              expirationSeconds: 600
+  steps:
+    - name: comment
+      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      volumeMounts:
+        - name: github-token-broker-token
+          mountPath: /var/run/secrets/platform
+          readOnly: true
+      env:
+        - name: GITHUB_TOKEN_BROKER_URL
+          value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+        - name: REPO_URL
+          value: $(params.repo-url)
+        - name: PR_NUMBER
+          value: $(params.pr-number)
+        - name: GATE_NAME
+          value: $(params.gate-name)
+        - name: PIPELINE_RUN_NAME
+          value: $(params.pipeline-run-name)
+        - name: STATUS
+          value: $(params.status)
+        - name: NAMESPACE
+          value: $(context.pipelineRun.namespace)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        source "${PLATFORM_LIB}/github-app.sh"
+
+        owner="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
+        token="$(github_app_installation_token "${owner}" "${repo}")"
+
+        if [[ "${STATUS}" == "Succeeded" || "${STATUS}" == "Completed" ]]; then
+          # Best-effort: surface a real Task result if one of this run's own Tasks
+          # produced a human-readable summary (only image-scan does today, via its
+          # findings-summary result) - never required, a plain pass is still a
+          # complete, correct comment on its own.
+          summary="$(kubectl get taskrun -n "${NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json 2>/dev/null \
+            | jq -r '[.items[].status.results[]? | select(.name == "findings-summary")][0].value // empty')"
+          body="### ✅ \`${GATE_NAME}\` passed"
+          if [[ -n "${summary}" ]]; then
+            body="${body}"$'\n\n'"${summary}"
+          fi
+        else
+          # Same failed-TaskRun + log-excerpt lookup notify-slack.yaml already uses -
+          # live, best-effort, naturally empty (no special-casing needed) if this
+          # PipelineRun somehow has no False-conditioned child yet.
+          failed_taskrun="$(kubectl get taskrun -n "${NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json 2>/dev/null \
+            | jq -r '[.items[] | select(.status.conditions[0].status == "False")][0].metadata.name // empty')"
+          log_excerpt=""
+          if [[ -n "${failed_taskrun}" ]]; then
+            pod_name="$(kubectl get taskrun "${failed_taskrun}" -n "${NAMESPACE}" -o jsonpath='{.status.podName}' 2>/dev/null || true)"
+            if [[ -n "${pod_name}" ]]; then
+              log_excerpt="$(kubectl logs "${pod_name}" -n "${NAMESPACE}" --all-containers --tail=20 2>/dev/null | tail -c 1200 || true)"
+            fi
+          fi
+          [[ -z "${log_excerpt}" ]] && log_excerpt="(no log excerpt available)"
+
+          # Gate-specific guidance - each of the four checks fails for a genuinely
+          # different reason, so "push a new commit and retest" isn't right for all of
+          # them (sast/image-scan need a NEW build, not just a retest of the same
+          # already-failed attestation/scan; policy-check's two sub-checks need
+          # different fixes; sbom failures are almost always transient).
+          case "${GATE_NAME}" in
+            sast)
+              recommendation="This checks the SAST (Semgrep) result already recorded when the image was **built**, not a fresh scan - re-running this check alone can't change the outcome. Fix the findings in your source and push a new commit to trigger a fresh build; once that build's own sast-scan passes, this check will pass against the new image."
+              ;;
+            image-scan)
+              recommendation="This is a live Trivy re-scan of the actual image about to be promoted. Update the vulnerable dependencies and push a new commit to trigger a fresh build+release - re-running this check alone re-scans the same unchanged image."
+              ;;
+            policy-check)
+              recommendation="If the error above mentions an empty allowlist: this app has no \`governance.allowedCommitSigners\` configured yet - a platform admin needs to populate it before any commit can pass. If it instead mentions certificate/attestation verification: this is a known platform-level issue (see docs/provenance-policy.md), not something fixable from this PR - contact platform admins."
+              ;;
+            sbom)
+              recommendation="This usually indicates a transient generation/signing/push error, not a content problem."
+              ;;
+            *)
+              recommendation="See the log excerpt above for detail."
+              ;;
+          esac
+
+          body="$(printf '### ❌ `%s` failed\n\n**What happened:**\n```\n%s\n```\n\n**Recommendation:** %s\n\n**To retry:** comment `/retest %s` on this PR once the underlying issue is fixed.' \
+            "${GATE_NAME}" "${log_excerpt}" "${recommendation}" "${GATE_NAME}")"
+        fi
+
+        # Response captured, not streamed straight to stdout - a real bug found live:
+        # GitHub's create-comment response is a full comment object (~4KB, nested user/
+        # GitHub-App fields), unlike the tiny webhook acks notify-slack.yaml/
+        # detect-bypass-merge.yaml leave uncaptured at their own scripts' end. Left
+        # uncaptured here, this step failed with zero output every time (reproduced live:
+        # ran byte-identical outside Tekton and it succeeded every time) - matches this
+        # codebase's own existing convention of capturing any LARGE API response via
+        # $(...) (open-release-pr.yaml's pr_response, detect-bypass-merge.yaml's
+        # pr_json/checks_json) rather than letting it stream raw.
+        comment_response="$(curl --fail --silent --show-error --max-time 10 \
+          -X POST -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/${owner}/${repo}/issues/${PR_NUMBER}/comments" \
+          -d "$(jq -n --arg body "${body}" '{body: $body}')")"
+        echo "posted PR comment: $(jq -r '.html_url' <<<"${comment_response}")"

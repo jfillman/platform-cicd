@@ -13,6 +13,9 @@
 # plain values for this one app - generated once at onboarding (substitute
 # <APP_NAMESPACE>/<APP_NAME>
 # below), not something a developer hand-edits.
+#
+# pr-number - see pull-request-sast.yaml's own comment for why this is here (feeds the
+# finally-block PR comment, catalog/tasks/comment-pr-check-result.yaml).
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -32,6 +35,7 @@ spec:
   params:
     - { name: repo-url, value: "{{ repo_url }}" }
     - { name: revision, value: "{{ revision }}" }
+    - { name: pr-number, value: "{{ body.pull_request.number }}" }
     - { name: app-namespace, value: "<APP_NAMESPACE>" }
     - { name: app-name, value: "<APP_NAME>" }
   taskRunTemplate:

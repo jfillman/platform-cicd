@@ -103,7 +103,8 @@ credentials).
    unconditional even though `build.cache.enabled` gates whether it's actually used), the
    release AppProject/Application/DORA RBAC (if `release` is declared), the ephemeral-envs
    ApplicationSet/PR-token-refresher (if `ephemeralEnvironments.pullRequest.enabled`), the
-   governance policy ConfigMap (if `governance.policyCheck`), and an `ExternalSecret` for
+   governance policy ConfigMap (always - the release-gate commit-signature check runs
+   unconditionally regardless of `governance.policyCheck`), and an `ExternalSecret` for
    `registry-credentials` (see [secrets-management.md](secrets-management.md)). Re-running
    this same command after editing `cicd.yaml` is exactly how you change an Application's
    shape later - `helm upgrade` prunes whatever a stage removal makes unnecessary, it

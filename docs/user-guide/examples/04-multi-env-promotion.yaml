@@ -44,8 +44,12 @@ governance:
   sast: true          # real Semgrep scan, required to pass before the release PR merges
   imageScan: true      # real Trivy scan
   sbom: true            # real cosign SBOM attestation
-  policyCheck: false    # real gitsign commit-signature check - off here, on if your
-                         # org enforces signed commits (see 10-production-grade.yaml)
+  policyCheck: false    # only controls a build-time shift-left copy of this check, if
+                         # one exists - the release-gate commit-signature check itself
+                         # always runs regardless of this flag (release gates are
+                         # enforced, not app-configurable), so allowedCommitSigners
+                         # still needs real entries or every release fails that gate -
+                         # see 10-production-grade.yaml
 
 notifications:
   slack:

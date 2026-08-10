@@ -117,6 +117,30 @@ spec:
         # an explicit `set +e` does.
         set +e
 
+        # Idempotency check: skip generating+attaching another SBOM attestation if this
+        # exact image digest already has one - a real gap found live, not hypothetical.
+        # This Task runs unconditionally on every release-PR check (see sbom-check.yaml's
+        # own header), so any image digest checked by more than one PR (duplicate/retried
+        # release PRs against the same promoted commit, e.g. from a webhook redelivery
+        # storm) accumulated a NEW, separate CycloneDX attestation on every single check -
+        # one real image was found live carrying NINE redundant SBOM attestations this
+        # way. Beyond the waste, this is also the concrete, previously-undiagnosed trigger
+        # for docs/provenance-policy.md's "cosign 3.x new bundle format" identity-
+        # verification conflict: `cosign verify-attestation`'s own attestation discovery
+        # walks these OCI-referrer-attached SBOM attestations even when --type restricts
+        # to slsaprovenance, and fails closed on all of them before ever reaching the real
+        # tag-based provenance attestation - confirmed live via `cosign tree` (showing the
+        # pileup) and `cosign download attestation --predicate-type` (which DOES cleanly
+        # isolate the one real attestation, proving the bug is in verify-attestation's own
+        # discovery, not simple --type filtering). This fix doesn't resolve that
+        # underlying cosign behavior, but it stops making it worse on every retry - see
+        # that doc for the deeper fix this still leaves open.
+        if cosign download attestation --predicate-type cyclonedx "${IMAGE_REF}" >/dev/null 2>&1; then
+          echo "generate-sbom: a cyclonedx attestation already exists for ${IMAGE_REF} - skipping, not generating a redundant one"
+          echo -n "passed" | tee "$(results.outcome.path)"
+          exit 0
+        fi
+
         trivy image --format cyclonedx --output /tmp/sbom.json "${IMAGE_REF}"
         if [[ $? -ne 0 ]]; then
           echo "generate-sbom: trivy SBOM generation failed" >&2
