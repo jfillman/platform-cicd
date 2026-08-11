@@ -21,6 +21,14 @@ deploy (dev) succeeds
   -> 4 independent GitHub Checks run on that PR (sast/image-scan/policy-check/sbom -
      all still stubs, see docs/governance-stubs.md), each individually re-triggerable
   -> branch protection on the gitops repo requires all 4 checks + N human reviewers
+
+     `policy-check` verifies a `gitsign` signature on the actual APP-repo commit that
+     triggered this release (see docs/commit-signing.md) - not this gitops PR's own
+     commits, which are machine-generated and never signed. **This means the app-repo
+     commit that ends up promoted must itself be gitsign-signed, which a GitHub PR
+     merge-button click always breaks** (merge/squash/rebase all produce a new,
+     unsigned commit object) - see docs/commit-signing.md's "Merge strategy matters"
+     section before assuming "review the app PR, click Merge" will work end to end.
   -> once merged, ArgoCD (syncPolicy.automated: prune+selfHeal) syncs the new manifest
      into <type>-<app-name>-staging - the release Pipeline never touches the cluster directly
 ```

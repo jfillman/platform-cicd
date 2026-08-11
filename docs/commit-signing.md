@@ -93,6 +93,54 @@ gitsign *talks to* during login, but it federates to an upstream IdP (GitHub her
 it's the upstream connector's own issuer URL that ends up in the cert's issuer claim -
 verifying against the broker URL fails against every real cert.
 
+## Merge strategy matters: a GitHub-clicked merge is never signed
+
+This isn't optional trivia - get it wrong and every release verification fails, for a
+reason that looks like a platform bug but isn't one (confirmed live, 2026-08-11,
+diagnosing a real `policy-check` failure: `Error: unsupported signature type: not a PEM
+block`).
+
+`gitsign` signs one exact commit *object* - the signature is computed over that commit's
+own serialized content (tree, parent(s), author, committer, message). Change any of
+those fields and you get a different object with a different SHA; the old signature
+doesn't carry over. All three of GitHub's PR merge-button strategies mutate the commit:
+
+- **Create a merge commit** - a brand-new two-parent commit, authored/committed by
+  GitHub. Never signed by you.
+- **Squash and merge** - a brand-new single commit combining the diff. Your original
+  signed commits don't even land on the target branch.
+- **Rebase and merge** - GitHub replays each commit itself, producing new commit objects
+  (new SHAs) distinct from the ones `gitsign` actually signed locally.
+
+So on GitHub specifically, **there is no PR merge button that preserves your
+gitsign-signed commit object onto `main`**. Since `policy-check` verifies whatever
+commit `GIT_REVISION` actually resolves to (a `push`/`tag` event's own commit, per "How
+`policy-check` verifies it" above) - not "some ancestor of it was once signed" - clicking
+Merge on GitHub always produces a commit that fails this check, structurally, regardless
+of whether the PR's own individual commits were properly signed.
+
+**The two things that actually work:**
+
+1. **A true fast-forward.** The target branch's ref moves to point at your
+   already-signed commit with zero new commit created - `git push origin main` directly,
+   or `git merge --ff-only <branch> && git push`, never GitHub's web merge button.
+2. **Tag the commit you actually signed, not whatever the merge button produced.**
+   `release-on-tag`'s trigger doesn't care whether the tagged commit is `main`'s current
+   HEAD - it only needs (a) an image already built for that exact SHA (from `ci`'s
+   push-triggered build, which does require the commit to have reached `main` via a real
+   push at some point) and (b) a valid signature on it. So: push your signed commit to
+   `main` via fast-forward (satisfying `ci`'s build trigger), then `git tag vX.Y.Z
+   <that-same-sha>` and push the tag directly - never re-derive the tag from whatever
+   `main`'s HEAD happens to be after a PR got merged through GitHub's UI.
+
+**The practical tension worth naming**: "open a PR, get it reviewed, click Merge" - the
+default workflow almost everyone uses - is structurally incompatible with this gate as
+built, because the click itself is what destroys the signature. Reviewing via PR is
+still fine; the merge step just can't be a GitHub button. A team that wants both real PR
+review and a working signature gate needs either a fast-forward-only merge policy
+enforced outside GitHub's UI (a bot that rebases-and-pushes rather than merges), or to
+decouple "what gets tagged/released" from "what the merge button produced," as above.
+
 ## Per-app allowed signers
 
 `charts/platform-cicd-app/templates/governance/policy-config.yaml` - a `ConfigMap`
