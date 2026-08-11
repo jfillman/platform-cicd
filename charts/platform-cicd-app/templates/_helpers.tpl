@@ -138,6 +138,56 @@ Usage: {{ include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
 {{- end -}}
 
 {{/*
+platform-cicd-app.upperEnvClusters - env name -> cluster lookup ("" for a same-cluster
+entry) built from deploy.upperEnvironments, normalizing the plain-string vs
+{name, cluster} object shape once. Shared by validateFlows (the env->cluster consistency
+check on a release step's own optional cluster:) and flow-triggers.yaml/
+deliver-onboarding-files.yaml (resolving cluster for a release step that OMITS cluster:,
+the exact thing validateFlows's own error message tells users to do - see its "Prefer
+omitting the step's own cluster:" message. Before this helper existed, that advice was
+silently wrong: both renderers read only $step.cluster with no registry fallback, so
+following it produced an empty cluster param and a silently-same-cluster release instead
+of the cluster-mapped one the tenant actually declared under upperEnvironments -
+confirmed live 2026-08-11).
+
+Usage: {{ $clusters := include "platform-cicd-app.upperEnvClusters" . | fromYaml }}
+*/}}
+{{- define "platform-cicd-app.upperEnvClusters" -}}
+{{- $result := dict -}}
+{{- range .Values.deploy.upperEnvironments | default (list) -}}
+  {{- if kindIs "map" . -}}
+    {{- $_ := set $result .name (.cluster | default "") -}}
+  {{- else -}}
+    {{- $_ := set $result . "" -}}
+  {{- end -}}
+{{- end -}}
+{{- $result | toYaml -}}
+{{- end -}}
+
+{{/*
+platform-cicd-app.resolveStepCluster - a release step's effective cluster: its own
+cluster: if set, else whatever deploy.upperEnvironments registers for its env (see
+upperEnvClusters above), else "". This is what actually implements validateFlows's
+"prefer omitting cluster: and letting it resolve from upperEnvironments" advice - that
+helper only checked consistency when a step redundantly repeated cluster:, it never
+resolved the omitted case for a renderer to use.
+
+Takes a two-element list, [<root context>, <step>], same idiom as envNamespace.
+
+Usage: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) }}
+*/}}
+{{- define "platform-cicd-app.resolveStepCluster" -}}
+{{- $ctx := index . 0 -}}
+{{- $step := index . 1 -}}
+{{- if $step.cluster -}}
+{{- $step.cluster -}}
+{{- else -}}
+{{- $clusters := fromYaml (include "platform-cicd-app.upperEnvClusters" $ctx) -}}
+{{- get $clusters $step.env | default "" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 platform-cicd-app.hasClusterMappedUpperEnv - "true"/"false": does this app have at
 least one deploy.upperEnvironments entry mapped to a different physical cluster? Gates
 whether open-release-pr's cluster-registry-reading RBAC
@@ -369,21 +419,11 @@ Fails fast with descriptive message if violated, preventing broken renders.
 {{- $lowerEnvs := .Values.deploy.lowerEnvironments | default (list) -}}
 {{- /* upperEnvironments entries are either a plain string (same-cluster, today's only
 shape) or a {name, cluster} object (env lives on a different physical cluster - see
-docs/multi-cluster.md). Normalize to a flat name list for the existing deploy-env-
-membership check below, plus a name->cluster lookup ("" for same-cluster entries) used
-by the release-step validation further down. */ -}}
-{{- $upperEnvsRaw := .Values.deploy.upperEnvironments | default (list) -}}
-{{- $upperEnvs := list -}}
-{{- $upperEnvClusters := dict -}}
-{{- range $upperEnvsRaw -}}
-  {{- if kindIs "map" . -}}
-    {{- $upperEnvs = append $upperEnvs .name -}}
-    {{- $_ := set $upperEnvClusters .name .cluster -}}
-  {{- else -}}
-    {{- $upperEnvs = append $upperEnvs . -}}
-    {{- $_ := set $upperEnvClusters . "" -}}
-  {{- end -}}
-{{- end -}}
+docs/multi-cluster.md). $upperEnvClusters (name->cluster, "" for same-cluster) is the
+single normalization of that shape, shared with the renderers that actually resolve a
+release step's cluster - see upperEnvClusters's own header for why that sharing matters. */ -}}
+{{- $upperEnvClusters := fromYaml (include "platform-cicd-app.upperEnvClusters" .) -}}
+{{- $upperEnvs := keys $upperEnvClusters -}}
 {{- $deployEnvs := concat $lowerEnvs $upperEnvs -}}
 {{- range $flowName, $flow := $flows -}}
   {{- $normalized := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}

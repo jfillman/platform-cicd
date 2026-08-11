@@ -177,3 +177,21 @@ For the app chart's own resources (Triggers, RBAC, etc.) re-rendering on a `cicd
 change: that's a separate `helm upgrade` invocation, not automated yet by this same
 trigger - see step 4 above. Wiring `onboarding-resync` to also re-run `helm upgrade` is a
 natural next step, not built in this pass.
+
+**A real deadlock this mechanism can fall into, found and fixed live (2026-08-11)**:
+`onboarding-resync`'s own trigger file - the thing that would deliver a fix - is ITSELF
+one of the files this mechanism regenerates. If a required param gets added to
+`onboarding-resync.yaml`'s Pipeline (or `release.yaml`'s, since a stale
+`flow-<name>.yaml` hits the same class of failure) after a tenant already onboarded, that
+tenant's stale trigger file doesn't pass the new param - so the very PipelineRun that
+would regenerate it fails Tekton admission (`ParameterMissing`) before ever running.
+Nothing can self-heal at that point without manual intervention. Fixed by making
+`onboarding-resync.yaml`'s own params optional wherever derivable (`app-type`, from
+`app-namespace`'s own `<type>-<app-name>-cicd` convention -
+`deliver-onboarding-files.yaml`'s own header has the exact fallback) - a stale trigger
+file that omits a since-added param now still runs successfully instead of deadlocking.
+**Lesson for next time a required param is added to any Pipeline a stale
+`.tekton/`-committed trigger file might invoke**: either give it a derivable default
+here too, or accept that every already-onboarded tenant needs a manual one-time
+`onboarding-resync` PipelineRun fired by hand (same as this incident) before the fix can
+reach them on its own.

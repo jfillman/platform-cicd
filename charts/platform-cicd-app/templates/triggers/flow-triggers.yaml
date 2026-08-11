@@ -189,7 +189,12 @@ spec:
     - { name: pipeline-run-name, value: {{ printf "%s-%d-%s-$(body.context.id)" $flowName $index $stageName | quote }} }
     - { name: env, value: {{ $step.env | default "dev" | quote }} }
     - { name: suite, value: {{ $effectiveSuite | quote }} }
-    - { name: cluster, value: {{ $step.cluster | default "" | quote }} }
+    {{/* $step.cluster if set, else resolved from deploy.upperEnvironments for $step.env
+    - see _helpers.tpl's resolveStepCluster for why the naive $step.cluster-only read
+    was a real bug: validateFlows's own error message tells users to OMIT a release
+    step's cluster: and let it resolve from upperEnvironments, but nothing here
+    actually did that resolution before - confirmed live 2026-08-11. */}}
+    - { name: cluster, value: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) | quote }} }
     - { name: name, value: {{ $step.name | default "" | quote }} }
     - { name: is-flow-root, value: "false" }
     - { name: git-url, value: "$(body.subject.content.git-url)" }

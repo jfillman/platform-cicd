@@ -114,6 +114,20 @@ spec:
         repo="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
         image_repo="ghcr.io/${GITHUB_OWNER}/${APP_NAME}"
 
+        # app-type is optional now (onboarding-resync.yaml's own Pipeline param has no
+        # default, deliberately - see that file's header) precisely so a stale trigger
+        # file committed in a tenant repo before app-type existed can still fire THIS
+        # Task and self-heal, instead of deadlocking on the one required param that
+        # would have fixed it. Derived from app-namespace when absent - every namespace
+        # this platform ever creates is <type>-<app-name>-<env> (envNamespace helper,
+        # charts/platform-cicd-app/templates/_helpers.tpl), and this Task's own
+        # app-namespace param is always that Application's CI/CD namespace specifically,
+        # i.e. env="cicd" - so stripping "-${APP_NAME}-cicd" off the end recovers type.
+        if [[ -z "${APP_TYPE}" ]]; then
+          APP_TYPE="${APP_NAMESPACE%-${APP_NAME}-cicd}"
+          echo "app-type not supplied - derived '${APP_TYPE}' from app-namespace=${APP_NAMESPACE}"
+        fi
+
         token="$(github_app_installation_token "${owner}" "${repo}")"
         workdir="$(mktemp -d)"
         clone_url="https://x-access-token:${token}@github.com/${owner}/${repo}.git"
@@ -147,9 +161,22 @@ spec:
         if [[ -f cicd.yaml ]]; then
           pipelines_json="$(yq -o=json '.pipelines // {}' cicd.yaml)"
           source_volume_size_raw="$(yq -r '.build.sourceVolume.size // "small"' cicd.yaml)"
+          # env name -> cluster lookup ("" for a same-cluster entry), mirroring
+          # charts/platform-cicd-app/templates/_helpers.tpl's own
+          # platform-cicd-app.upperEnvClusters exactly (same shape normalization,
+          # necessarily duplicated as jq rather than shared - this script runs as bash
+          # against the tenant's raw cicd.yaml, outside Helm's render pass entirely,
+          # same reason SOURCE_VOLUME_STORAGE's lookup below is duplicated too). Used so
+          # a git-rooted release step that OMITS its own cluster: (validateFlows's own
+          # recommended way to declare one) still resolves the right cluster here,
+          # instead of silently falling through to the same-cluster path - a real bug,
+          # confirmed live 2026-08-11, that affected this bash-generated path exactly
+          # the same way it affected flow-triggers.yaml's Go-template one.
+          upper_env_clusters_json="$(yq -o=json '.deploy.upperEnvironments // []' cicd.yaml | jq 'map(if type == "object" then {(.name): (.cluster // "")} else {(.): ""} end) | add // {}')"
         else
           pipelines_json="{}"
           source_volume_size_raw="small"
+          upper_env_clusters_json="{}"
         fi
         # T-shirt lookup for build.sourceVolume.size - same dictionary as
         # charts/platform-cicd-app/templates/_helpers.tpl's sourceVolumeSize helper, but
@@ -369,6 +396,9 @@ spec:
           root_env="$(echo "${flow_json}" | jq -r '.steps[0].env // ""')"
           root_suite="$(echo "${flow_json}" | jq -r '.steps[0].suite // ""')"
           root_cluster="$(echo "${flow_json}" | jq -r '.steps[0].cluster // ""')"
+          if [[ -z "${root_cluster}" && "${root_stage}" == "release" ]]; then
+            root_cluster="$(jq -r --arg e "${root_env}" '.[$e] // ""' <<<"${upper_env_clusters_json}")"
+          fi
           root_name="$(echo "${flow_json}" | jq -r '.steps[0].name // ""')"
 
           generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" > ".tekton/flow-${flow_name}.yaml"

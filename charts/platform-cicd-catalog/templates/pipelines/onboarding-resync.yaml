@@ -20,6 +20,20 @@ spec:
       type: string
     - name: app-type
       type: string
+      default: ""
+      description: >-
+        platformIdentity.type. Optional with a derivable fallback (see
+        deliver-onboarding-files.yaml) - deliberately NOT required here, unlike
+        release.yaml's own app-type param: this Pipeline is fired by a trigger file
+        COMMITTED IN THE TENANT'S OWN REPO (files/onboarding-templates/app-repo/
+        onboarding-resync.yaml), regenerated only when this exact mechanism runs
+        successfully. A required param added here after a tenant onboarded would
+        otherwise deadlock permanently - the one thing that could deliver the fix
+        (this Pipeline) would itself fail admission first. Confirmed live
+        (2026-08-11): app-type gained no default when release.yaml's own copy did,
+        and every tenant onboarded before that point had a stale trigger file with
+        no app-type param at all - onboarding-resync itself failed
+        ParameterMissing, so `.tekton/` could never self-heal.
     - name: github-owner
       type: string
     - name: gitops-repo-url
