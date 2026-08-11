@@ -64,6 +64,16 @@ spec:
       type: string
       default: ""
       description: Only meaningful on deploy - omitted from the message when empty.
+    - name: pr-url
+      type: string
+      default: ""
+      description: >-
+        Only meaningful on release-outcome, where the PR was opened (and merged) in a
+        DIFFERENT PipelineRun than this one, so the live open-release-pr TaskRun lookup
+        below can't find it - passed directly instead. Takes priority over that lookup
+        when non-empty; release itself still relies on the lookup (its own
+        open-release-pr TaskRun is a sibling in the SAME PipelineRun), so this stays
+        empty there and the existing behavior is unchanged.
   volumes:
     - name: slack-webhook
       secret:
@@ -96,6 +106,8 @@ spec:
           value: $(params.image-ref)
         - name: ENV_NAME
           value: $(params.env)
+        - name: PR_URL_PARAM
+          value: $(params.pr-url)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -175,8 +187,8 @@ spec:
         # fails, breaking the failure-notification path for release's most likely real
         # failure point. Naturally comes back empty (and is simply omitted) when
         # open-release-pr didn't succeed - no special-casing needed for that.
-        pr_url=""
-        if [[ "${STAGE_NAME}" == "release" ]]; then
+        pr_url="${PR_URL_PARAM}"
+        if [[ -z "${pr_url}" && "${STAGE_NAME}" == "release" ]]; then
           pr_url="$(kubectl get taskrun -n "${APP_NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=open-release-pr" \
             -o jsonpath='{.items[0].status.results[?(@.name=="pr-url")].value}' 2>/dev/null || true)"
         fi

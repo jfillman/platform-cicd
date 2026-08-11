@@ -48,8 +48,9 @@ payload="$(jq -n \
   --arg gitRevision "${GIT_REVISION:-}" \
   --arg flowStartTime "${FLOW_START_TIME:-}" \
   --arg finishedAt "${finished_at}" \
+  --arg prUrl "${PR_URL:-}" \
   --arg configJsonB64 "${CONFIG_JSON_B64:-}" \
-  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, configJsonB64: $configJsonB64}')"
+  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, prUrl: $prUrl, configJsonB64: $configJsonB64}')"
 
 echo "[argocd-outcome-hook] app=${APP_NAME} env=${ENV} phase=${PHASE}: reporting to ${RELAY_URL}"
 curl --fail --silent --show-error --max-time 15 \

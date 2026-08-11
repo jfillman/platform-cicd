@@ -172,17 +172,19 @@ spec:
           mkdir -p "${apps_path}"
           app_manifest="${apps_path}/${APP_NAME}-${ENV}.yaml"
 
-          # Application manifest: STRUCTURAL only now (name/labels/spec) - no
-          # per-release annotations here anymore. A real race condition, caught by
-          # the user reviewing this design rather than by testing: this file is
-          # synced by the app-of-apps ROOT Application, on its own independent
-          # reconcile loop, decoupled from when the CHILD Application (watching
-          # ${APP_NAME}/${ENV}/, below) actually syncs deployment.yaml and fires the
-          # outcome notification. Nothing guarantees the root's sync of THIS file
-          # completes before the child's deploy sync does, so any per-release data
-          # written here could still be a PREVIOUS release's values at notification
-          # time. See docs/multi-cluster.md and platform-release-meta.yaml below,
-          # which fixes this by living in the path the CHILD watches instead.
+          # Application manifest: STRUCTURAL only (name/labels/spec) - no
+          # per-release annotations here. A real race condition, caught by the user
+          # reviewing this design rather than by testing: this file is synced by the
+          # app-of-apps ROOT Application, on its own independent reconcile loop,
+          # decoupled from when the CHILD Application (watching ${APP_NAME}/${ENV}/,
+          # below) actually syncs deployment.yaml. Nothing guarantees the root's
+          # sync of THIS file completes before the child's deploy sync does, so any
+          # per-release data written here could still be a PREVIOUS release's values
+          # by the time anything downstream reads it. Fixed not by moving the data
+          # somewhere the root still writes (an earlier version of this Task tried
+          # that, twice), but by never putting per-release data anywhere the root
+          # owns at all - see the outcome-reporting hook Jobs further down, written
+          # into the path the CHILD watches instead, and docs/multi-cluster.md.
           #
           # project: default (ArgoCD's built-in, unscoped project) - this pass
           # doesn't also GitOps-deliver a matching scoped AppProject to the remote
@@ -240,13 +242,99 @@ spec:
 
           git add "${app_manifest}"
           echo "[open-release-pr] cluster=${CLUSTER}: wrote ${app_manifest}"
+        fi
 
-          # Outcome-reporting: two ArgoCD sync-hook Jobs, deliberately in
-          # ${APP_NAME}/${ENV}/ alongside deployment.yaml (NOT ${apps_path} alongside
-          # the Application manifest above) - this is the path the CHILD Application
-          # actually syncs, so these hooks run as part of the exact same sync
-          # operation as the image-tag change, with no dependency on the app-of-apps
-          # ROOT Application's own, independently-timed reconcile at all.
+        git config user.name "platform-cicd release automation"
+        git config user.email "release@platform-cicd.invalid"
+
+        # X-App-Repo/X-App-Commit trailers (Phase 3 item 2, docs/commit-signing.md) are
+        # how catalog/tasks/verify-commit-signature.yaml, running as a check on THIS
+        # gitops repo's own PR, finds its way back to the app-repo commit that actually
+        # needs a verified human signature - the gitops commit itself is machine-
+        # generated right here, never hand-signed, so there's nothing meaningful to
+        # verify on it directly. Full 40-char SHA, not the 12-char truncation used
+        # elsewhere for the image tag - 12 hex chars isn't reliably enough to
+        # unambiguously `git fetch` one specific commit. Built with printf + \n escapes,
+        # not a raw multi-line string - the exact same reason the PR body below already
+        # needed this (a raw embedded-newline heredoc broke YAML parsing once this
+        # session, see docs/release.md's git history for that fix).
+        commit_message="$(printf 'Release: promote %s to %s @ %s\n\nX-App-Repo: %s\nX-App-Commit: %s' \
+          "${APP_NAME}" "${ENV}" "${IMAGE_REF}" "${GIT_URL}" "${GIT_REVISION}")"
+        git commit --quiet -am "${commit_message}"
+        git push --quiet "${clone_url}" "${branch}"
+
+        # Field vocabulary/ordering matches docs/design-language.md (App/Repo/Commit/
+        # Image) - the same shared language as the Slack notifications
+        # (catalog/tasks/notify-slack.yaml), applied here in GitHub-flavored markdown.
+        # No color here (unlike Slack) - GitHub PR bodies can't carry inline color
+        # without an embedded badge image, which would itself be the kind of flashy the
+        # design language explicitly isn't going for. Tenant/Run are Slack-only fields -
+        # not meaningful to an external PR reviewer. Repo-short derived with the exact
+        # same sed pattern notify-slack.yaml uses, not a second, differently-behaved
+        # technique - the two should never diverge for the same input.
+        repo_short="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
+        commit_short="${GIT_REVISION:0:12}"
+        # Governance section (Phase 3 item 8.6): explains what each of the four
+        # independent, required GitHub Checks on this PR actually does and how to
+        # re-trigger one that fails - PaC's own `/retest <name>` comment mechanism
+        # already exists natively (see docs/release.md), this just writes it down where
+        # a developer will actually see it. sast/image-scan/policy-check are real as of
+        # Phase 3 items 8.4/8.5/item 2; sbom is still a stub pending 8.7 - stated plainly,
+        # not glossed over, same "make stub-ness structurally loud" principle this
+        # platform has held since Phase 1. Built with the same printf+\n-escape technique
+        # already used for commit_message above, not a raw heredoc - a raw multi-line
+        # string broke this file's own YAML parsing once already, see docs/release.md.
+        governance_text="$(printf '\n\n## Governance checks\n\n| Check | What it verifies | Status |\n|---|---|---|\n| `sast` | Static analysis (Semgrep) of the promoted commit'"'"'s source | real |\n| `image-scan` | Vulnerability scan (Trivy) of the promoted image | real |\n| `policy-check` | Commit signature (gitsign) + SLSA provenance (Conforma) | real |\n| `sbom` | Software bill of materials | not yet real - see docs/governance-stubs.md |\n\n**If a check fails**: comment `/retest <check-name>` on this PR to re-run just that one (e.g. `/retest sast`), or `/retest` alone to re-run all of them. Fix the underlying issue first if the failure is real - re-running does not bypass a check, it only re-evaluates it.')"
+        pr_body_text="$(printf '**App**: %s\n**Env**: %s\n**Repo**: [%s](%s)\n**Commit**: [`%s`](%s/commit/%s)\n**Image**: `%s`\n\nMerging this PR triggers ArgoCD to sync it to %s. See docs/release.md.%s' \
+          "${APP_NAME}" "${ENV}" "${repo_short}" "${GIT_URL}" "${commit_short}" "${GIT_URL}" "${GIT_REVISION}" "${IMAGE_REF}" "${ENV}" "${governance_text}")"
+        pr_body="$(jq -n \
+          --arg title "Release: ${APP_NAME} @ ${GIT_REVISION}" \
+          --arg body "${pr_body_text}" \
+          --arg head "${branch}" \
+          --arg base "main" \
+          '{title: $title, body: $body, head: $head, base: $base}')"
+
+        pr_response="$(curl --fail --silent --show-error \
+          -X POST -H "Authorization: Bearer ${token}" \
+          -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/repos/${owner}/${gitops_repo}/pulls" \
+          -d "${pr_body}")"
+        pr_url="$(jq -r '.html_url' <<<"${pr_response}")"
+
+        # Outcome-reporting: tracking annotations on deployment.yaml itself, plus
+        # RBAC and two ArgoCD sync-hook Jobs - deliberately a SECOND commit on this
+        # same branch, pushed only now, AFTER the PR above already exists. Both the
+        # annotations and the hook Jobs carry this PR's own URL (pr_url, just
+        # resolved), and a PR's URL/number don't exist until GitHub actually creates
+        # it - there's no way to have included them in the first commit. A second
+        # commit on an already-open PR's branch is ordinary: GitHub just shows it as
+        # one more commit already part of the same PR, nothing to re-open.
+        if [[ -n "${CLUSTER}" ]]; then
+          # Deployment annotations are pure operator visibility - NOT part of the
+          # outcome-reporting mechanism itself (the hook Jobs below carry the data
+          # ArgoCD actually reports with, independently). This just lets a human
+          # doing `kubectl describe deployment`/`get -o yaml` on the live upper-env
+          # cluster see which build/commit/PR produced what's running, without
+          # cross-referencing pipeline logs. Redundant with the hook payload by
+          # design - different reader, same underlying facts. platform.io/dora-
+          # prefix matches mark-release-pending.yaml's own same-cluster annotation
+          # convention, even though the DORA exporter itself doesn't read these (it
+          # gets its own copy via the hook Jobs) - same namespace, same intent, one
+          # convention rather than two.
+          yq -i -e "
+            .metadata.annotations[\"platform.io/dora-git-revision\"] = \"${GIT_REVISION}\" |
+            .metadata.annotations[\"platform.io/dora-image\"] = \"${IMAGE_REF}\" |
+            .metadata.annotations[\"platform.io/dora-flow-start-time\"] = \"${FLOW_START_TIME}\" |
+            .metadata.annotations[\"platform.io/dora-gitops-pr-url\"] = \"${pr_url}\"
+          " "${manifest}"
+          git add "${manifest}"
+
+          # Two ArgoCD sync-hook Jobs, deliberately in ${APP_NAME}/${ENV}/ alongside
+          # deployment.yaml (NOT ${apps_path} alongside the Application manifest
+          # above) - this is the path the CHILD Application actually syncs, so these
+          # hooks run as part of the exact same sync operation as the image-tag
+          # change, with no dependency on the app-of-apps ROOT Application's own,
+          # independently-timed reconcile at all.
           #
           # This replaced an ArgoCD-Notifications-based design entirely, not just its
           # data source - see docs/multi-cluster.md for the two real, live-confirmed
@@ -265,7 +353,9 @@ spec:
           # fire on the FIRST release to this env and silently never again.
           #
           # PHASE is the one thing that differs between the two Jobs - which hook ran
-          # already tells us the outcome, no live status read needed.
+          # already tells us the outcome, no live status read needed. PR_URL rides
+          # along purely so the eventual release-outcome Slack message can link back
+          # to this PR - see notify-slack.yaml's own pr-url param.
           #
           # config-json travels as base64, not raw JSON - the one field here that can
           # contain real quotes/braces, and base64 sidesteps any risk of this
@@ -340,67 +430,15 @@ spec:
               "            - { name: GIT_URL, value: \"${GIT_URL}\" }" \
               "            - { name: GIT_REVISION, value: \"${GIT_REVISION}\" }" \
               "            - { name: FLOW_START_TIME, value: \"${FLOW_START_TIME}\" }" \
+              "            - { name: PR_URL, value: \"${pr_url}\" }" \
               "            - { name: CONFIG_JSON_B64, value: \"${CONFIG_JSON_B64}\" }" \
               > "${hook_manifest}"
             git add "${hook_manifest}"
             echo "[open-release-pr] cluster=${CLUSTER}: wrote ${hook_manifest}"
           done
+
+          git commit --quiet -m "Add outcome-reporting hooks for ${ENV} (see ${pr_url})"
+          git push --quiet "${clone_url}" "${branch}"
         fi
 
-        git config user.name "platform-cicd release automation"
-        git config user.email "release@platform-cicd.invalid"
-
-        # X-App-Repo/X-App-Commit trailers (Phase 3 item 2, docs/commit-signing.md) are
-        # how catalog/tasks/verify-commit-signature.yaml, running as a check on THIS
-        # gitops repo's own PR, finds its way back to the app-repo commit that actually
-        # needs a verified human signature - the gitops commit itself is machine-
-        # generated right here, never hand-signed, so there's nothing meaningful to
-        # verify on it directly. Full 40-char SHA, not the 12-char truncation used
-        # elsewhere for the image tag - 12 hex chars isn't reliably enough to
-        # unambiguously `git fetch` one specific commit. Built with printf + \n escapes,
-        # not a raw multi-line string - the exact same reason the PR body below already
-        # needed this (a raw embedded-newline heredoc broke YAML parsing once this
-        # session, see docs/release.md's git history for that fix).
-        commit_message="$(printf 'Release: promote %s to %s @ %s\n\nX-App-Repo: %s\nX-App-Commit: %s' \
-          "${APP_NAME}" "${ENV}" "${IMAGE_REF}" "${GIT_URL}" "${GIT_REVISION}")"
-        git commit --quiet -am "${commit_message}"
-        git push --quiet "${clone_url}" "${branch}"
-
-        # Field vocabulary/ordering matches docs/design-language.md (App/Repo/Commit/
-        # Image) - the same shared language as the Slack notifications
-        # (catalog/tasks/notify-slack.yaml), applied here in GitHub-flavored markdown.
-        # No color here (unlike Slack) - GitHub PR bodies can't carry inline color
-        # without an embedded badge image, which would itself be the kind of flashy the
-        # design language explicitly isn't going for. Tenant/Run are Slack-only fields -
-        # not meaningful to an external PR reviewer. Repo-short derived with the exact
-        # same sed pattern notify-slack.yaml uses, not a second, differently-behaved
-        # technique - the two should never diverge for the same input.
-        repo_short="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
-        commit_short="${GIT_REVISION:0:12}"
-        # Governance section (Phase 3 item 8.6): explains what each of the four
-        # independent, required GitHub Checks on this PR actually does and how to
-        # re-trigger one that fails - PaC's own `/retest <name>` comment mechanism
-        # already exists natively (see docs/release.md), this just writes it down where
-        # a developer will actually see it. sast/image-scan/policy-check are real as of
-        # Phase 3 items 8.4/8.5/item 2; sbom is still a stub pending 8.7 - stated plainly,
-        # not glossed over, same "make stub-ness structurally loud" principle this
-        # platform has held since Phase 1. Built with the same printf+\n-escape technique
-        # already used for commit_message above, not a raw heredoc - a raw multi-line
-        # string broke this file's own YAML parsing once already, see docs/release.md.
-        governance_text="$(printf '\n\n## Governance checks\n\n| Check | What it verifies | Status |\n|---|---|---|\n| `sast` | Static analysis (Semgrep) of the promoted commit'"'"'s source | real |\n| `image-scan` | Vulnerability scan (Trivy) of the promoted image | real |\n| `policy-check` | Commit signature (gitsign) + SLSA provenance (Conforma) | real |\n| `sbom` | Software bill of materials | not yet real - see docs/governance-stubs.md |\n\n**If a check fails**: comment `/retest <check-name>` on this PR to re-run just that one (e.g. `/retest sast`), or `/retest` alone to re-run all of them. Fix the underlying issue first if the failure is real - re-running does not bypass a check, it only re-evaluates it.')"
-        pr_body_text="$(printf '**App**: %s\n**Env**: %s\n**Repo**: [%s](%s)\n**Commit**: [`%s`](%s/commit/%s)\n**Image**: `%s`\n\nMerging this PR triggers ArgoCD to sync it to %s. See docs/release.md.%s' \
-          "${APP_NAME}" "${ENV}" "${repo_short}" "${GIT_URL}" "${commit_short}" "${GIT_URL}" "${GIT_REVISION}" "${IMAGE_REF}" "${ENV}" "${governance_text}")"
-        pr_body="$(jq -n \
-          --arg title "Release: ${APP_NAME} @ ${GIT_REVISION}" \
-          --arg body "${pr_body_text}" \
-          --arg head "${branch}" \
-          --arg base "main" \
-          '{title: $title, body: $body, head: $head, base: $base}')"
-
-        pr_response="$(curl --fail --silent --show-error \
-          -X POST -H "Authorization: Bearer ${token}" \
-          -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/repos/${owner}/${gitops_repo}/pulls" \
-          -d "${pr_body}")"
-
-        jq -r '.html_url' <<<"${pr_response}" | tee "$(results.pr-url.path)"
+        echo "${pr_url}" | tee "$(results.pr-url.path)"

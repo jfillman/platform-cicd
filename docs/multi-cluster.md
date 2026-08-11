@@ -125,6 +125,18 @@ see the feedback-relay section below for the full mechanism.
 still a deliberate no-op for a cluster-mapped env - see that Task's own `cluster` param
 - these hook Jobs are what replaces it.
 
+**`deployment.yaml` itself also carries a small set of tracking annotations** (added
+2026-08-11, at the user's request) - `platform.io/dora-{git-revision,image,
+flow-start-time,gitops-pr-url}`. Don't confuse this with the paragraph above: this is
+pure operator visibility (`kubectl describe deployment`/`get -o yaml` on the live
+upper-env cluster, no cross-referencing pipeline logs needed to see which build produced
+what's running), not part of the outcome-reporting mechanism - the hook Jobs carry their
+own copy of this data independently, and nothing reads these annotations back. Since a
+GitHub PR's own URL doesn't exist until after the branch is pushed, this - and the RBAC/
+hook Jobs, which also want the PR URL now (see below) - land in a SECOND commit, pushed
+right after the PR is opened, on the same branch/PR. Ordinary on GitHub's side: just one
+more commit already part of the same open PR, nothing to re-open or re-review structurally.
+
 A real, pre-existing gap surfaced and fixed while building this: `app-type`
 (platformIdentity.type, needed for the `<app-type>-<app-name>-<env>` namespace
 convention `deploy.yaml` already relies on) was never threaded through
@@ -251,6 +263,30 @@ identity, not the target app's) - it matches on the event's own claimed
 the TokenReview-verified path, documented in both the relay's and the Trigger's own
 headers. This piece was never affected by the Notifications-vs-hooks change - the
 CDEvent shape the relay produces stayed identical throughout.
+
+**The Slack message for a confirmed cluster-mapped outcome links back to its GitOps PR**
+(added 2026-08-11) - `pr_url` (resolved once `open-release-pr.yaml` actually opens the
+PR) rides the same path as everything else: hook Job env var -> hook script's payload ->
+relay -> CDEvent's `subject.content.prUrl` -> the Trigger's binding -> a `pr-url` param
+on `release-outcome-notify` -> `notify-slack.yaml`'s own `pr-url` param, which takes
+priority over that Task's existing live-TaskRun-lookup path (which only works for
+`release` itself, since `release-outcome-notify` runs in a completely different
+PipelineRun than the one that has `open-release-pr` as a sibling TaskRun to look up).
+
+## Deferred: relay-token distribution via External Secrets Operator
+
+Every app onboarded to a cluster-mapped env currently needs its own hand-provisioned
+`platform-outcome-relay-token` Secret (see `hack/bootstrap-upper-cluster.sh`) - the same
+shared per-cluster token value, copied by hand into every app's namespace on that
+cluster. Considered replacing this with the same ESO `kubernetes`-provider pattern
+`charts/platform-cicd-control-plane/templates/secretstore/` already uses elsewhere (one
+real Secret in a source namespace, a `ClusterSecretStore`, an `ExternalSecret` per app -
+would need ESO installed on the upper cluster too, which today only runs ArgoCD).
+**Deliberately not built this pass** - the user's own plan is to package this platform's
+k8s-app delivery as a proper Helm chart in a future step, at which point the
+`ExternalSecret` belongs there (rendered alongside the rest of that chart's own
+resources) rather than being generated ad hoc by `open-release-pr.yaml`. Revisit once
+that chart exists, not before.
 
 ## The DORA exporter (Phase F)
 
@@ -422,7 +458,19 @@ The design went through two full live-verified iterations: v1 (ArgoCD Notificati
 current) replaced Notifications entirely after live testing showed it also fired on
 selfHeal drift-correction with no release involved, and confirmed hooks don't share that
 flaw. v1's config is fully decommissioned from the live `kind-prod` cluster, not just
-superseded in the repo. Remaining, explicitly deferred per the original plan:
-self-service onboarding tooling for additional tenants/clusters, real TLS/ingress
-hardening for the relay (same-host podman reachability is what's actually verified), and
-a real second env/cluster beyond this one proof.
+superseded in the repo.
+
+A follow-up increment the same day added the deployment.yaml tracking annotations and
+the Slack PR-link (both above), which needed the two-commit restructuring of
+`open-release-pr.yaml`. Also live-verified: a real release produced a PR with the
+expected two commits in order (release change, then outcome-reporting artifacts once the
+PR URL was known), the live Deployment on `kind-prod` carried all four
+`platform.io/dora-*` annotations with correct values including the real PR URL, and
+`release-outcome-notify`'s own `notify-slack` TaskRun actually posted (not skipped) with
+`pr-url` resolved correctly through the full relay/CDEvent/Trigger chain.
+
+Remaining, explicitly deferred: self-service onboarding tooling for additional
+tenants/clusters, real TLS/ingress hardening for the relay (same-host podman
+reachability is what's actually verified), a real second env/cluster beyond this one
+proof, and moving relay-token distribution onto External Secrets Operator (deferred
+until this app's k8s delivery is packaged as its own Helm chart - see above).

@@ -36,6 +36,7 @@ spec:
     - { name: status, value: "$(body.subject.content.status)" }
     - { name: git-url, value: "$(body.subject.content.gitUrl)" }
     - { name: git-revision, value: "$(body.subject.content.gitRevision)" }
+    - { name: pr-url, value: "$(body.subject.content.prUrl)" }
     - { name: config-json, value: "$(body.subject.content.configJson)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -56,6 +57,7 @@ spec:
     - name: status
     - name: git-url
     - name: git-revision
+    - name: pr-url
     - name: config-json
   resourcetemplates:
     - apiVersion: tekton.dev/v1
@@ -84,6 +86,7 @@ spec:
           - { name: status, value: $(tt.params.status) }
           - { name: git-url, value: $(tt.params.git-url) }
           - { name: git-revision, value: $(tt.params.git-revision) }
+          - { name: pr-url, value: $(tt.params.pr-url) }
           - { name: config-json, value: $(tt.params.config-json) }
         taskRunTemplate:
           serviceAccountName: pipeline-runner

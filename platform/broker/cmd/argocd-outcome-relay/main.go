@@ -91,6 +91,7 @@ type outcomeRequest struct {
 	GitRevision   string `json:"gitRevision"`
 	FlowStartTime string `json:"flowStartTime"`
 	FinishedAt    string `json:"finishedAt"` // set by the hook script itself (date -u), the moment it actually runs
+	PRUrl         string `json:"prUrl"`      // the GitOps PR this release/hook Job came from - see notify-slack.yaml's own pr-url param
 	ConfigJSONB64 string `json:"configJsonB64"`
 }
 
@@ -293,6 +294,7 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 				"gitRevision":   req.GitRevision,
 				"flowStartTime": req.FlowStartTime,
 				"finishedAt":    req.FinishedAt,
+				"prUrl":         req.PRUrl,
 				"configJson":    configJSON,
 			},
 		},

@@ -6,10 +6,13 @@
 # the loop" in a way a human notices, not just a CDEvent landing unseen. Deliberately
 # thin: one Task, reusing notify-slack.yaml as-is rather than duplicating its message
 # formatting. No resolve-notify-config/clone/workspace needed here (unlike
-# deploy.yaml/release.yaml) - config-json arrives pre-resolved, riding the
-# platform.io/dora-config-json annotation open-release-pr.yaml already embedded in the
-# GitOps-delivered Application manifest at PR-open time (this Pipeline's own run
-# already validated it once; no reason to clone and re-derive it a second time here).
+# deploy.yaml/release.yaml) - config-json arrives pre-resolved: open-release-pr.yaml
+# base64-encodes it into the PostSync/SyncFail hook Job's own CONFIG_JSON_B64 env var at
+# PR-open time, the hook script forwards it to argocd-outcome-relay, and the relay
+# decodes it straight into the CDEvent's body.subject.content.configJson this Pipeline's
+# own Trigger binds from (see release-outcome-trigger.yaml) - no live fetch, no
+# ConfigMap, no Application-manifest annotation involved (an earlier design used each of
+# those in turn; see docs/multi-cluster.md for why both were replaced).
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -34,6 +37,9 @@ spec:
       type: string
       default: ""
     - name: git-revision
+      type: string
+      default: ""
+    - name: pr-url
       type: string
       default: ""
     - name: config-json
@@ -62,4 +68,5 @@ spec:
         - { name: app-name, value: $(params.app-name) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
+        - { name: pr-url, value: $(params.pr-url) }
         - { name: env, value: $(params.env) }
