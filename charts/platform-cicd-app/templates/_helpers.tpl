@@ -89,6 +89,74 @@ Usage: {{ include "platform-cicd-app.envNamespace" (list $ "staging") }}
 {{- end -}}
 
 {{/*
+platform-cicd-app.localDeployEnvs - deploy.lowerEnvironments plus any
+deploy.upperEnvironments entry that stays on THIS cluster (a plain string, or a
+{name, cluster} object with no cluster set) - i.e. every env that actually needs
+pipeline-runner RBAC into a local namespace. Cluster-mapped upper envs (see
+docs/multi-cluster.md) are deliberately excluded: there's no local namespace for them,
+and granting RBAC into one would be meaningless dead config, not just unnecessary.
+
+Usage: {{ include "platform-cicd-app.localDeployEnvs" . | fromYamlArray }}
+*/}}
+{{- define "platform-cicd-app.localDeployEnvs" -}}
+{{- $envs := .Values.deploy.lowerEnvironments | default (list) -}}
+{{- range .Values.deploy.upperEnvironments | default (list) -}}
+  {{- if kindIs "map" . -}}
+    {{- if not .cluster -}}
+      {{- $envs = append $envs .name -}}
+    {{- end -}}
+  {{- else -}}
+    {{- $envs = append $envs . -}}
+  {{- end -}}
+{{- end -}}
+{{- $envs | toYaml -}}
+{{- end -}}
+
+{{/*
+platform-cicd-app.localUpperEnvs - just the same-cluster entries out of
+deploy.upperEnvironments (a plain string, or a {name, cluster} object with no cluster
+set), as plain names. Same normalization as localDeployEnvs but WITHOUT
+lowerEnvironments mixed in - what release-application.yaml/appproject.yaml need (one
+ArgoCD Application/destination per local upper env; "dev" is a deploy-stage concept,
+never an ArgoCD one). A cluster-mapped entry gets no Application rendered here at all -
+its Application manifest is delivered via GitOps instead (see docs/multi-cluster.md).
+
+Usage: {{ include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
+*/}}
+{{- define "platform-cicd-app.localUpperEnvs" -}}
+{{- $envs := list -}}
+{{- range .Values.deploy.upperEnvironments | default (list) -}}
+  {{- if kindIs "map" . -}}
+    {{- if not .cluster -}}
+      {{- $envs = append $envs .name -}}
+    {{- end -}}
+  {{- else -}}
+    {{- $envs = append $envs . -}}
+  {{- end -}}
+{{- end -}}
+{{- $envs | toYaml -}}
+{{- end -}}
+
+{{/*
+platform-cicd-app.hasClusterMappedUpperEnv - "true"/"false": does this app have at
+least one deploy.upperEnvironments entry mapped to a different physical cluster? Gates
+whether open-release-pr's cluster-registry-reading RBAC
+(templates/clusters/read-registry-rbac.yaml) needs to be rendered at all - most apps
+have none and shouldn't get otherwise-unused RBAC.
+
+Usage: {{ include "platform-cicd-app.hasClusterMappedUpperEnv" . }}
+*/}}
+{{- define "platform-cicd-app.hasClusterMappedUpperEnv" -}}
+{{- $found := false -}}
+{{- range .Values.deploy.upperEnvironments | default (list) -}}
+  {{- if and (kindIs "map" .) .cluster -}}
+    {{- $found = true -}}
+  {{- end -}}
+{{- end -}}
+{{- $found -}}
+{{- end -}}
+
+{{/*
 platform-cicd-app.namespace - the Application's own CI/CD execution namespace, i.e.
 platform-cicd-app.envNamespace with env="cicd" - just the specific env value this
 Application's pipelines themselves run under, a sibling of "dev"/"staging"/"pr-42", not a
@@ -299,7 +367,23 @@ Fails fast with descriptive message if violated, preventing broken renders.
 {{- $flows := .Values.pipelines | default (dict) -}}
 {{- $defaultSuite := .Values.test.suite | default "" -}}
 {{- $lowerEnvs := .Values.deploy.lowerEnvironments | default (list) -}}
-{{- $upperEnvs := .Values.deploy.upperEnvironments | default (list) -}}
+{{- /* upperEnvironments entries are either a plain string (same-cluster, today's only
+shape) or a {name, cluster} object (env lives on a different physical cluster - see
+docs/multi-cluster.md). Normalize to a flat name list for the existing deploy-env-
+membership check below, plus a name->cluster lookup ("" for same-cluster entries) used
+by the release-step validation further down. */ -}}
+{{- $upperEnvsRaw := .Values.deploy.upperEnvironments | default (list) -}}
+{{- $upperEnvs := list -}}
+{{- $upperEnvClusters := dict -}}
+{{- range $upperEnvsRaw -}}
+  {{- if kindIs "map" . -}}
+    {{- $upperEnvs = append $upperEnvs .name -}}
+    {{- $_ := set $upperEnvClusters .name .cluster -}}
+  {{- else -}}
+    {{- $upperEnvs = append $upperEnvs . -}}
+    {{- $_ := set $upperEnvClusters . "" -}}
+  {{- end -}}
+{{- end -}}
 {{- $deployEnvs := concat $lowerEnvs $upperEnvs -}}
 {{- range $flowName, $flow := $flows -}}
   {{- $normalized := fromYaml (include "platform-cicd-app.normalizeFlow" (dict "flow" $flow)) -}}
@@ -357,6 +441,21 @@ Fails fast with descriptive message if violated, preventing broken renders.
       {{- /* Validate cluster only for release */ -}}
       {{- if and $step.cluster (ne $stageName "release") -}}
         {{- fail (printf "Flow '%s' step %d: cluster is only valid for release stage, not %s" $flowName (add $index 1) $stageName) -}}
+      {{- end -}}
+
+      {{- /* Validate a release step's env is a declared upper environment, and that its
+      own optional cluster: (if set) agrees with what upperEnvironments says for that
+      env - the registry entry is the single source of truth for env->cluster, a step
+      repeating it is only a consistency check, not a second input. See
+      docs/multi-cluster.md. */ -}}
+      {{- if and (eq $stageName "release") $step.env -}}
+        {{- if not (has $step.env $upperEnvs) -}}
+          {{- fail (printf "Flow '%s' step %d: release env '%s' is not listed under deploy.upperEnvironments. Add it there (as a plain name for a same-cluster env, or {name, cluster} for one hosted on a different cluster - see docs/multi-cluster.md)." $flowName (add $index 1) $step.env) -}}
+        {{- end -}}
+        {{- $registeredCluster := get $upperEnvClusters $step.env -}}
+        {{- if and $step.cluster (ne $step.cluster $registeredCluster) -}}
+          {{- fail (printf "Flow '%s' step %d: release step declares cluster '%s' but deploy.upperEnvironments has env '%s' mapped to cluster '%s' - these must agree. Prefer omitting the step's own cluster: and letting it resolve from upperEnvironments." $flowName (add $index 1) $step.cluster $step.env $registeredCluster) -}}
+        {{- end -}}
       {{- end -}}
 
       {{- /* Validate trigger only on first step */ -}}

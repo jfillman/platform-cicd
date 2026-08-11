@@ -21,10 +21,10 @@
 # the app chart), not baked into the toolbox image - a template edit takes effect on
 # THIS Application's own next `helm upgrade`, no image rebuild needed.
 #
-# <APP_NAMESPACE>, <APP_NAME>, <GITHUB_OWNER>, and (if this Application declared a release stage)
-# <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml itself when it
-# delivers this file - see that Task's own substitution loop, which includes this file
-# alongside push.yaml/pull-request.yaml.
+# <APP_NAMESPACE>, <APP_NAME>, <APP_TYPE>, <GITHUB_OWNER>, and (if this Application
+# declared a release stage) <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml
+# itself when it delivers this file - see that Task's own substitution loop, which
+# includes this file alongside push.yaml/pull-request.yaml.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -45,6 +45,7 @@ spec:
     - { name: git-url, value: "{{ repo_url }}" }
     - { name: app-namespace, value: "<APP_NAMESPACE>" }
     - { name: app-name, value: "<APP_NAME>" }
+    - { name: app-type, value: "<APP_TYPE>" }
     - { name: github-owner, value: "<GITHUB_OWNER>" }
     - { name: gitops-repo-url, value: "<GITOPS_REPO_URL>" }
   taskRunTemplate:

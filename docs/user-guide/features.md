@@ -154,6 +154,8 @@ typos:
 
 - **`deploy.strategy: rollout`** - Argo Rollouts (canary/blue-green) isn't built yet;
   every deploy is a plain Deployment regardless of this value.
-- **`pipelines.*.steps[].cluster`** on a `release` step - reserved for multi-cluster
-  support; every release targets the same single target today regardless of this value.
 - **`build.sonar`** - reserved, no current effect.
+
+Multi-cluster releases (`deploy.upperEnvironments`' `{name, cluster}` form,
+`pipelines.*.steps[].cluster`) are real and live - see
+[multi-cluster.md](../multi-cluster.md), not this list.

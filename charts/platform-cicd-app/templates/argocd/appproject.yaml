@@ -2,6 +2,7 @@
 {{- $hasEphemeral := and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
 {{- if or $hasRelease $hasEphemeral }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
+{{- $localUpperEnvs := include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
 # templates/argocd/appproject.yaml - unifies what used to be two separate hand-applied
 # files updating the SAME AppProject object (tenant-release-argocd-template.yaml creating
 # it, tenant-ephemeral-envs-argocd-template.yaml updating it in place) into one
@@ -20,11 +21,21 @@ metadata:
     platform.io/subcomponent: "argocd"
   namespace: argocd
 spec:
+  {{- /* $releaseDesc: only mentions local upper envs when at least one exists - an app
+  whose upper envs are ALL cluster-mapped (see docs/multi-cluster.md) legitimately has
+  nothing left for THIS cluster's AppProject to describe/authorize for release, which is
+  correct, not a bug (its Application(s) live entirely on another cluster's ArgoCD). */ -}}
+  {{- $releaseDesc := "" }}
+  {{- if gt (len $localUpperEnvs) 0 }}
+    {{- $releaseDesc = printf "Release-stage (%s) deployments for %s" (join ", " $localUpperEnvs) .Values.platformIdentity.appName }}
+  {{- else if $hasRelease }}
+    {{- $releaseDesc = printf "Release-stage deployments for %s (all upper envs are on a different cluster - see docs/multi-cluster.md)" .Values.platformIdentity.appName }}
+  {{- end }}
   description: >-
     {{- if and $hasRelease $hasEphemeral }}
-    Release-stage (staging) and PR-based ephemeral-environment deployments for {{ .Values.platformIdentity.appName }}.
+    {{ $releaseDesc }} and PR-based ephemeral-environment deployments.
     {{- else if $hasRelease }}
-    Release-stage (staging) deployments for {{ .Values.platformIdentity.appName }}, scoped to its own GitOps repo and namespace only.
+    {{ $releaseDesc }}, scoped to its own GitOps repo and namespace only.
     {{- else }}
     PR-based ephemeral-environment deployments for {{ .Values.platformIdentity.appName }}.
     {{- end }}
@@ -36,13 +47,23 @@ spec:
     - {{ .Values.platformIdentity.appRepoUrl }}
     {{- end }}
   destinations:
-    {{- if $hasRelease }}
-    - namespace: {{ include "platform-cicd-app.envNamespace" (list $ "staging") }}
+    {{- /* Cluster-mapped upper envs (docs/multi-cluster.md) get no destination entry
+    here at all - this AppProject only governs what THIS cluster's ArgoCD is allowed to
+    sync, and a cluster-mapped env's Application doesn't live in this cluster's ArgoCD
+    in the first place. Explicit [] fallback (matching clusterResourceWhitelist's own
+    pattern below) rather than an empty key - keeps this a real empty array even when
+    every upper env is cluster-mapped and $hasEphemeral is also false. */ -}}
+    {{- if or (gt (len $localUpperEnvs) 0) $hasEphemeral }}
+    {{- range $localUpperEnvs }}
+    - namespace: {{ include "platform-cicd-app.envNamespace" (list $ .) }}
       server: https://kubernetes.default.svc
     {{- end }}
     {{- if $hasEphemeral }}
     - namespace: {{ include "platform-cicd-app.envNamespace" (list $ "pr-*") }}
       server: https://kubernetes.default.svc
+    {{- end }}
+    {{- else }}
+    []
     {{- end }}
   clusterResourceWhitelist:
     {{- if $hasEphemeral }}

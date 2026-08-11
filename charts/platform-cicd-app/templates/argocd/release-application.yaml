@@ -1,14 +1,25 @@
 {{- if eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "release")) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
-{{- $stagingNamespace := include "platform-cicd-app.envNamespace" (list $ "staging") }}
+{{- $localUpperEnvs := include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
 # templates/argocd/release-application.yaml (from tenant-release-argocd-template.yaml -
 # rendered only if cicd.yaml's pipeline: declares a "release" stage)
+#
+# One Namespace/Application/RBAC set per SAME-CLUSTER upper env
+# (deploy.upperEnvironments entries with no cluster: set - see docs/multi-cluster.md).
+# A cluster-mapped entry gets nothing rendered here at all: its Application manifest is
+# delivered via GitOps instead (open-release-pr.yaml, once Phase D lands) so this
+# cluster's ArgoCD never needs to know about it, and the remote cluster's OWN ArgoCD
+# picks it up from the gitops repo on its own app-of-apps root - never a direct apply
+# from here.
+{{- range $env := $localUpperEnvs }}
+{{- $envNamespace := include "platform-cicd-app.envNamespace" (list $ $env) }}
+---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ $stagingNamespace }}
+  name: {{ $envNamespace }}
   labels:
-    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "argocd"
 ---
 # No pipeline-runner RBAC needed in this namespace, unlike <type>-<app>-<env> for dev -
@@ -22,55 +33,56 @@ metadata:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: {{ .Values.platformIdentity.appName }}-staging
+  name: {{ $.Values.platformIdentity.appName }}-{{ $env }}
   namespace: argocd
   labels:
-    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "argocd"
     platform.io/dora-track: "true"
 spec:
   project: {{ $appNamespace }}
   source:
-    repoURL: {{ .Values.platformIdentity.gitopsRepoUrl }}
+    repoURL: {{ $.Values.platformIdentity.gitopsRepoUrl }}
     targetRevision: main
-    path: {{ .Values.platformIdentity.appName }}/staging
+    path: {{ $.Values.platformIdentity.appName }}/{{ $env }}
   destination:
     server: https://kubernetes.default.svc
-    namespace: {{ $stagingNamespace }}
+    namespace: {{ $envNamespace }}
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
 ---
 # Lets this Application's own pipeline-runner SA (mark-release-pending.yaml) stamp/clear
-# DORA tracking annotations on exactly its own <app-name>-staging Application -
+# DORA tracking annotations on exactly its own <app-name>-<env> Application -
 # resourceNames-scoped. No access to any other Application's ArgoCD Application object,
 # and no access to anything else Application-shaped in argocd at all.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: allow-dora-tracking-{{ .Values.platformIdentity.appName }}
+  name: allow-dora-tracking-{{ $.Values.platformIdentity.appName }}-{{ $env }}
   namespace: argocd
   labels:
-    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "argocd"
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
-    resourceNames: ["{{ .Values.platformIdentity.appName }}-staging"]
+    resourceNames: ["{{ $.Values.platformIdentity.appName }}-{{ $env }}"]
     verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: allow-dora-tracking-{{ .Values.platformIdentity.appName }}
+  name: allow-dora-tracking-{{ $.Values.platformIdentity.appName }}-{{ $env }}
   namespace: argocd
   labels:
-    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "argocd"
-roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-dora-tracking-{{ .Values.platformIdentity.appName }} }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-dora-tracking-{{ $.Values.platformIdentity.appName }}-{{ $env }} }
 subjects:
   - kind: ServiceAccount
     name: pipeline-runner
     namespace: {{ $appNamespace }}
+{{- end }}
 {{- end }}

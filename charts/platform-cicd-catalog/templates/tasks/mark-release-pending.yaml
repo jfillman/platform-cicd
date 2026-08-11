@@ -1,15 +1,21 @@
 # catalog/tasks/mark-release-pending.yaml
 #
 # Stamps tracking annotations on the Application's own ArgoCD Application object
-# (<app-name>-staging, in the argocd namespace) right after open-release-pr successfully
-# opens a promotion PR
-# - the hand-off mechanism the DORA exporter (platform/dora-exporter) reads back to know
-# a release is in flight, and to compute Deployment Frequency / Lead Time / Change
-# Failure Rate / MTTR once ArgoCD actually confirms the sync succeeded or failed. See
-# docs/dora-metrics.md for the full mechanism and why this is annotation-based rather
-# than a CDEvent the exporter subscribes to (status.summary.images, the field that would
-# have made image-based correlation possible, is empty on this ArgoCD install - checked
-# live, not assumed).
+# (<app-name>-<env>, in the argocd namespace) right after open-release-pr successfully
+# opens a promotion PR - the hand-off mechanism the DORA exporter (platform/dora-exporter)
+# reads back to know a release is in flight, and to compute Deployment Frequency / Lead
+# Time / Change Failure Rate / MTTR once ArgoCD actually confirms the sync succeeded or
+# failed. See docs/dora-metrics.md for the full mechanism and why this is
+# annotation-based rather than a CDEvent the exporter subscribes to (status.summary.images,
+# the field that would have made image-based correlation possible, is empty on this
+# ArgoCD install - checked live, not assumed).
+#
+# Same-cluster envs only (no cluster: set in deploy.upperEnvironments, see
+# docs/multi-cluster.md) - this Task's direct kubectl patch assumes the Application
+# object lives on THIS cluster, which is only true for the same-cluster case; a
+# cluster-mapped env's tracking annotations are set a different way instead (via the
+# GitOps-committed Application manifest itself, see open-release-pr.yaml once Phase D
+# lands), never by this Task reaching into a remote cluster's API.
 #
 # platform.io/dora-baseline-started-at matters more than it looks: ArgoCD's own
 # operationState is overwritten by ANY sync, including its unrelated periodic selfHeal
@@ -22,7 +28,7 @@
 # taskRunTemplate) - kubectl here uses the pod's normal in-cluster identity, no projected
 # broker token needed (unlike open-release-pr.yaml's GitHub call). RBAC for this is
 # scoped in charts/platform-cicd-app/templates/argocd/release-application.yaml: get+patch
-# on exactly this Application's own <app-name>-staging Application, resourceNames-scoped,
+# on exactly this Application's own <app-name>-<env> Application, resourceNames-scoped,
 # nothing else.
 apiVersion: tekton.dev/v1
 kind: Task
@@ -40,6 +46,19 @@ spec:
     - name: flow-start-time
       type: string
       description: The flow's original start time (from build's start-flow-root-span), threaded through as the Lead Time start anchor.
+    - name: env
+      type: string
+      default: "staging"
+      description: The upper environment being promoted to - see open-release-pr.yaml's own env param for the full rationale.
+    - name: cluster
+      type: string
+      default: ""
+      description: >-
+        Set only when env is mapped to a different physical cluster (see
+        docs/multi-cluster.md) - when non-empty, this Task is a deliberate no-op:
+        open-release-pr.yaml already embedded the equivalent tracking annotations
+        directly into the GitOps-committed Application manifest for that case, since
+        this Task's own live kubectl patch can't reach a remote cluster's API.
   steps:
     - name: mark-pending
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -51,10 +70,20 @@ spec:
           value: $(params.app-name)
         - name: FLOW_START_TIME
           value: $(params.flow-start-time)
+        - name: ENV
+          value: $(params.env)
+        - name: CLUSTER
+          value: $(params.cluster)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        app="${APP_NAME}-staging"
+
+        if [[ -n "${CLUSTER}" ]]; then
+          echo "[mark-release-pending] env=${ENV} is mapped to cluster=${CLUSTER} - no-op, open-release-pr.yaml already handled tracking annotations via the GitOps-committed Application manifest."
+          exit 0
+        fi
+
+        app="${APP_NAME}-${ENV}"
 
         baseline="$(kubectl get application.argoproj.io "${app}" -n argocd \
           -o jsonpath='{.status.operationState.startedAt}' 2>/dev/null || echo "")"

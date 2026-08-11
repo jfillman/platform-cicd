@@ -1,0 +1,135 @@
+# templates/clusters/argocd-outcome-relay.yaml - see platform/broker/cmd/
+# argocd-outcome-relay/main.go's own header for the full design rationale
+# (docs/multi-cluster.md's Phase E section). Deployed here, in platform-system,
+# alongside the broker itself - a sibling entry point into the same broker, not a new
+# trust domain.
+#
+# RBAC is narrow and enumerated, not a wildcard get-on-all-secrets: resourceNames lists
+# exactly the relay-secret names the currently-registered clusters (.Values.clusters)
+# declare, plus the cluster-registry ConfigMap itself. A cluster added later needs a
+# `helm upgrade` on this chart to pick up its secret name here - acceptable, matches
+# this platform's existing "manual by design" posture for infra-level, operator-driven
+# config (see this chart's own values.yaml, clusters:).
+{{- if .Values.clusters }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-outcome-relay
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "clusters"
+  namespace: platform-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-outcome-relay
+  namespace: platform-system
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "clusters"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cluster-registry"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range .Values.clusters }}
+      - {{ .relaySecretName | quote }}
+      {{- end }}
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-outcome-relay
+  namespace: platform-system
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "clusters"
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: argocd-outcome-relay }
+subjects:
+  - kind: ServiceAccount
+    name: argocd-outcome-relay
+    namespace: platform-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-outcome-relay
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "clusters"
+  namespace: platform-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: argocd-outcome-relay }
+  template:
+    metadata:
+      labels: { app: argocd-outcome-relay }
+    spec:
+      serviceAccountName: argocd-outcome-relay
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532 # distroless "nonroot" - see interceptor.yaml's identical comment for why this is required, not cosmetic
+        seccompProfile: { type: RuntimeDefault }
+      # Audience-bound projected ServiceAccount token, same shape send-cdevent.yaml's
+      # Tekton Tasks already use - re-read from disk on every request (see main.go),
+      # not cached, so kubelet's automatic rotation (well before the 1h expiry below)
+      # just works with no pod restart needed. No github-app-creds mount (an earlier
+      # version of this Deployment had one) - see main.go's own header for why that
+      # entire mechanism was removed, not just refactored.
+      volumes:
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: broker-token
+                  audience: cdevents-broker
+                  expirationSeconds: 3600
+      containers:
+        - name: relay
+          image: ghcr.io/platform-cicd/argocd-outcome-relay:latest
+          imagePullPolicy: IfNotPresent # kind-loaded, not pushed to a real registry - see interceptor.yaml's identical comment
+          ports: [{ containerPort: 8080, name: http }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http, scheme: HTTP }
+          volumeMounts:
+            - name: broker-token
+              mountPath: /var/run/secrets/platform
+              readOnly: true
+          env:
+            - name: CDEVENTS_BROKER_URL
+              value: http://el-cdevents-broker.platform-system.svc.cluster.local:8080
+            - name: DORA_EXPORTER_URL
+              value: http://dora-exporter.platform-system.svc.cluster.local:8080/argocd-outcome
+---
+# NodePort, not ClusterIP - this is the one Service in this platform genuinely called
+# from OUTSIDE the cluster (a different cluster's own outcome-reporting hook Jobs, see
+# docs/multi-cluster.md). Confirmed live (2026-08-10): podman's kind provider puts every
+# kind cluster's node container on one shared bridge network by default, so a fixed
+# NodePort here is reachable from another kind cluster's pods at
+# <this-node-container-ip>:30880 with no Ingress/tunnel needed for this same-host setup -
+# see hack/bootstrap-upper-cluster.sh. A genuinely remote upper cluster would need real
+# ingress/DNS instead, same caveat docs/bootstrap.md already carries for the dev
+# cluster's own PaC webhook endpoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-outcome-relay
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "clusters"
+  namespace: platform-system
+spec:
+  type: NodePort
+  selector: { app: argocd-outcome-relay }
+  ports: [{ name: http, port: 8080, targetPort: http, nodePort: 30880 }]
+{{- end }}

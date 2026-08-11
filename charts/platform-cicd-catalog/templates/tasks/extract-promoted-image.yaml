@@ -1,18 +1,25 @@
 # catalog/tasks/extract-promoted-image.yaml
 #
 # Clones an Application's gitops-repo PR head commit and reads the image reference
-# open-release-pr.yaml's yq patch put into the staging Deployment manifest - the actual
-# image about to be promoted. Used by image-scan-check.yaml (Phase 3 item 8.5); intended
-# for reuse by any future gate that needs "which image is this PR actually promoting"
-# rather than app-repo source (see resolve-app-commit.yaml for the source-code
-# equivalent, used by sast-check.yaml - a deliberately different resolution mechanism,
-# not reused here: this needs the image the manifest points at, not a source checkout).
+# open-release-pr.yaml's yq patch put into the promoted env's Deployment manifest - the
+# actual image about to be promoted. Used by image-scan-check.yaml (Phase 3 item 8.5);
+# intended for reuse by any future gate that needs "which image is this PR actually
+# promoting" rather than app-repo source (see resolve-app-commit.yaml for the
+# source-code equivalent, used by sast-check.yaml - a deliberately different resolution
+# mechanism, not reused here: this needs the image the manifest points at, not a source
+# checkout).
 #
-# Finds the manifest via `find ... -path '*/staging/deployment.yaml'` rather than a
-# hardcoded <app-name>/staging/deployment.yaml path - works regardless of exactly how
-# deep the app's own subdirectory nesting is inside the gitops repo (confirmed live
-# against the real gitops-nodejs-demo-app layout: nodejs-demo-app/staging/deployment.yaml,
-# one level deeper than a naive staging/deployment.yaml guess would have assumed).
+# Finds the manifest via `git diff --name-only HEAD~1` rather than a hardcoded
+# <app-name>/staging/deployment.yaml (or even */staging/deployment.yaml) path - this
+# Task is invoked directly by PaC off the gitops repo's own PR webhook (repo-url/
+# revision only, no env param in that path at all - see docs/multi-cluster.md), so it
+# can't know the env name up front the way release.yaml's own Pipeline now can. What it
+# CAN rely on: open-release-pr.yaml always produces exactly one commit, one file
+# changed (a single surgical yq patch) - so the file HEAD~1..HEAD touched IS the
+# promoted env's manifest, whatever that env is named. Confirmed live against the real
+# gitops-nodejs-demo-app layout: nodejs-demo-app/staging/deployment.yaml, one level
+# deeper than a naive <env>/deployment.yaml guess would have assumed - this generalizes
+# to any depth for the same reason `find`'s glob used to.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -21,7 +28,7 @@ metadata:
     {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
-  description: Clones an Application's gitops-repo PR head commit and reads the promoted image reference from its staging Deployment manifest.
+  description: Clones an Application's gitops-repo PR head commit and reads the promoted image reference from its Deployment manifest.
   params:
     - name: repo-url
       type: string
@@ -48,9 +55,9 @@ spec:
         cd "${workdir}/gitops"
         git checkout --quiet "${REVISION}"
 
-        manifest="$(find . -path '*/staging/deployment.yaml' | head -1)"
+        manifest="$(git diff --name-only HEAD~1 HEAD -- '*/deployment.yaml' | head -1)"
         if [[ -z "${manifest}" ]]; then
-          echo "error: no */staging/deployment.yaml found in ${REPO_URL}@${REVISION}" >&2
+          echo "error: no */deployment.yaml changed between HEAD~1 and ${REVISION} in ${REPO_URL} - expected open-release-pr.yaml's single surgical image-tag commit" >&2
           exit 1
         fi
         image_ref="$(yq -r '.spec.template.spec.containers[0].image' "${manifest}")"

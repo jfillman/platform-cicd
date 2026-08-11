@@ -79,9 +79,12 @@ deploy:
                                  # `env` (below, under pipelines:) MUST appear in this
                                  # list or upperEnvironments, or validate-cicd-config
                                  # rejects the flow before anything runs.
-  upperEnvironments: []          # Optional, default []. Same mechanism as above; the
-                                 # lower/upper split itself has no behavioral
-                                 # difference today - reserved for multi-cluster work.
+  upperEnvironments: []          # Optional, default []. Which upper (release-stage)
+                                 # envs this app has - a release step's `env` (below,
+                                 # under pipelines:) MUST appear here. Each entry is
+                                 # either a plain name (same-cluster, e.g. "staging") or
+                                 # {name, cluster} if that env is hosted on a different
+                                 # physical cluster - see docs/multi-cluster.md.
   strategy: deployment            # Optional, default "deployment". "rollout" (Argo
                                  # Rollouts canary/blue-green) is accepted but has
                                  # NO EFFECT YET - every deploy is a plain Deployment
@@ -183,9 +186,12 @@ pipelines:
                                    # targets/exercises.
         suite: integration        # Only meaningful on a test step - see the test:
                                    # block above.
-        cluster: prod-cluster     # Only valid on a release step. Accepted, schema-
-                                   # validated, but has NO EFFECT YET - reserved for
-                                   # multi-cluster work.
+        cluster: prod-cluster     # Only valid on a release step. Optional - only set
+                                   # this if you want an explicit consistency check
+                                   # against deploy.upperEnvironments' own mapping for
+                                   # this env (they must agree); normally the cluster
+                                   # resolves from there and this can be omitted. See
+                                   # docs/multi-cluster.md.
         name: my-label            # Optional free-text label, passed through to the
                                    # generated PipelineRun's params. Cosmetic today.
 ```
@@ -314,14 +320,19 @@ deploy:
 ```
 
 `lowerEnvironments`/`upperEnvironments` aren't the thing that decides where a flow
-deploys - that's each `deploy`/`release` step's own `env:` under `pipelines:` (below).
-This list is what actually provisions RBAC for those namespaces (one `Role`/
-`RoleBinding` granting `pipeline-runner` access per listed env) - a step's `env` must
-appear here or `validate-cicd-config` now rejects it before anything runs, rather than
-failing later with a bare `Forbidden` deep inside the deploy Task. The lower/upper split
-itself has no behavioral difference today beyond being two lists concatenated together -
-it's there for future multi-cluster work, where lower/upper is expected to matter for
-which cluster an environment lives on.
+deploys - that's each `deploy`/`release` step's own `env:` under `pipelines:` (below). A
+`deploy` step's `env` must appear in `lowerEnvironments` or `upperEnvironments`, and a
+`release` step's `env` must appear in `upperEnvironments` specifically - either is a
+`validate-cicd-config` rejection before anything runs, rather than failing later (a bare
+`Forbidden` deep inside the deploy Task, in the deploy case).
+
+For `deploy`, this list only provisions RBAC (one `Role`/`RoleBinding` granting
+`pipeline-runner` access per listed env) - `deploy` always stays on this cluster. For
+`release`, an `upperEnvironments` entry can additionally be `{name, cluster}` instead of
+a plain string, naming a different physical cluster that env's ArgoCD Application
+actually lives on (resolved against the control-plane chart's own cluster registry) -
+see [multi-cluster.md](../multi-cluster.md) for the full mechanism, including how the
+release PR delivery and ArgoCD feedback path differ for a cluster-mapped env.
 
 ## Multi-stage pipeline flows
 

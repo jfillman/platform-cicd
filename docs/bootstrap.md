@@ -1,5 +1,10 @@
 # Bootstrap
 
+This covers the dev cluster only. Upper-env clusters (staging/prod-tier, where release
+promotions actually land) are a separate bootstrap - see
+[hack/bootstrap-upper-cluster.sh](../hack/bootstrap-upper-cluster.sh) and
+[multi-cluster.md](multi-cluster.md).
+
 `hack/bootstrap.sh` targets the existing shared `kind-observe` dev cluster rather than
 creating a dedicated one. It installs only what's genuinely missing there (Tekton
 Pipelines/Triggers/Pipelines-as-Code, External Secrets Operator, the shared catalog, the

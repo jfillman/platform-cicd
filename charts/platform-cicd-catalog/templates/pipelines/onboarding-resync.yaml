@@ -18,6 +18,8 @@ spec:
       type: string
     - name: app-name
       type: string
+    - name: app-type
+      type: string
     - name: github-owner
       type: string
     - name: gitops-repo-url
@@ -35,5 +37,6 @@ spec:
         - { name: git-url, value: $(params.git-url) }
         - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
+        - { name: app-type, value: $(params.app-type) }
         - { name: github-owner, value: $(params.github-owner) }
         - { name: gitops-repo-url, value: $(params.gitops-repo-url) }

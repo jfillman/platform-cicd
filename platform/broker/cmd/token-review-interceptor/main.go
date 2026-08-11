@@ -15,11 +15,14 @@
 // app-isolation boundary on this shared broker - see docs/chaining.md.
 //
 // This service also mints scoped GitHub App installation tokens for the release stage's
-// GitOps PR flow (see github_app.go and handleGitHubInstallationToken below) - a scope
-// extension of this same trusted, TokenReview-authenticated component rather than a new
-// service, since the alternative (copying the App's private key into every Application
-// namespace) would let one compromised Application's Task mint tokens for every other
-// Application's repos. See docs/release.md.
+// GitOps PR flow (see ../../internal/githubapp and handleGitHubInstallationToken below) -
+// a scope extension of this same trusted, TokenReview-authenticated component rather
+// than a new service, since the alternative (copying the App's private key into every
+// Application namespace) would let one compromised Application's Task mint tokens for
+// every other Application's repos. See docs/release.md. The GitHub App client itself
+// (JWT signing + installation-token minting) moved into internal/githubapp so
+// cmd/argocd-outcome-relay can share it - that service needs the same credential for a
+// different reason, see its own main.go header.
 //
 // NOTE: the request/response JSON shape below mirrors the documented Tekton Triggers
 // ClusterInterceptor webhook contract (InterceptorRequest/InterceptorResponse). Re-
@@ -34,6 +37,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/platform-cicd/broker/token-review-interceptor/internal/githubapp"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -114,7 +119,7 @@ func main() {
 	// Loaded once at startup, not lazily per-request: fail fast and loudly if the
 	// github-app-creds volume isn't mounted correctly, rather than only discovering it
 	// on the first release PR attempt.
-	appCreds, err := loadGitHubAppCreds()
+	appCreds, err := githubapp.LoadCreds()
 	if err != nil {
 		log.Fatalf("loading GitHub App credentials: %v", err)
 	}
@@ -217,7 +222,7 @@ type githubInstallationTokenResponse struct {
 // matches the requested repo. Deliberately narrow (list, not any write verb) RBAC on
 // repositories.pipelinesascode.tekton.dev is all this needs from its own
 // ServiceAccount.
-func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dynamic.Interface, appCreds *githubAppCreds) http.HandlerFunc {
+func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dynamic.Interface, appCreds *githubapp.Creds) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -247,19 +252,19 @@ func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dyn
 			return
 		}
 
-		appJWT, err := appCreds.signAppJWT()
+		appJWT, err := appCreds.SignAppJWT()
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: "signing App JWT: " + err.Error()})
 			return
 		}
-		installationID, err := installationIDForRepo(appJWT, body.Owner, body.Repo)
+		installationID, err := githubapp.InstallationIDForRepo(appJWT, body.Owner, body.Repo)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: err.Error()})
 			return
 		}
-		instToken, expiresAt, err := mintInstallationToken(appJWT, installationID, body.Repo)
+		instToken, expiresAt, err := githubapp.MintInstallationToken(appJWT, installationID, body.Repo)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(githubInstallationTokenResponse{Error: err.Error()})

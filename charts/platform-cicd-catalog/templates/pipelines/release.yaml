@@ -3,14 +3,15 @@
 # Fourth stage of the flow, and the last automated one. Fired by the shared broker on
 # the deploy Pipeline's dev.cdevents.service.deployed event (previously unconsumed).
 # Opens a PR against the Application's GitOps repo promoting the already-built image to
-# staging - see catalog/tasks/open-release-pr.yaml and docs/release.md for the full
-# GitOps-PR-promotion design, ported from a real prior production pattern.
+# whichever upper env this release step declared (env:, e.g. "staging" - see
+# docs/multi-cluster.md) - see catalog/tasks/open-release-pr.yaml and docs/release.md
+# for the full GitOps-PR-promotion design, ported from a real prior production pattern.
 #
 # Deliberately does NOT deploy anything itself, and does NOT run governance checks
 # inline - governance (sast/image-scan/policy-check/sbom) now runs as independent,
 # individually-required GitHub Checks triggered by the PR itself (see the gitops repo's
 # own .tekton/pull_request-*.yaml files, reusing the same governance-gate-stub Task).
-# ArgoCD is the only thing that ever touches the staging cluster for this tier, and only
+# ArgoCD is the only thing that ever touches that env's cluster for this tier, and only
 # once a human has approved the PR per that repo's branch protection rule - see
 # docs/release.md.
 #
@@ -63,6 +64,14 @@ spec:
       type: string
     - name: app-name
       type: string
+    - name: app-type
+      type: string
+      description: >-
+        platformIdentity.type ("app"/"infra"/...) - only used for the cluster-mapped
+        case (open-release-pr.yaml's GitOps-delivered Application manifest needs it to
+        construct <app-type>-<app-name>-<env>, matching deploy.yaml's own identical
+        convention - see docs/concepts.md). Already threaded through by
+        flow-triggers.yaml for every stage; this Pipeline just didn't declare it before.
     - name: flow-traceparent
       type: string
       default: ""
@@ -83,6 +92,21 @@ spec:
         service.deployed event (itself forwarded from test originally, or freshly read
         if deploy was git-rooted). "{}" for a git-rooted release - resolve-notify-config
         reads cicd.yaml itself instead. See resolve-notify-config.yaml.
+    - name: env
+      type: string
+      default: "staging"
+      description: >-
+        The upper environment being promoted to (this release step's own cicd.yaml
+        env:, already validated against deploy.upperEnvironments by validateFlows).
+        Already threaded through unconditionally by flow-triggers.yaml/
+        deliver-onboarding-files.yaml for every stage - this Pipeline just didn't
+        declare (or use) it before. See docs/multi-cluster.md.
+    - name: cluster
+      type: string
+      default: ""
+      description: >-
+        Name of a cluster-registry entry (docs/multi-cluster.md), set only when env is
+        mapped to a different physical cluster. Empty for the common same-cluster case.
   workspaces:
     - name: source
       optional: true
@@ -189,6 +213,12 @@ spec:
         - { name: git-url, value: $(params.git-url) }
         - { name: app-name, value: $(params.app-name) }
         - { name: git-revision, value: $(params.git-revision) }
+        - { name: env, value: $(params.env) }
+        - { name: cluster, value: $(params.cluster) }
+        - { name: app-namespace, value: $(params.app-namespace) }
+        - { name: app-type, value: $(params.app-type) }
+        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        - { name: config-json, value: $(tasks.resolve-notify-config.results.config-json) }
 
     # Hands off to the DORA exporter (platform/dora-exporter) - only runs if
     # open-release-pr actually succeeded (standard Tekton DAG failure propagation, no
@@ -207,6 +237,8 @@ spec:
         - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-name, value: $(params.app-name) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        - { name: env, value: $(params.env) }
+        - { name: cluster, value: $(params.cluster) }
 
   finally:
     - name: end-release-stage-span

@@ -1,22 +1,36 @@
 // platform/dora-exporter/cmd/dora-exporter/main.go
 //
-// Watches ArgoCD Application objects (applications.argoproj.io, in the argocd
-// namespace, filtered to platform.io/dora-track=true) for confirmed terminal sync
-// outcomes, and turns them into the four DORA metrics. See docs/dora-metrics.md for the
-// full mechanism and why this watches ArgoCD directly instead of subscribing to the
-// CDEvents broker like the original architecture plan assumed: CDEvents can currently
-// only tell us a release PR was opened, not whether it was ever merged or whether
-// ArgoCD's sync of it actually succeeded - both of which every one of these metrics
-// needs. This deliberately does NOT touch catalog/lib/cdevents.sh or send-cdevent.yaml,
-// the shared library every pipeline stage's finally block depends on for real chaining -
-// a metrics feature has no business adding risk to that path.
+// Two input paths feeding the same four DORA metrics, not one:
 //
-// Correlation with a specific release attempt happens via annotations the release
-// Pipeline stamps directly onto its own Application's ArgoCD Application object
-// (catalog/tasks/mark-release-pending.yaml), read back here off the same object this
-// service is already watching - not a separate datastore, not image/revision matching
-// (status.summary.images is empty on this ArgoCD install - checked live before this was
-// designed, see docs/dora-metrics.md).
+//  1. Same-cluster envs (no cluster: in deploy.upperEnvironments): watches ArgoCD
+//     Application objects directly (applications.argoproj.io, in the argocd
+//     namespace, filtered to platform.io/dora-track=true) for confirmed terminal sync
+//     outcomes - unchanged since this service's original design. See
+//     docs/dora-metrics.md for the full mechanism and why this watches ArgoCD
+//     directly instead of subscribing to the CDEvents broker like the original
+//     architecture plan assumed.
+//  2. Cluster-mapped envs (Phase 3 item 4, docs/multi-cluster.md): a small HTTP
+//     endpoint (/argocd-outcome) that platform/broker/cmd/argocd-outcome-relay calls
+//     directly once an upper cluster's ArgoCD confirms a real outcome - this service
+//     has no live API access to a remote cluster's Application object, so there's
+//     nothing to watch there. NOT a replacement for path 1 - same-cluster
+//     Applications still live in THIS cluster's argocd namespace and the informer is
+//     still the right tool for them.
+//
+// Both paths funnel into the same recordOutcome() - the actual metric-recording logic
+// doesn't care which path it came from. What's genuinely different: path 1 can (and
+// does) patch a "last failure time" annotation back onto the live Application object
+// for later MTTR correlation; path 2 has no such object to patch (same "no direct API
+// access to a remote cluster" principle as everywhere else in this feature - see
+// mark-release-pending.yaml), so MTTR is a known, deliberate gap for cluster-mapped
+// apps in this pass, not silently dropped - see recordOutcome's own comment.
+//
+// Correlation with a specific release attempt happens via the platform.io/dora-*
+// annotations the release Pipeline stamps directly onto the Application object
+// (catalog/tasks/mark-release-pending.yaml for path 1, open-release-pr.yaml's
+// GitOps-committed manifest for path 2) - not a separate datastore, not image/revision
+// matching (status.summary.images is empty on this ArgoCD install - checked live
+// before this was designed, see docs/dora-metrics.md).
 //
 // Same dynamic-client + GVR pattern platform/broker/cmd/token-review-interceptor/main.go
 // already uses for the pipelinesascode.tekton.dev Repository CRD - proven in this exact
@@ -27,6 +41,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -142,7 +157,55 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/argocd-outcome", handleArgoCDOutcome)
+	log.Println("dora-exporter: listening on :8080 (/metrics, /argocd-outcome)")
 	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+// argocdOutcomeRequest mirrors argocd-outcome-relay's own outcomeRequest shape (the
+// relay forwards close to what it itself received, adding nothing dora-exporter-
+// specific) - see platform/broker/cmd/argocd-outcome-relay/main.go.
+type argocdOutcomeRequest struct {
+	AppNamespace  string `json:"appNamespace"`
+	AppName       string `json:"appName"`
+	Phase         string `json:"phase"`
+	FinishedAt    string `json:"finishedAt"`
+	FlowStartTime string `json:"flowStartTime"`
+}
+
+// handleArgoCDOutcome is path 2 from this file's own header - no informer, no
+// annotation patch-back (nothing to patch on a cluster this service has no API access
+// to), just the same terminal-phase metric recording the informer path already does.
+// Trusts its caller (argocd-outcome-relay, an in-cluster peer in platform-system) -
+// this endpoint isn't independently authenticated; the relay is the trust boundary
+// for this whole path, same as it is for the broker forward - see that service's own
+// header for the reasoning.
+func handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req argocdOutcomeRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.AppNamespace == "" || req.AppName == "" || req.Phase == "" {
+		http.Error(w, "appNamespace, appName, and phase are required", http.StatusBadRequest)
+		return
+	}
+	if !isTerminalPhase(req.Phase) {
+		w.WriteHeader(http.StatusAccepted) // not an error - just nothing to record yet
+		return
+	}
+	finishedAt, err := parseTime(req.FinishedAt)
+	if err != nil {
+		http.Error(w, "unparseable finishedAt", http.StatusBadRequest)
+		return
+	}
+	recordOutcome(req.AppNamespace, req.AppName, req.Phase, finishedAt, req.FlowStartTime, "" /* no lastFailureTime source - see this file's header */)
+	log.Printf("dora-exporter: %s/%s: recorded %s via /argocd-outcome (cluster-mapped env)", req.AppNamespace, req.AppName, req.Phase)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // reconcile implements the annotation-based hand-off described in
@@ -194,38 +257,57 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructur
 	appName := annos[annoApp]
 
 	patch := map[string]interface{}{annoPending: nil} // JSON merge patch: null removes the key
+	lastFailureCleared := recordOutcome(appNamespace, appName, phase, finishedAt, annos[annoFlowStartTime], annos[annoLastFailureTime])
+	if phase == "Succeeded" && lastFailureCleared {
+		patch[annoLastFailureTime] = nil
+	} else if phase == "Failed" || phase == "Error" {
+		patch[annoLastFailureTime] = finishedAt.Format(time.RFC3339)
+	}
+	log.Printf("dora-exporter: %s/%s: confirmed %s via informer (same-cluster env)", app.GetNamespace(), app.GetName(), phase)
 
+	if err := patchAnnotations(ctx, dynClient, app.GetNamespace(), app.GetName(), patch); err != nil {
+		log.Printf("dora-exporter: %s/%s: failed to clear tracking annotations: %v", app.GetNamespace(), app.GetName(), err)
+	}
+}
+
+// recordOutcome is the one piece of actual DORA business logic, shared by both input
+// paths described in this file's own header. lastFailureTimeStr is only ever non-empty
+// on the informer path (path 1) - path 2 always passes "", which simply means an
+// eventual success for a cluster-mapped app never produces an MTTR sample (returns
+// false so the informer-only caller knows there was nothing to clear) - a known,
+// deliberate gap (this file's header), not a silent one: there's no live Application
+// object on a remote cluster for this service to persist "last failure time" onto
+// between separate HTTP calls, and an in-memory map would be wrong the moment this
+// Deployment runs more than one replica or restarts - not worth that fragility for a
+// best-effort, already-`_experimental` metric. Returns whether a prior failure was
+// found and consumed (path 1 uses this to decide whether to clear its own annotation).
+func recordOutcome(appNamespace, appName, phase string, finishedAt time.Time, flowStartTimeStr, lastFailureTimeStr string) bool {
 	switch phase {
 	case "Succeeded":
 		releasesTotal.WithLabelValues(appNamespace, appName, "succeeded").Inc()
 		deploymentsTotal.WithLabelValues(appNamespace, appName).Inc()
 
-		if flowStart, err := parseTime(annos[annoFlowStartTime]); err == nil {
+		if flowStart, err := parseTime(flowStartTimeStr); err == nil {
 			leadTimeSeconds.WithLabelValues(appNamespace, appName).Observe(finishedAt.Sub(flowStart).Seconds())
 		} else {
-			log.Printf("dora-exporter: %s/%s: unparseable %s %q, skipping lead-time sample", app.GetNamespace(), app.GetName(), annoFlowStartTime, annos[annoFlowStartTime])
+			log.Printf("dora-exporter: %s/%s: unparseable flow-start-time %q, skipping lead-time sample", appNamespace, appName, flowStartTimeStr)
 		}
 
-		if lastFailureStr := annos[annoLastFailureTime]; lastFailureStr != "" {
-			if lastFailure, err := parseTime(lastFailureStr); err == nil {
+		if lastFailureTimeStr != "" {
+			if lastFailure, err := parseTime(lastFailureTimeStr); err == nil {
 				if mttr := finishedAt.Sub(lastFailure).Seconds(); mttr > 0 {
 					timeToRestoreSecondsExperimental.WithLabelValues(appNamespace, appName).Observe(mttr)
 				}
 			}
-			patch[annoLastFailureTime] = nil
+			return true
 		}
-
-		log.Printf("dora-exporter: %s/%s: confirmed Succeeded, recorded deployment + lead time", app.GetNamespace(), app.GetName())
+		return false
 
 	case "Failed", "Error":
 		releasesTotal.WithLabelValues(appNamespace, appName, "failed").Inc()
-		patch[annoLastFailureTime] = finishedAt.Format(time.RFC3339)
-		log.Printf("dora-exporter: %s/%s: confirmed %s, recorded release failure", app.GetNamespace(), app.GetName(), phase)
+		return false
 	}
-
-	if err := patchAnnotations(ctx, dynClient, app.GetNamespace(), app.GetName(), patch); err != nil {
-		log.Printf("dora-exporter: %s/%s: failed to clear tracking annotations: %v", app.GetNamespace(), app.GetName(), err)
-	}
+	return false
 }
 
 func isTerminalPhase(phase string) bool {

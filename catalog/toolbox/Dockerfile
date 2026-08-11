@@ -105,7 +105,12 @@ COPY --from=yajsv-build /go/bin/yajsv /usr/local/bin/yajsv
 COPY catalog/lib/otel.sh /opt/platform/lib/otel.sh
 COPY catalog/lib/cdevents.sh /opt/platform/lib/cdevents.sh
 COPY catalog/lib/github-app.sh /opt/platform/lib/github-app.sh
+COPY catalog/lib/argocd-outcome-hook.sh /opt/platform/lib/argocd-outcome-hook.sh
 COPY catalog/lib/build-agents.env /opt/platform/lib/build-agents.env
+# Executed directly as a Job command (ArgoCD PostSync/SyncFail hook), unlike the other
+# lib/*.sh files above, which are only ever `source`d - git's own executable bit should
+# survive COPY, but set it explicitly rather than depend on that.
+RUN chmod +x /opt/platform/lib/argocd-outcome-hook.sh
 COPY schemas/cicd.schema.json /opt/platform/schemas/cicd.schema.json
 
 # Onboarding boilerplate (Phase 3 item 7's PaC-delivery mechanism - see

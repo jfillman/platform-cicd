@@ -86,8 +86,22 @@
         },
         "upperEnvironments": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": []
+          "items": {
+            "oneOf": [
+              { "type": "string", "description": "Same-cluster upper env (today's default/only behavior) - RBAC is provisioned into a same-cluster namespace exactly like a lowerEnvironments entry." },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "cluster"],
+                "properties": {
+                  "name": { "type": "string", "description": "The env name release steps refer to via their own env: field, e.g. \"staging\"." },
+                  "cluster": { "type": "string", "description": "Name of an entry in the control-plane chart's clusters: registry (see docs/multi-cluster.md) - the physical cluster this env's ArgoCD Application actually lives on. Setting this means no same-cluster RBAC is provisioned for this env (there's no local namespace for it) and release promotions for it go through the GitOps app-of-apps delivery path instead of a direct in-cluster apply." }
+                }
+              }
+            ]
+          },
+          "default": [],
+          "description": "Which upper (release-stage) environments this app has, and optionally which cluster each one lives on. A release step's env: must name one of these; if that entry is the object form, the step's own optional cluster: (if set) must agree with it. See docs/multi-cluster.md."
         },
         "strategy": {
           "type": "string",

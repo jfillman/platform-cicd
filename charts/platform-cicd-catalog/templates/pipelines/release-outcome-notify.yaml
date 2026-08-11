@@ -1,0 +1,65 @@
+# catalog/pipelines/release-outcome-notify.yaml (Phase 3 item 4, docs/multi-cluster.md)
+#
+# The downstream consumer of the environment.deployed CDEvent the argocd-outcome-relay
+# forwards (platform/broker/cmd/argocd-outcome-relay) once a cluster-mapped release
+# actually confirms success/failure on its own upper-env cluster - this is what "closes
+# the loop" in a way a human notices, not just a CDEvent landing unseen. Deliberately
+# thin: one Task, reusing notify-slack.yaml as-is rather than duplicating its message
+# formatting. No resolve-notify-config/clone/workspace needed here (unlike
+# deploy.yaml/release.yaml) - config-json arrives pre-resolved, riding the
+# platform.io/dora-config-json annotation open-release-pr.yaml already embedded in the
+# GitOps-delivered Application manifest at PR-open time (this Pipeline's own run
+# already validated it once; no reason to clone and re-derive it a second time here).
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: release-outcome-notify
+  labels:
+    {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
+    platform.io/catalog: "true"
+spec:
+  params:
+    - name: app-namespace
+      type: string
+    - name: app-name
+      type: string
+    - name: env
+      type: string
+    - name: cluster
+      type: string
+    - name: status
+      type: string
+      description: "Succeeded or Failed - mapped from ArgoCD's own operationState.phase by the Trigger's own CEL/binding, see the app chart's release-outcome-trigger.yaml."
+    - name: git-url
+      type: string
+      default: ""
+    - name: git-revision
+      type: string
+      default: ""
+    - name: config-json
+      type: string
+      default: "{}"
+  tasks:
+    - name: notify
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: notify-slack }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: config-json, value: $(params.config-json) }
+        # A dedicated stage-name, not "release" - reusing that label would read as
+        # "the release Pipeline itself ran again", which is misleading (this
+        # PipelineRun never opens a PR or touches an image; it only relays a
+        # confirmation). notify-slack.yaml's own stage_display switch falls back to
+        # printing the raw value verbatim for anything it doesn't recognize - already
+        # exercised by every OTHER stage name, no change needed there.
+        - { name: stage-name, value: "release-outcome" }
+        - { name: status, value: $(params.status) }
+        - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+        - { name: app-namespace, value: $(params.app-namespace) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
+        - { name: env, value: $(params.env) }

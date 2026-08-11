@@ -31,6 +31,15 @@ spec:
       type: string
     - name: app-name
       type: string
+    - name: app-type
+      type: string
+      description: >-
+        platformIdentity.type ("app"/"infra"/...) - forwarded into each generated
+        git-rooted PipelineRun's own app-type param (deploy.yaml/release.yaml both
+        need it - see docs/concepts.md). A real, pre-existing gap this closes: this
+        Task never threaded app-type through at all before, for ANY stage, so a
+        git-rooted deploy or cluster-mapped release would have hit a missing-required-
+        param admission error the first time either was actually tried.
     - name: github-owner
       type: string
     - name: gitops-repo-url
@@ -90,6 +99,8 @@ spec:
           value: $(params.app-namespace)
         - name: APP_NAME
           value: $(params.app-name)
+        - name: APP_TYPE
+          value: $(params.app-type)
         - name: GITHUB_OWNER
           value: $(params.github-owner)
         - name: GITOPS_REPO_URL
@@ -120,6 +131,7 @@ spec:
         sed \
           -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
           -e "s|<APP_NAME>|${APP_NAME}|g" \
+          -e "s|<APP_TYPE>|${APP_TYPE}|g" \
           -e "s|<GITHUB_OWNER>|${GITHUB_OWNER}|g" \
           -e "s|<GITOPS_REPO_URL>|${GITOPS_REPO_URL}|g" \
           "/opt/platform/onboarding-templates/app-repo/onboarding-resync.yaml" > ".tekton/onboarding-resync.yaml"
@@ -314,6 +326,7 @@ spec:
             - { name: image-repo, value: "${effective_image_repo}" }
             - { name: app-namespace, value: "${APP_NAMESPACE}" }
             - { name: app-name, value: "${APP_NAME}" }
+            - { name: app-type, value: "${APP_TYPE}" }
         ${tag_param_line}${root_param_lines}
           workspaces:
             - name: source
