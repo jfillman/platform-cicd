@@ -23,7 +23,7 @@ metadata:
   annotations:
     # See pull-request-sast.yaml's own annotation comment for why this is on-cel-expression
     # (release-branch-only) rather than on-event/on-target-branch.
-    pipelinesascode.tekton.dev/on-cel-expression: 'body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
+    pipelinesascode.tekton.dev/on-cel-expression: 'body.action == "opened" && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:

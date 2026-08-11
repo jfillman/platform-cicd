@@ -35,7 +35,19 @@ metadata:
     # this, every onboarding-resync PR failed these checks for a real but irrelevant
     # reason (scanning/verifying whatever placeholder or stale image happened to already
     # be in staging/deployment.yaml).
-    pipelinesascode.tekton.dev/on-cel-expression: 'body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
+    #
+    # body.action == "opened" (added 2026-08-11, real bug found live): open-release-pr.yaml
+    # pushes a release-* branch, opens the PR, THEN pushes a second commit (the
+    # outcome-reporting hooks, which need the PR's own URL - see docs/multi-cluster.md) -
+    # that second push is a genuine GitHub "synchronize" event on the same still-open PR.
+    # Without this clause these 4 checks fired a SECOND time for it, doubling every real
+    # run and posting duplicate PR comments - confirmed live, all 4 checks ran twice for
+    # one real release PR. Safe to restrict to "opened" only: nothing but open-release-pr.yaml
+    # ever pushes to a release-* branch, and neither the promoted image (fixed in the
+    # first commit) nor the app-repo commit these checks verify (named via the X-App-Repo/
+    # X-App-Commit trailers on the FIRST commit's own message) changes in the second one -
+    # re-running against it would just re-verify the identical thing.
+    pipelinesascode.tekton.dev/on-cel-expression: 'body.action == "opened" && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:
