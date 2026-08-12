@@ -24,6 +24,17 @@
 # verification Tasks (verify-sast-attestation/image-scan/verify-commit-signature/
 # verify-image-provenance/generate-sbom), which would mean five separate schema changes
 # for the same information already sitting in each Task's own pod log.
+#
+# Edits an existing comment in place (via a hidden `<!-- platform-cicd:gate:<name> -->`
+# marker) instead of always posting a new one - 2026-08-12, paired with removing the
+# `body.action == "opened"` restriction from each gate's own pull-request-*.yaml
+# trigger (see that file's own header for the full history: that restriction avoided
+# duplicate comments by suppressing re-verification entirely on a release PR's second
+# commit, which meant a commit after the first was never actually re-checked - a real
+# gap, not just cosmetic, confirmed live: GitHub reports zero Check Runs for a PR's
+# actual current HEAD when only the first commit was ever verified). Now every commit
+# gets fully, independently re-verified (a real Check Run each time); this dedup is
+# what keeps that from spamming N appended comments for unchanged outcomes.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -156,6 +167,13 @@ spec:
             "${GATE_NAME}" "${log_excerpt}" "${recommendation}" "${GATE_NAME}")"
         fi
 
+        # Hidden marker identifying which gate this comment belongs to - not visible in
+        # GitHub's rendered markdown (an HTML comment), used below purely to find this
+        # same gate's own prior comment on a later run and edit it in place, rather
+        # than always appending a new one.
+        marker="<!-- platform-cicd:gate:${GATE_NAME} -->"
+        body="${marker}"$'\n'"${body}"
+
         # Response captured, not streamed straight to stdout - a real bug found live:
         # GitHub's create-comment response is a full comment object (~4KB, nested user/
         # GitHub-App fields), unlike the tiny webhook acks notify-slack.yaml/
@@ -165,8 +183,26 @@ spec:
         # codebase's own existing convention of capturing any LARGE API response via
         # $(...) (open-release-pr.yaml's pr_response, detect-bypass-merge.yaml's
         # pr_json/checks_json) rather than letting it stream raw.
-        comment_response="$(curl --fail --silent --show-error --max-time 10 \
-          -X POST -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/repos/${owner}/${repo}/issues/${PR_NUMBER}/comments" \
-          -d "$(jq -n --arg body "${body}" '{body: $body}')")"
-        echo "posted PR comment: $(jq -r '.html_url' <<<"${comment_response}")"
+        #
+        # Look for this gate's own prior comment on this PR (paginated - up to 100 is
+        # comfortably more than any real PR's comment count) before deciding whether to
+        # PATCH (edit in place) or POST (first time this gate has ever reported on this
+        # PR).
+        existing_comment_id="$(curl --fail --silent --show-error --max-time 10 \
+          -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/${owner}/${repo}/issues/${PR_NUMBER}/comments?per_page=100" \
+          | jq -r --arg marker "${marker}" '[.[] | select(.body | startswith($marker))][0].id // empty')"
+
+        if [[ -n "${existing_comment_id}" ]]; then
+          comment_response="$(curl --fail --silent --show-error --max-time 10 \
+            -X PATCH -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${owner}/${repo}/issues/comments/${existing_comment_id}" \
+            -d "$(jq -n --arg body "${body}" '{body: $body}')")"
+          echo "updated existing PR comment: $(jq -r '.html_url' <<<"${comment_response}")"
+        else
+          comment_response="$(curl --fail --silent --show-error --max-time 10 \
+            -X POST -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${owner}/${repo}/issues/${PR_NUMBER}/comments" \
+            -d "$(jq -n --arg body "${body}" '{body: $body}')")"
+          echo "posted new PR comment: $(jq -r '.html_url' <<<"${comment_response}")"
+        fi

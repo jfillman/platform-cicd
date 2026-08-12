@@ -36,18 +36,23 @@ metadata:
     # reason (scanning/verifying whatever placeholder or stale image happened to already
     # be in staging/deployment.yaml).
     #
-    # body.action == "opened" (added 2026-08-11, real bug found live): open-release-pr.yaml
-    # pushes a release-* branch, opens the PR, THEN pushes a second commit (the
-    # outcome-reporting hooks, which need the PR's own URL - see docs/multi-cluster.md) -
-    # that second push is a genuine GitHub "synchronize" event on the same still-open PR.
-    # Without this clause these 4 checks fired a SECOND time for it, doubling every real
-    # run and posting duplicate PR comments - confirmed live, all 4 checks ran twice for
-    # one real release PR. Safe to restrict to "opened" only: nothing but open-release-pr.yaml
-    # ever pushes to a release-* branch, and neither the promoted image (fixed in the
-    # first commit) nor the app-repo commit these checks verify (named via the X-App-Repo/
-    # X-App-Commit trailers on the FIRST commit's own message) changes in the second one -
-    # re-running against it would just re-verify the identical thing.
-    pipelinesascode.tekton.dev/on-cel-expression: 'body.action == "opened" && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
+    # NOT restricted to body.action == "opened" - deliberately reverted 2026-08-12
+    # (was added 2026-08-11 after open-release-pr.yaml's own second commit, the
+    # outcome-reporting hooks push, doubled every one of these 4 checks and posted
+    # duplicate PR comments). That restriction fixed the duplicate-comment symptom by
+    # suppressing re-verification entirely - which also meant a commit landing AFTER
+    # the first one was never independently checked again. Confirmed live this is a
+    # real, not just theoretical, gap: GitHub reports zero Check Runs for a PR's actual
+    # current HEAD when only its first commit was ever verified, and the PR's own
+    # `mergeable_state` came back "unstable" rather than a hard block. Every commit
+    # (including a legitimate second one from open-release-pr.yaml, or any other)
+    # now gets a real, independent Check Run again. The original duplicate-comment
+    # symptom is fixed the right way instead - catalog/tasks/
+    # comment-pr-check-result.yaml now edits its own prior comment on this PR in place
+    # (a hidden marker identifies which gate's comment is which) rather than always
+    # appending a new one, so re-verifying an unchanged commit updates the existing
+    # comment instead of spamming a duplicate.
+    pipelinesascode.tekton.dev/on-cel-expression: 'body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:
