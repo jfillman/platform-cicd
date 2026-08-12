@@ -8,9 +8,20 @@ toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
 # This platform's own repo - the tenant-onboarding ApplicationSet (templates/argocd/
 # tenant-onboarding-applicationset.yaml) reads tenants/*.yaml from here (its generator
-# source) AND uses it as every generated Application's own chart source
-# (charts/platform-cicd-app). One value rather than hardcoded twice in that template.
+# source). The chart itself is pulled from an OCI registry instead (see
+# platformChartOciRepo below), not rendered straight from this repo.
 platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
+
+# Where .github/workflows/app-chart-ci.yaml's `publish` job pushes charts/
+# platform-cicd-app on every push to main - see that job's own header for why this is a
+# deliberately lightweight, ungated publish (no version review, no promotion gate) and
+# the flagged follow-up to build a real release process for all this platform's charts.
+# targetRevision "*" auto-tracks whatever was published most recently - see
+# tenant-onboarding-applicationset.yaml's own header for the live-verified reasoning
+# behind the version format this depends on.
+platformChartOciRepo: oci://ghcr.io/jfillman/charts
+platformChartName: platform-cicd-app
+platformChartVersionConstraint: "*"
 
 # Overlay onto Tekton Chains' own `chains-config` ConfigMap (installed empty by default -
 # confirmed live, nothing to clobber) - applied via `kubectl patch --type merge` by

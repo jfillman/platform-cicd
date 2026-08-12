@@ -20,6 +20,21 @@
 # header for the full per-tenant layout and why identity.yaml stays a tracked file here
 # rather than anything read from the app repo).
 #
+# Source 0 pulls the chart from an OCI registry (GHCR), not this git repo directly -
+# .github/workflows/app-chart-ci.yaml's `publish` job pushes a new OCI artifact on
+# every push to main that touches the chart, and `targetRevision: "*"` (Helm/ArgoCD
+# semver-wildcard matching, confirmed supported for OCI Helm sources) auto-tracks
+# whichever was published most recently, no manual re-pin needed here. Deliberately
+# lightweight/ungated for now (2026-08-11) at the user's explicit direction, moving
+# quickly while still in development - a proper versioned/tested/promoted release
+# workflow for all three of this platform's own charts is flagged as a follow-up, not
+# built here. Chart versions are published as `<Chart.yaml version>-<shortsha>` - a
+# hyphen pre-release, not `+build` metadata, deliberately: OCI tags can't contain `+`
+# (Helm rewrites it to `_` on push), and older ArgoCD versions don't reverse that
+# rewrite before wildcard-matching, breaking auto-tracking silently (a real, confirmed
+# ArgoCD bug, argoproj/argo-cd#14097 - avoided by construction, not assumed fixed on
+# whatever ArgoCD version ends up running this).
+#
 # `cicd.yaml` IS read live from the tenant's own app repo (source 1, $ref'd), a
 # deliberate, revisited decision - see identity.yaml's header for the full history: an
 # earlier version of this file used a tracked copy in tenants/<app>/cicd.yaml instead,
@@ -74,9 +89,9 @@ spec:
     spec:
       project: platform-onboarding
       sources:
-        - repoURL: {{ .Values.platformCicdRepoUrl }}
-          targetRevision: main
-          path: charts/platform-cicd-app
+        - repoURL: {{ .Values.platformChartOciRepo }}
+          chart: {{ .Values.platformChartName }}
+          targetRevision: {{ .Values.platformChartVersionConstraint | quote }}
           helm:
             valuesObject:
               platformIdentity:
