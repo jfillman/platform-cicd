@@ -20,21 +20,25 @@
 # header for the full per-tenant layout and why identity.yaml stays a tracked file here
 # rather than anything read from the app repo).
 #
-# Source 0 pulls the chart from an OCI registry (GHCR), not this git repo directly -
-# .github/workflows/app-chart-ci.yaml's `publish` job pushes a new OCI artifact on
-# every push to main that touches the chart, and platformChartVersionConstraint
-# (values.yaml - ">=0.0.0-0", NOT a bare "*", see that value's own comment for the live
-# test proving "*" genuinely fails to match a pre-release-tagged version) auto-tracks
-# whichever was published most recently, no manual re-pin needed here. Deliberately
-# lightweight/ungated for now (2026-08-11) at the user's explicit direction, moving
-# quickly while still in development - a proper versioned/tested/promoted release
-# workflow for all three of this platform's own charts is flagged as a follow-up, not
-# built here. Chart versions are published as `<Chart.yaml version>-<shortsha>` - a
-# hyphen pre-release, not `+build` metadata, deliberately: OCI tags can't contain `+`
-# (Helm rewrites it to `_` on push), and older ArgoCD versions don't reverse that
-# rewrite before wildcard-matching, breaking auto-tracking silently (a real, confirmed
-# ArgoCD bug, argoproj/argo-cd#14097 - avoided by construction, not assumed fixed on
-# whatever ArgoCD version ends up running this).
+# Source 0 renders the chart straight from this git repo (main HEAD) - NOT from the OCI
+# registry .github/workflows/app-chart-ci.yaml's `publish` job pushes to on every chart
+# change. That OCI groundwork stays in place (real, working, verified live: a real
+# platform-cicd-app chart is pullable from ghcr.io/jfillman/charts/platform-cicd-app
+# today) but isn't wired in here - tried it first, hit a real, documented ArgoCD
+# limitation confirmed live, twice: semver-RANGE targetRevision resolution
+# (`"*"`/`">=0.0.0-0"`) genuinely doesn't work against an OCI Helm source, because
+# ArgoCD's range resolver expects an index.yaml, which OCI registries don't have
+# (argoproj/argo-cd#9528 - not a config mistake, reproduced against two different range
+# syntaxes). Making "publish on every push, ArgoCD auto-tracks with no manual re-pin"
+# actually work over OCI would need the publish job to also commit the newly-published
+# EXACT version back to this repo for the ApplicationSet to pin to - real added
+# complexity that fits better as part of the already-flagged proper-release-workflow
+# follow-up (which wants exact, deliberately-promoted versions anyway, not floating
+# ranges) than bolted on here. Chart versions still publish as
+# `<Chart.yaml version>-<shortsha>` (hyphen pre-release, not `+build` metadata - OCI tags
+# can't contain `+`, and older ArgoCD doesn't reverse Helm's `+`-to-`_` rewrite before
+# wildcard-matching, a separate real bug, argoproj/argo-cd#14097) - ready to resume from
+# once that follow-up picks this back up.
 #
 # `cicd.yaml` IS read live from the tenant's own app repo (source 1, $ref'd), a
 # deliberate, revisited decision - see identity.yaml's header for the full history: an
@@ -90,9 +94,9 @@ spec:
     spec:
       project: platform-onboarding
       sources:
-        - repoURL: {{ .Values.platformChartOciRepo }}
-          chart: {{ .Values.platformChartName }}
-          targetRevision: {{ .Values.platformChartVersionConstraint | quote }}
+        - repoURL: {{ .Values.platformCicdRepoUrl }}
+          targetRevision: main
+          path: charts/platform-cicd-app
           helm:
             valuesObject:
               platformIdentity:
