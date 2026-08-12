@@ -84,7 +84,11 @@ spec:
                 githubOwner: "{{ "{{" }}.platformIdentity.githubOwner{{ "}}" }}"
                 catalogNamespace: "{{ "{{" }}.platformIdentity.catalogNamespace{{ "}}" }}"
             valueFiles:
-              - $tenantdata/cicd.yaml
+              # $-ref value files resolve relative to that source's checkout ROOT, not
+              # its own `path:` (confirmed live - `path:` below is otherwise unused,
+              # since this source is never itself rendered, only referenced via $ref) -
+              # so the full path from repo root is required here, not just cicd.yaml.
+              - $tenantdata/tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}/cicd.yaml
         - repoURL: {{ .Values.platformCicdRepoUrl }}
           targetRevision: main
           path: "tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}"
