@@ -28,6 +28,12 @@ set -euo pipefail
 : "${PHASE:?PHASE must be set}"
 : "${POD_NAMESPACE:?POD_NAMESPACE must be set - downward API, set on the hook Job spec}"
 
+# Optional, unlike the required fields above - CHAIN_ID lets argocd-outcome-relay tag
+# the release-outcome span it sends (catalog/tasks/release-outcome-span.yaml) with the
+# same chain-id the rest of this flow's spans carry, for correlation in Tempo/Grafana.
+# Not `:?`-required: an app onboarded before this field existed would otherwise break
+# every release until re-onboarded, for a correlation nicety, not a functional one.
+
 # The shared per-cluster secret, hand-provisioned once per app namespace on THIS
 # cluster (never committed to git, never passed through open-release-pr.yaml - that
 # Task runs on the dev cluster and never sees this value) - see docs/multi-cluster.md
@@ -50,7 +56,8 @@ payload="$(jq -n \
   --arg finishedAt "${finished_at}" \
   --arg prUrl "${PR_URL:-}" \
   --arg configJsonB64 "${CONFIG_JSON_B64:-}" \
-  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, prUrl: $prUrl, configJsonB64: $configJsonB64}')"
+  --arg chainId "${CHAIN_ID:-}" \
+  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, prUrl: $prUrl, configJsonB64: $configJsonB64, chainId: $chainId}')"
 
 echo "[argocd-outcome-hook] app=${APP_NAME} env=${ENV} phase=${PHASE}: reporting to ${RELAY_URL}"
 curl --fail --silent --show-error --max-time 15 \

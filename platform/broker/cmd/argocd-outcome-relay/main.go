@@ -93,6 +93,7 @@ type outcomeRequest struct {
 	FinishedAt    string `json:"finishedAt"` // set by the hook script itself (date -u), the moment it actually runs
 	PRUrl         string `json:"prUrl"`      // the GitOps PR this release/hook Job came from - see notify-slack.yaml's own pr-url param
 	ConfigJSONB64 string `json:"configJsonB64"`
+	ChainID       string `json:"chainId"` // optional - see catalog/lib/argocd-outcome-hook.sh's own comment on why this isn't required
 }
 
 func main() {
@@ -275,7 +276,14 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 			"source":    source,
 			"type":      eventType,
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"chainId":   "",
+			// The ORIGINAL flow's chain-id, not a fresh one - see catalog/lib/
+			// argocd-outcome-hook.sh's own comment: lets release-outcome-span.yaml tag
+			// its own (necessarily separate, since the flow-root span already closed
+			// at PR-open time) span with the same chain-id the rest of this flow's
+			// spans carry, so it's still findable by TraceQL/Grafana alongside them.
+			// Empty for an app onboarded before this field existed (backward-
+			// compatible default, not a required field - see the hook script).
+			"chainId": req.ChainID,
 		},
 		"subject": map[string]interface{}{
 			"id":     source,

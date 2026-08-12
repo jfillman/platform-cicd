@@ -351,6 +351,16 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        # Forwarded so a flow that chains straight off build (e.g. a free-form
+        # build->release or build->deploy flow, Phase 3 item 7) can still inherit
+        # cicd.yaml's already-validated content downstream - same reasoning as
+        # test's/deploy's own domain events, see resolve-notify-config.yaml. Real bug,
+        # found live: this was left off build's artifact.published event on the
+        # original assumption every flow is build->test->deploy->release (so only
+        # test/deploy's events ever needed to carry it) - a build->release flow skips
+        # both, so release's own resolve-notify-config saw "{}" and notify-slack
+        # silently no-op'd ("disabled"), with no error anywhere.
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 

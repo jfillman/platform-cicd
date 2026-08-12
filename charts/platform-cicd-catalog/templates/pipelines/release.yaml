@@ -222,6 +222,7 @@ spec:
         - { name: app-namespace, value: $(params.app-namespace) }
         - { name: app-type, value: $(params.app-type) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: config-json, value: $(tasks.resolve-notify-config.results.config-json) }
 
     # Hands off to the DORA exporter (platform/dora-exporter) - only runs if
@@ -332,6 +333,12 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        # Forwarded so a step chained after release (e.g. release-then-test's own
+        # release -> test, confirmed live in cicd-flow-test-app's flow config) can
+        # still inherit cicd.yaml's content downstream - same reasoning as build's
+        # artifact.published event (fixed alongside this) and test's/deploy's
+        # pre-existing forwarding. See resolve-notify-config.yaml.
+        - { name: config-json, value: $(tasks.resolve-notify-config.results.config-json) }
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 

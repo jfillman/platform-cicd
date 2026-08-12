@@ -76,6 +76,21 @@ spec:
       type: string
       default: ""
       description: Only used when cluster is set - the Lead Time start anchor, same as mark-release-pending.yaml's own param.
+    - name: chain-id
+      type: string
+      default: ""
+      description: >-
+        Only used when cluster is set - this flow's own chain-id (see
+        catalog/lib/otel.sh), baked into the outcome-reporting hook Jobs below so the
+        eventual ArgoCD-hook -> relay -> broker path (docs/multi-cluster.md) can tag the
+        release-outcome span it sends with the SAME chain-id the rest of this flow's
+        spans carry - real correlation across a gap the platform's own tracing model
+        deliberately doesn't span structurally (the flow-root span is already closed by
+        the time a human merges this PR and ArgoCD confirms sync - see release.yaml's
+        own header). chain-id, not traceparent, is what's threaded through for this:
+        it's CDEvents' own causal-sequence correlator, already meant for exactly this
+        kind of "same logical flow, different trace" linkage - see release-outcome-
+        span.yaml.
     - name: config-json
       type: string
       default: "{}"
@@ -129,6 +144,8 @@ spec:
           value: $(params.app-type)
         - name: FLOW_START_TIME
           value: $(params.flow-start-time)
+        - name: CHAIN_ID
+          value: $(params.chain-id)
         - name: CONFIG_JSON
           value: $(params.config-json)
       script: |
@@ -430,6 +447,7 @@ spec:
               "            - { name: GIT_URL, value: \"${GIT_URL}\" }" \
               "            - { name: GIT_REVISION, value: \"${GIT_REVISION}\" }" \
               "            - { name: FLOW_START_TIME, value: \"${FLOW_START_TIME}\" }" \
+              "            - { name: CHAIN_ID, value: \"${CHAIN_ID}\" }" \
               "            - { name: PR_URL, value: \"${pr_url}\" }" \
               "            - { name: CONFIG_JSON_B64, value: \"${CONFIG_JSON_B64}\" }" \
               > "${hook_manifest}"

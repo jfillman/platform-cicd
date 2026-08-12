@@ -38,6 +38,8 @@ spec:
     - { name: git-revision, value: "$(body.subject.content.gitRevision)" }
     - { name: pr-url, value: "$(body.subject.content.prUrl)" }
     - { name: config-json, value: "$(body.subject.content.configJson)" }
+    - { name: chain-id, value: "$(body.context.chainId)" }
+    - { name: flow-start-time, value: "$(body.subject.content.flowStartTime)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
@@ -59,6 +61,8 @@ spec:
     - name: git-revision
     - name: pr-url
     - name: config-json
+    - name: chain-id
+    - name: flow-start-time
   resourcetemplates:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
@@ -88,6 +92,8 @@ spec:
           - { name: git-revision, value: $(tt.params.git-revision) }
           - { name: pr-url, value: $(tt.params.pr-url) }
           - { name: config-json, value: $(tt.params.config-json) }
+          - { name: chain-id, value: $(tt.params.chain-id) }
+          - { name: flow-start-time, value: $(tt.params.flow-start-time) }
         taskRunTemplate:
           serviceAccountName: pipeline-runner
 ---

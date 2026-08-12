@@ -70,6 +70,34 @@ otel_stage_span_begin() {
   printf '%s %s\n' "$(openssl rand -hex 8)" "$(otel_now)"
 }
 
+# _otel_cli_send <args...>
+# Shared retry wrapper around a one-shot `otel-cli span` call - used by otel_span_send
+# and otel_task_span_send, both of which mint their span's identity/timestamps up
+# front and send them in a single explicit-id, explicit-timestamp call, making a retry
+# of the exact same call safe (never a duplicate side effect, just the same span
+# re-offered to the collector). Real bug, found live 2026-08-12: a bare `otel-cli
+# span ...` call has no retry AND (without --fail, which nothing here passed) exits 0
+# even when it can't reach the collector at all (confirmed by pointing it at an
+# unroutable address) - so a transient hiccup either silently dropped the span with no
+# error, or - when otel-cli's own default 1s --timeout wasn't enough under real load
+# (confirmed live: failed during a burst of 8 concurrent governance-check
+# PipelineRuns) - failed the whole calling TaskRun outright with no retry, which is
+# what actually broke a real release stage's trace. --fail makes both failure modes
+# surface as a real exit code; --timeout 5s gives real sends more room than otel-cli's
+# default under load; 3 attempts with a short backoff covers a one-off blip without
+# masking a genuinely down collector for long.
+_otel_cli_send() {
+  local attempt
+  for attempt in 1 2 3; do
+    if otel-cli "$@" --fail --timeout 5s; then
+      return 0
+    fi
+    [[ "${attempt}" -lt 3 ]] && sleep 2
+  done
+  echo "otel-cli span send failed after 3 attempts (collector unreachable or rejecting spans) - continuing, not failing the pipeline over lost trace data" >&2
+  return 0
+}
+
 # otel_span_send <name> <flow-traceparent> <span-id> <start-time> <end-time> <tekton-status> [attrs]
 # The only function here that actually talks to the collector for flow-root/stage
 # spans - one stateless otel-cli call, safe from any Task/Pod. tekton-status is
@@ -104,7 +132,7 @@ otel_span_send() {
   )
   [[ -n "${parent_span_id}" ]] && args+=(--force-parent-span-id "${parent_span_id}")
   [[ -n "${attrs}" ]] && args+=(--attrs "${attrs}")
-  otel-cli "${args[@]}"
+  _otel_cli_send "${args[@]}"
 }
 
 # otel_task_span_send <name> <flow-traceparent> <parent-span-id> <start-time> <end-time> <tekton-status> [attrs]
@@ -138,7 +166,7 @@ otel_task_span_send() {
     --status-code "${status_code}"
   )
   [[ -n "${attrs}" ]] && args+=(--attrs "${attrs}")
-  otel-cli "${args[@]}"
+  _otel_cli_send "${args[@]}"
 }
 
 # otel_child_span <name> <flow-traceparent> <parent-span-id> <attrs> -- <command...>

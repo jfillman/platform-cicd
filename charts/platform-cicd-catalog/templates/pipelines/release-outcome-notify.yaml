@@ -3,9 +3,13 @@
 # The downstream consumer of the environment.deployed CDEvent the argocd-outcome-relay
 # forwards (platform/broker/cmd/argocd-outcome-relay) once a cluster-mapped release
 # actually confirms success/failure on its own upper-env cluster - this is what "closes
-# the loop" in a way a human notices, not just a CDEvent landing unseen. Deliberately
-# thin: one Task, reusing notify-slack.yaml as-is rather than duplicating its message
-# formatting. No resolve-notify-config/clone/workspace needed here (unlike
+# the loop" in a way a human notices, not just a CDEvent landing unseen. Two tasks,
+# deliberately independent of each other (no runAfter): `notify` reuses notify-
+# slack.yaml as-is rather than duplicating its message formatting, `span` sends a real,
+# standalone trace span reporting the outcome (see release-outcome-span.yaml's own
+# header for why it's a separate trace, not appended to the original flow's - added
+# 2026-08-12, a real gap found live: this Pipeline had no tracing task at all before).
+# No resolve-notify-config/clone/workspace needed here (unlike
 # deploy.yaml/release.yaml) - config-json arrives pre-resolved: open-release-pr.yaml
 # base64-encodes it into the PostSync/SyncFail hook Job's own CONFIG_JSON_B64 env var at
 # PR-open time, the hook script forwards it to argocd-outcome-relay, and the relay
@@ -45,6 +49,14 @@ spec:
     - name: config-json
       type: string
       default: "{}"
+    - name: chain-id
+      type: string
+      default: ""
+      description: The original flow's chain-id, for span correlation - see release-outcome-span.yaml.
+    - name: flow-start-time
+      type: string
+      default: ""
+      description: The original flow's own start time (DORA lead-time anchor) - see release-outcome-span.yaml.
   tasks:
     - name: notify
       taskRef:
@@ -70,3 +82,20 @@ spec:
         - { name: git-revision, value: $(params.git-revision) }
         - { name: pr-url, value: $(params.pr-url) }
         - { name: env, value: $(params.env) }
+
+    # See release-outcome-span.yaml's own header for why this is a standalone span/
+    # trace, not a child of the original flow's (already-closed) trace.
+    - name: span
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: release-outcome-span }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: app-namespace, value: $(params.app-namespace) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: env, value: $(params.env) }
+        - { name: status, value: $(params.status) }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }

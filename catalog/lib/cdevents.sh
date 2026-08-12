@@ -43,13 +43,16 @@ cdevent_send() {
   local event_type="$1" subject_type="$2" subject_id="$3" subject_content_json="$4"
 
   # PLATFORM_CONFIG_JSON is optional, unlike chain-id/traceparent/flow-start-time above -
-  # only test's and deploy's own finally send-cdevent calls (testcaserun.finished,
-  # service.deployed) set it to something real, letting deploy/release skip their own
-  # clone-repo+validate-config and inherit cicd.yaml's already-validated content instead
-  # (see resolve-notify-config.yaml). Every other call site (pipelinerun.started/
-  # finished, build's artifact.published, release's change.created) leaves it unset -
-  # deliberately defaulted with bash `:-`, not `:?` like the three required fields above,
-  # since nothing downstream of those call sites ever reads it.
+  # every stage's own domain-completion event (build's artifact.published, test's
+  # testcaserun.finished, deploy's service.deployed, release's change.created) sets it
+  # to something real, letting deploy/release skip their own clone-repo+validate-config
+  # and inherit cicd.yaml's already-validated content instead (see
+  # resolve-notify-config.yaml) - see send-cdevent.yaml's own param doc for the real,
+  # live-found bug this fixed (build/release originally left it unset, silently
+  # breaking notify-slack for any free-form flow chaining straight off either of them).
+  # Every other call site (pipelinerun.started/finished) leaves it unset - deliberately
+  # defaulted with bash `:-`, not `:?` like the three required fields above, since
+  # nothing downstream of those call sites ever reads it.
   local config_json="${PLATFORM_CONFIG_JSON:-}"
   [[ -z "${config_json}" ]] && config_json='{}'
 

@@ -54,9 +54,17 @@ spec:
       description: >-
         Optional. Forwarded into the emitted event's customData.platform.config_json for
         a downstream stage to inherit (see catalog/tasks/resolve-notify-config.yaml) -
-        only test's and deploy's own finally send-cdevent calls (testcaserun.finished,
-        service.deployed) set this to something real. Every other call site leaves the
-        default; nothing reads it downstream of those.
+        every stage's own domain-completion event (build's artifact.published, test's
+        testcaserun.finished, deploy's service.deployed, release's change.created) sets
+        this to something real, since Phase 3 item 7's free-form flow topology means ANY
+        of these can be what a next stage chains off of (see flow-triggers.yaml's
+        $eventTypeMap). Real bug, found live 2026-08-12: build's and release's own events
+        originally left this at the default, on the stale assumption every flow is a
+        fixed build->test->deploy->release chain (so only the two "middle" events ever
+        needed to carry it forward) - a free-form build->release flow broke that
+        silently (resolve-notify-config saw "{}", notify-slack no-op'd with no error).
+        Every other call site (pipelinerun.started/finished) still leaves the default;
+        nothing reads it downstream of those.
   # Audience-bound projected ServiceAccount token, verified by the broker's TokenReview
   # interceptor (platform/broker/cmd/token-review-interceptor) - there is no platform-
   # minted credential anywhere in this Task. Declared here, not via any cluster-wide
