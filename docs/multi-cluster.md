@@ -313,14 +313,19 @@ there's no structural link between them the way a parent/child span relationship
 give. `chain-id` (CDEvents' own causal-sequence correlator - see docs/tracing.md's file
 header on `otel.sh`) rides the exact same path `pr-created-at` does (hook Job env var ->
 hook script -> relay -> CDEvent -> Trigger binding -> Pipeline param), and lands on the
-span as the `platform.chain_id` attribute - `{ platform.chain_id = "..." }` in Tempo/
-Grafana surfaces both the original flow's spans and this standalone one together, even
-though they're structurally unrelated traces. The `CICD Variant 1` dashboard
-(`observability/grafana/dashboards/cicd-mission-control.json`) exposes chain-id as an
-expandable column on both its Flow board and its Release outcomes panel for exactly this
-manual cross-reference - there's no way to make it a one-click link through Tempo's
-search API (trace-level and span-level fields don't cross that way, confirmed live
-while building the dashboard panel).
+span as the `platform.chain_id` attribute - `{ platform.chain_id = "..." }` against
+Tempo directly (not through the `CICD Variant 1` dashboard) surfaces both the original
+flow's spans and this standalone one together, even though they're structurally
+unrelated traces. **Not surfaced as a dashboard column** - tried exposing it via
+Grafana's table "nested" field (the only place Tempo's search API puts a matched span's
+own attributes that aren't already flat trace-level fields), found live 2026-08-12 that
+its actual field type is `other`/`json.RawMessage` with no `cellOptions` this session
+could find that renders it as anything but raw JSON text in the cell (real Grafana rough
+edge, not a misconfiguration - see `grafana/grafana#100032`). Reverted rather than ship
+a panel showing raw JSON; the outcome (`Succeeded`/`Failed`) itself is still shown
+cleanly, baked directly into the release-outcome span's own name instead (a real, flat
+field, no nested-frame rendering involved) - see this section's own "outcome span"
+naming, `release-outcome:<app>/<env> [<status>]`.
 
 ## Deferred: relay-token distribution via External Secrets Operator
 
