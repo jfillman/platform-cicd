@@ -9,18 +9,35 @@
 # notice - see docs/stalled-pipeline-detector.md).
 #
 # NOT covering CDEvents idempotency/dedup here - that's already done. PipelineRun names
-# are deterministic (catalog/lib/cdevents.sh's cdevent_send(), reused below) so
-# at-least-once redelivery is already a harmless AlreadyExists, not a duplicate run. This
-# CronJob is only about the opposite failure: a stage finishing and NOTHING happening
-# next.
+# are deterministic (catalog/lib/cdevents.sh's cdevent_send()) so at-least-once
+# redelivery is already a harmless AlreadyExists, not a duplicate run. This CronJob is
+# only about the opposite failure: a stage finishing and NOTHING happening next.
 #
-# Detection needs no new labels or state: since a completed stage's PipelineRun name is
-# known, and cdevents.sh computes the next stage's deterministic name as
-# sha256("<this-run-name>:<event-type>")[:20], this script recomputes that exact value
-# and checks whether the PipelineRun with that name exists. The hash logic is duplicated
-# here (not sourced from cdevents.sh directly) because that script hard-requires several
-# env vars this CronJob has no reason to set - if the algorithm in cdevents.sh ever
-# changes, this must change with it.
+# Detection uses two labels every flow-generated PipelineRun now carries -
+# platform.io/flow and platform.io/step-index (stamped by both
+# charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml, for a
+# flow's git-rooted first step, and charts/platform-cicd-app/templates/triggers/
+# flow-triggers.yaml, for every event-chained step after it) - plus the is-flow-terminal
+# Pipeline param every catalog/pipelines/*.yaml now accepts (see docs/tracing.md). A
+# completed stage is only a stall candidate if is-flow-terminal is NOT "true"; if it
+# isn't, "chain OK" means a PipelineRun exists in the same namespace labeled with this
+# flow's name and step-index+1.
+#
+# Real bug, found and fixed 2026-08-11, same investigation as docs/tracing.md's
+# is-flow-terminal fix: this used to reconstruct the expected successor's name by
+# recomputing cdevents.sh's sha256("<this-run-name>:<event-type>")[:20] hash and
+# prefixing it with a hardcoded next-stage name (build->test, test->deploy,
+# deploy->release). That scheme predates Phase 3 item 7's multi-flow work, which
+# changed the REAL naming scheme to "<flowName>-<index>-<stageName>-<eventID>" (see
+# flow-triggers.yaml's pipeline-run-name param) to avoid collisions between flows/
+# repeated stages - the CronJob's guess never matched either the real event-chained
+# name OR a git-rooted PaC generateName, so `kubectl get pipelinerun "${expected_name}"`
+# always failed and every completed build/test/deploy run got falsely flagged, not just
+# genuinely-terminal ones. Confirmed live: build and test runs with real, existing
+# successors were both labeled platform.io/stall-alerted=true. The label-based check
+# above doesn't predict a name at all, so it isn't coupled to cdevents.sh's naming
+# scheme any more, and it also now covers `release` (previously never checked, even
+# though an event-chained release can have real successors - e.g. release -> test).
 #
 # RBAC is cluster-scoped by necessity (PipelineRuns live in every Application's own
 # namespace, and no app-namespace-discovery label exists anywhere in this platform yet -
@@ -108,20 +125,24 @@ spec:
                   now_epoch="$(date -u +%s)"
                   threshold_seconds=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-                  # One candidate per line: run-name, run-namespace, pipeline-name,
-                  # completionTime - only stages that actually succeeded (a failed stage
-                  # is a different, already-visible condition - see file header) and
-                  # aren't already labeled from a prior alert.
+                  # One candidate per line: run-name, run-namespace, flow-name,
+                  # step-index, stage-name, completionTime - only stages that actually
+                  # succeeded (a failed stage is a different, already-visible condition -
+                  # see file header), aren't already labeled from a prior alert, belong to
+                  # a flow at all (platform.io/flow absent = onboarding-resync and other
+                  # non-flow PipelineRuns, not this CronJob's concern), and are NOT
+                  # themselves this flow's terminal step (is-flow-terminal - a terminal
+                  # step correctly has no successor by design, not a stall).
                   kubectl get pipelinerun -A -o json | jq -r '
                     .items[]
                     | select(.status.conditions // [] | any(.type == "Succeeded" and .status == "True"))
                     | select(.status.completionTime != null)
                     | select((.metadata.labels // {})["platform.io/stall-alerted"] != "true")
+                    | select((.metadata.labels // {})["platform.io/flow"] != null)
+                    | select(((.spec.params // []) | map(select(.name == "is-flow-terminal")) | .[0].value // "false") != "true")
                     | . as $pr
-                    | ($pr.spec.pipelineRef.params // [] | map(select(.name == "name")) | .[0].value // "") as $pipelineName
-                    | select($pipelineName == "build" or $pipelineName == "test" or $pipelineName == "deploy")
-                    | [$pr.metadata.name, $pr.metadata.namespace, $pipelineName, $pr.status.completionTime] | @tsv
-                  ' | while IFS=$'\t' read -r run_name run_ns pipeline_name completion_time; do
+                    | [$pr.metadata.name, $pr.metadata.namespace, $pr.metadata.labels["platform.io/flow"], ($pr.metadata.labels["platform.io/step-index"] // "0"), ($pr.metadata.labels["platform.io/stage"] // "?"), $pr.status.completionTime] | @tsv
+                  ' | while IFS=$'\t' read -r run_name run_ns flow_name step_index stage_name completion_time; do
 
                     completion_epoch="$(date -u -d "${completion_time}" +%s)"
                     age=$(( now_epoch - completion_epoch ))
@@ -129,30 +150,26 @@ spec:
                       continue
                     fi
 
-                    # Must match catalog/pipelines/{build,test,deploy}.yaml's send-cdevent
-                    # event-type params exactly - see the file header's duplication note.
-                    case "${pipeline_name}" in
-                      build)  event_type="dev.cdevents.artifact.published.0.3.0";   next_prefix="test" ;;
-                      test)   event_type="dev.cdevents.testcaserun.finished.0.3.0"; next_prefix="deploy" ;;
-                      deploy) event_type="dev.cdevents.service.deployed.0.3.0";     next_prefix="release" ;;
-                    esac
+                    # Does ANY PipelineRun in this namespace belong to this flow's next
+                    # step? Doesn't predict a name - just asks whether the next step ran,
+                    # which is true regardless of whether it was git-rooted or
+                    # event-chained, or whether the stage name repeats within the flow.
+                    next_index=$(( step_index + 1 ))
+                    successor_count="$(kubectl get pipelinerun -n "${run_ns}" -l "platform.io/flow=${flow_name},platform.io/step-index=${next_index}" -o name | wc -l)"
 
-                    event_id="$(printf '%s' "${run_name}:${event_type}" | sha256sum | cut -d' ' -f1 | cut -c1-20)"
-                    expected_name="${next_prefix}-${event_id}"
-
-                    if kubectl get pipelinerun "${expected_name}" -n "${run_ns}" >/dev/null 2>&1; then
-                      echo "[stall-detector] ${run_ns}/${run_name} (${pipeline_name}) -> ${expected_name} exists, chain OK"
+                    if [ "${successor_count}" -gt 0 ]; then
+                      echo "[stall-detector] ${run_ns}/${run_name} (flow=${flow_name} stage=${stage_name} step=${step_index}) -> step ${next_index} exists, chain OK"
                       continue
                     fi
 
-                    echo "[stall-detector] STALL DETECTED: ${run_ns}/${run_name} (${pipeline_name}) completed ${age}s ago, expected successor ${expected_name} never appeared - CDEvent likely lost in transit"
+                    echo "[stall-detector] STALL DETECTED: ${run_ns}/${run_name} (flow=${flow_name} stage=${stage_name} step=${step_index}) completed ${age}s ago, step ${next_index} of this flow never appeared - CDEvent likely lost in transit"
 
                     # Built with printf + explicit \n, not an embedded heredoc - a raw
                     # multi-line heredoc nested inside this already-indented block scalar
                     # broke YAML parsing once before in this exact codebase (see
                     # catalog/tasks/open-release-pr.yaml's PR-body construction).
                     now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                    message="${pipeline_name} completed ${age}s ago but expected successor ${expected_name} was never created - CDEvents delivery may have failed"
+                    message="${stage_name} (flow ${flow_name}, step ${step_index}) completed ${age}s ago but step ${next_index} was never created - CDEvents delivery may have failed"
                     printf 'apiVersion: v1\nkind: Event\nmetadata:\n  generateName: stall-detected-\n  namespace: %s\ninvolvedObject:\n  apiVersion: tekton.dev/v1\n  kind: PipelineRun\n  name: %s\n  namespace: %s\nreason: StageChainStalled\nmessage: %s\ntype: Warning\nsource:\n  component: stalled-pipeline-detector\nfirstTimestamp: "%s"\nlastTimestamp: "%s"\ncount: 1\n' \
                       "${run_ns}" "${run_name}" "${run_ns}" "$(jq -Rn --arg m "${message}" '$m')" "${now_ts}" "${now_ts}" \
                       | kubectl create -f - >/dev/null

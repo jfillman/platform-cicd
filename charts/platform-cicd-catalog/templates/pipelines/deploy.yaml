@@ -34,6 +34,10 @@ spec:
       type: string
       default: "false"
       description: "true if this is a git-rooted deploy flow (new trace root); false if event-chained from test"
+    - name: is-flow-terminal
+      type: string
+      default: "false"
+      description: "true if this step is the LAST step in its flow's steps: list (computed at generation time - see deliver-onboarding-files.yaml/flow-triggers.yaml); this stage's finally block closes the flow-root span iff true. See docs/tracing.md."
     - name: git-url
       type: string
     - name: git-revision
@@ -204,6 +208,26 @@ spec:
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: span-id, value: $(tasks.start-deploy-stage-span.results.span-id) }
         - { name: start-time, value: $(tasks.start-deploy-stage-span.results.start-time) }
+        - { name: status, value: $(tasks.status) }
+
+    # Closes the flow-root span iff deploy happens to be the LAST step of its flow (the
+    # common case - deploy with no release configured) - see is-flow-terminal above and
+    # docs/tracing.md. Every stage Pipeline carries an identical copy of this task,
+    # gated the same way; whichever one is actually terminal for THIS flow instance is
+    # the one that fires.
+    - name: end-flow
+      when:
+        - { input: $(params.is-flow-terminal), operator: in, values: ["true"] }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: end-flow-root-span }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: flow-name, value: "$(params.app-namespace)/$(params.app-name)" }
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
         - { name: status, value: $(tasks.status) }
 
     - name: notify

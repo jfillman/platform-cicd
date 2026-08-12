@@ -67,7 +67,7 @@
         { "id": 104, "type": "row", "title": "Pipeline visualizer", "gridPos": { "x": 0, "y": 7, "w": 24, "h": 1 } },
         {
             "id": 20, "type": "table", "title": "Flow board - every build->test->deploy->release run, real time",
-            "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: this platform's flow-root span is only sent once, from deploy's finally block, as the LAST thing that happens in a healthy flow (see docs/tracing.md) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before deploy finished. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below.",
+            "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: the flow-root span is sent exactly once, from whichever stage's finally block is actually LAST in that specific flow's steps: list (any of build/test/deploy/release, per-flow - see docs/tracing.md's is-flow-terminal design) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before reaching its declared last step. Fixed 2026-08-11: this used to assume release was always last, so any flow without a release step (or with steps after release) showed this status forever even after finishing successfully - see docs/tracing.md. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below.",
             "gridPos": { "x": 0, "y": 8, "w": 24, "h": 11 },
             "datasource": { "type": "tempo", "uid": "tempo" },
             "targets": [ { "queryType": "traceql", "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" } | select(status)", "limit": 20 } ],
@@ -127,7 +127,7 @@
         },
         {
             "id": 23, "type": "barchart", "title": "Selected flow - span durations (clean view)",
-            "description": "Every span in the selected trace, plain bars, no filter chrome - the same underlying Tempo data as the full waterfall below, just flattened for an at-a-glance read. Sorted by start order.",
+            "description": "Every span in the selected trace, plain bars, no filter chrome - the same underlying Tempo data as the full waterfall below, just flattened for an at-a-glance read. Sorted by start order. Fixed 2026-08-11: unit was 'ns', displaying stage/task durations (seconds-to-minutes by design, see docs/tracing.md) as sub-millisecond noise - this query path's duration field is milliseconds, matching the Flow board panel's traceDuration field from the same Tempo datasource.",
             "gridPos": { "x": 0, "y": 19, "w": 24, "h": 9 },
             "datasource": { "type": "tempo", "uid": "tempo" },
             "targets": [ { "refId": "A", "query": "$traceId", "queryType": "traceql", "limit": 20, "tableType": "traces", "metricsQueryType": "range", "filters": [ { "id": "1", "operator": "=", "scope": "span", "tag": "" } ], "serviceMapQuery": "", "serviceMapUseNativeHistograms": false } ],
@@ -136,7 +136,7 @@
                 { "id": "organize", "options": { "renameByName": { "operationName": "Span", "duration": "Duration" } } }
             ],
             "options": { "orientation": "horizontal", "xTickLabelSpacing": 0, "showValue": "always", "legend": { "showLegend": false } },
-            "fieldConfig": { "defaults": { "unit": "ns", "custom": { "lineWidth": 0, "fillOpacity": 80 } },
+            "fieldConfig": { "defaults": { "unit": "ms", "custom": { "lineWidth": 0, "fillOpacity": 80 } },
                 "overrides": [
                     {
                         "matcher": { "id": "byName", "options": "Span" },

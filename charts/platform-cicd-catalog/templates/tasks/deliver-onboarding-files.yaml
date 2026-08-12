@@ -213,7 +213,7 @@ spec:
 
         generate_flow_file() {
           local flow_name="$1" event="$2" branch="$3" tag_pattern="$4" file_paths_json="$5" root_stage="$6"
-          local root_env="$7" root_suite="$8" root_cluster="$9" root_name="${10}"
+          local root_env="$7" root_suite="$8" root_cluster="$9" root_name="${10}" is_flow_terminal="${11}"
           local on_event="" branch_line="" cel_line="" tag_param_line=""
           # deploy/release/test can all be a flow's git-rooted first step (e.g. a tag
           # push deploying straight to prod, or a test-only flow on a scratch branch -
@@ -335,6 +335,10 @@ spec:
         kind: PipelineRun
         metadata:
           generateName: ${flow_name}-
+          labels:
+            platform.io/flow: "${flow_name}"
+            platform.io/stage: "${root_stage}"
+            platform.io/step-index: "0"
           annotations:
             pipelinesascode.tekton.dev/on-event: "${on_event}"
         ${branch_line}
@@ -354,6 +358,7 @@ spec:
             - { name: app-namespace, value: "${APP_NAMESPACE}" }
             - { name: app-name, value: "${APP_NAME}" }
             - { name: app-type, value: "${APP_TYPE}" }
+            - { name: is-flow-terminal, value: "${is_flow_terminal}" }
         ${tag_param_line}${root_param_lines}
           workspaces:
             - name: source
@@ -400,8 +405,16 @@ spec:
             root_cluster="$(jq -r --arg e "${root_env}" '.[$e] // ""' <<<"${upper_env_clusters_json}")"
           fi
           root_name="$(echo "${flow_json}" | jq -r '.steps[0].name // ""')"
+          # This function only ever generates a flow's FIRST step (index 0 - see the
+          # git-rooted-only skip above). That first step is also the flow's LAST step,
+          # and therefore the one that should close the flow-root span, exactly when the
+          # flow has no further steps at all (a build-only or single-step-release flow) -
+          # see is-flow-terminal on catalog/pipelines/*.yaml and docs/tracing.md.
+          step_count="$(echo "${flow_json}" | jq -r '.steps | length')"
+          is_flow_terminal="false"
+          [[ "${step_count}" -eq 1 ]] && is_flow_terminal="true"
 
-          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" > ".tekton/flow-${flow_name}.yaml"
+          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" "${is_flow_terminal}" > ".tekton/flow-${flow_name}.yaml"
           echo "app repo: generated .tekton/flow-${flow_name}.yaml (${trigger_event} -> ${root_stage})"
         done <<< "${flow_names}"
 

@@ -47,8 +47,45 @@ per-stage drill-down the dashboard needs (see
    instead of generating their own - they call `start-stage-span` with it, producing a
    span parented to the *original* flow root, reconstructing one continuous trace across
    PipelineRuns Tekton itself has no idea are related. `flow-start-time` keeps riding
-   along, unused until whichever stage is last (`deploy`, in Phase 1) finally sends the
-   flow-root span - see `end-flow-root-span.yaml`.
+   along, consumed only by whichever stage turns out to be this flow's terminal step -
+   see "Which stage closes the flow-root span" below.
+
+## Which stage closes the flow-root span
+
+Every stage Pipeline (`build`/`test`/`deploy`/`release`) carries an identical
+`is-flow-terminal` param (default `"false"`) and an identical, identically-gated
+`end-flow` `finally` task that calls `end-flow-root-span` iff `is-flow-terminal ==
+"true"`. Which one actually fires is decided per-flow, at generation time, by whichever
+generator produced that step's PipelineRun:
+
+- `deliver-onboarding-files.yaml` (git-rooted first step) sets it `true` iff the flow
+  has exactly one step - i.e. the first step is also the last.
+- `flow-triggers.yaml` (every event-chained step after the first) sets it `true` iff
+  `$index == $stepCount - 1` for that step within its flow's `steps:` list.
+
+Both generators already track each step's index (needed to disambiguate a stage name
+that repeats within one flow, e.g. `test` twice), so this is the same information, not
+new plumbing.
+
+**Real bug, found and fixed live 2026-08-11**: an earlier version of this design
+hardcoded the `end-flow` call into `release.yaml` only, unconditionally, on the
+assumption release is always a flow's last stage - true in Phase 1/2's fixed
+build->test->deploy->release chain, but broken once Phase 3 item 7 made flow ordering
+free-form. Two live-confirmed symptoms, same root cause:
+
+- Any flow that never reaches `release` (e.g. `build -> test -> deploy`, a common real
+  shape - no `release:` declared in `cicd.yaml`) never closed its flow-root span at
+  all. Tempo shows `<root span not yet received>` forever, even hours after the flow
+  finished successfully - confirmed live: 5 of 12 real recent traces stuck this way,
+  the "CICD Variant 1" dashboard's Flow board displays this as "● running / incomplete".
+- A flow where `release` runs but *isn't* last (a real, already-tested shape - `build ->
+  deploy(dev) -> release(staging) -> test`) closed the flow-root span early, at
+  release's own completion. The later stage's own span, sent afterward and parented to
+  that already-closed root, ends up with a start/end time *after* the trace's supposed
+  end.
+
+`is-flow-terminal`, computed per-flow instead of hardcoded to one stage, fixes both:
+whichever stage is genuinely last for a given flow closes the span, and only that one.
 
 ## otel-cli, and why spans are "begin" then "send", never "background"
 
@@ -73,9 +110,9 @@ call** (explicit `--start`/`--end`/`--force-trace-id`/`--force-span-id`/
 `--force-parent-span-id`) only once the real end time is known - safe from any Task or
 Pod, since nothing is recovered from local process state. See the file header of
 `catalog/lib/otel.sh` for the exact functions (`otel_flow_root_begin`,
-`otel_stage_span_begin`, `otel_span_send`, `otel_child_span`) and
-`charts/platform-cicd-catalog/templates/tasks/end-flow-root-span.yaml` for why the flow-root span is currently sent
-from `deploy`'s `finally` block (Phase 1's last stage) rather than from `build`.
+`otel_stage_span_begin`, `otel_span_send`, `otel_child_span`) and "Which stage closes
+the flow-root span" above for which stage actually sends it - not fixed to any one
+Pipeline, unlike in Phase 1/2.
 
 It's fine, by design, for coarse per-step/per-stage spans (seconds to minutes - what
 this platform actually needs). `otel-cli exec` (used by `otel_child_span`, e.g. for

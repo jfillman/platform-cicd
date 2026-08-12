@@ -20,31 +20,37 @@ CDEvent therefore either creates the PipelineRun once or hits a harmless
 
 ## Detection mechanism
 
-No new labels or state needed. Since a completed stage's PipelineRun name is known, and
-the next stage's expected name is `sha256("<this-run-name>:<event-type>")[:20]` prefixed
-with the next stage's name - the exact computation `cdevent_send()` already does - the
-detector recomputes that value directly and checks whether a PipelineRun with that name
-exists:
-
-| Completed stage | Event type | Expected successor |
-|---|---|---|
-| `build-*` | `dev.cdevents.artifact.published.0.3.0` | `test-<hash>` |
-| `test-*` | `dev.cdevents.testcaserun.finished.0.3.0` | `deploy-<hash>` |
-| `deploy-*` | `dev.cdevents.service.deployed.0.3.0` | `release-<hash>` |
-| `release-*` | (none - terminal) | n/a |
+Uses two labels every flow-generated PipelineRun carries - `platform.io/flow` and
+`platform.io/step-index` (stamped by `deliver-onboarding-files.yaml` for a flow's
+git-rooted first step, and `flow-triggers.yaml` for every event-chained step after it -
+see docs/tracing.md's "Which stage closes the flow-root span") - plus the
+`is-flow-terminal` Pipeline param every `catalog/pipelines/*.yaml` accepts. For each
+completed stage that is NOT flagged `is-flow-terminal: "true"` (a terminal step
+correctly has no successor - not a stall), the detector checks whether any PipelineRun
+exists in the same namespace labeled with this flow's name and `step-index + 1`. No name
+prediction, no hash reconstruction - just "did the next step run."
 
 A successor is only ever expected when the completed PipelineRun's own Tekton condition
 is `status: "True"`, reason `Succeeded`/`Completed` - matching exactly what already gates
-`send-cdevent` in `build.yaml`/`deploy.yaml` and what `test.yaml`'s Trigger CEL filter
-checks. A **failed** stage is a different, already-visible condition (shows up directly
-as a Failed PipelineRun, and `notify-slack` already fires on it) - not a silent stall, so
-it's deliberately excluded.
+`send-cdevent` in each stage Pipeline. A **failed** stage is a different, already-visible
+condition (shows up directly as a Failed PipelineRun, and `notify-slack` already fires on
+it) - not a silent stall, so it's deliberately excluded.
 
-The hash computation is duplicated in the CronJob's script rather than sourced from
-`cdevents.sh` directly, since that script hard-requires several env vars
-(`CDEVENTS_BROKER_URL`, etc.) this CronJob has no reason to set. If the algorithm in
-`cdevents.sh` ever changes, `stalled-pipeline-detector-cronjob.yaml` needs to change with
-it - flagged explicitly in both files' comments.
+**Real bug, found and fixed 2026-08-11**: the original version of this detector *did*
+reconstruct the expected successor's name, as `sha256("<this-run-name>:<event-
+type>")[:20]` prefixed with a hardcoded next-stage name (`build`->`test`, `test`-
+>`deploy`, `deploy`->`release`) - `cdevent_send()`'s own hash, duplicated here since that
+script hard-requires several env vars this CronJob has no reason to set. That scheme
+predates Phase 3 item 7's multi-flow work, which changed the real event-chained naming
+scheme to `<flowName>-<index>-<stageName>-<eventID>` (to avoid collisions between flows
+and repeated stages within one flow) - the CronJob's guess never matched either that or a
+git-rooted PaC `generateName`, so `kubectl get pipelinerun "${expected_name}"` always
+came back empty and **every** completed build/test/deploy run got falsely flagged
+`platform.io/stall-alerted: "true"`, not just genuinely-stalled ones - confirmed live,
+including runs with real, existing successors. The label-based check isn't coupled to
+`cdevent_send()`'s naming scheme at all any more, and it also now covers `release`
+(previously never checked, even though an event-chained release can have real
+successors - e.g. `release -> test`).
 
 ## Scan scope, threshold, and dedup
 
@@ -108,9 +114,11 @@ PipelineRun's actual spec/status.
   dedup label.
 - Re-ran immediately; confirmed the same stall does **not** re-alert.
 - Restored the Trigger's original CEL filter afterward.
-- False-positive check: verified the hash recomputation against several real, already-
-  completed `build`->`test` pairs on the live cluster before relying on it - the detector
-  raises zero alerts against a healthy chain.
+- False-positive check (original version, since found wrong - see "Real bug" above): at
+  the time, verifying the hash recomputation against a couple of real `build`->`test`
+  pairs raised zero alerts. That check didn't survive Phase 3 item 7's naming-scheme
+  change and should have been re-run after - every completed build/test/deploy run was
+  actually being falsely flagged by the time this was caught live, 2026-08-11.
 - RBAC check: `kubectl auth can-i --list
   --as=system:serviceaccount:platform-system:stalled-pipeline-detector` shows exactly
   `get`/`list`/`patch` on `pipelineruns.tekton.dev` and `create` on `events`.

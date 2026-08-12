@@ -1,13 +1,13 @@
 # catalog/tasks/end-flow-root-span.yaml
 #
 # Pipeline-level wrapper around otel-span-send that closes the FLOW-ROOT span
-# (covering the entire build->test->deploy->release run), not a stage span - see
-# docs/tracing.md "Shape: flat, not nested". Called exactly once, from whichever
-# stage is currently last in the flow's fixed chain. Phase 1's chain ends at deploy,
-# so only catalog/pipelines/deploy.yaml's finally block calls this - when Phase 2
-# adds a release stage after deploy, this call must move from deploy.yaml to
-# release.yaml, or the flow-root span will close early (at deploy's finish time, not
-# the flow's real end).
+# (covering the entire flow, whatever stages it declares), not a stage span - see
+# docs/tracing.md "Shape: flat, not nested". Called exactly once per flow, from an
+# identical `end-flow` finally task present in EVERY stage Pipeline (build/test/deploy/
+# release), gated on that Pipeline's own is-flow-terminal param - see docs/tracing.md's
+# "Which stage closes the flow-root span" for why this isn't hardcoded to one stage:
+# flow ordering is free-form since Phase 3 item 7, so which stage is actually last
+# varies per flow, not just per Phase.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:

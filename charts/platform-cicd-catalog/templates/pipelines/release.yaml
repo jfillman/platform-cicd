@@ -45,6 +45,10 @@ spec:
       type: string
       default: "false"
       description: "true if this is a git-rooted release flow (new trace root); false if event-chained from deploy"
+    - name: is-flow-terminal
+      type: string
+      default: "false"
+      description: "true if this step is the LAST step in its flow's steps: list (computed at generation time - see deliver-onboarding-files.yaml/flow-triggers.yaml); this stage's finally block closes the flow-root span iff true. See docs/tracing.md. NOT assumed true by default here any more - an event-chained release may have steps after it (e.g. release -> test), so release closing the flow-root span unconditionally would close it early."
     - name: git-url
       type: string
     - name: git-revision
@@ -256,11 +260,23 @@ spec:
         - { name: start-time, value: $(tasks.start-release-stage-span.results.start-time) }
         - { name: status, value: $(tasks.status) }
 
-    # Release is the last stage in the flow's chain (Phase 2) - this is where the
-    # flow-root span, covering the entire build->test->deploy->release run, is finally
-    # sent. This call moved here from deploy.yaml's finally block when this stage was
-    # added - see deploy.yaml's git history / docs/tracing.md.
+    # Real bug, fixed live 2026-08-11: this used to fire unconditionally, on the
+    # assumption release is always the flow's last stage (true in Phase 1/2's fixed
+    # chain). Phase 3 item 7 made flow ordering free-form - a flow's release step can be
+    # followed by more steps (e.g. release -> test, confirmed live), and plenty of real
+    # flows never reach release at all (e.g. build -> test -> deploy, no release
+    # configured). Closing the flow-root span here unconditionally meant: (a) any later
+    # stage's own span, sent after this one already closed the root, had a start/end
+    # time AFTER the trace's supposed end - a real, live-confirmed symptom; and (b) every
+    # non-release-terminal flow simply never closed its flow-root span at all, showing
+    # "running/incomplete" in the dashboard forever even after finishing successfully -
+    # also live-confirmed (5 of 12 real recent traces). is-flow-terminal (see above) is
+    # now computed per-flow at generation time and is the single source of truth for
+    # which stage actually closes the span - every stage Pipeline carries an identical
+    # copy of this task, gated the same way. See docs/tracing.md.
     - name: end-flow
+      when:
+        - { input: $(params.is-flow-terminal), operator: in, values: ["true"] }
       taskRef:
         resolver: cluster
         params:

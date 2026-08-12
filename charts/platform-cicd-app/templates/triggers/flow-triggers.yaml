@@ -43,6 +43,7 @@ its "tag" event instead, which fires a real push event PaC does support.)
 
 {{- range $index, $step := $steps -}}
 {{- $isFirst := eq $index 0 -}}
+{{- $isLast := eq $index (sub $stepCount 1) -}}
 {{- $isGitRooted := and $isFirst (eq $triggerSource "git") -}}
 {{- /*
 A first step with trigger.source: event (an arbitrary external CDEvent, not git and
@@ -197,6 +198,10 @@ spec:
     - { name: cluster, value: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) | quote }} }
     - { name: name, value: {{ $step.name | default "" | quote }} }
     - { name: is-flow-root, value: "false" }
+    {{/* Computed here, not left to each Pipeline's own default, since only the
+    generator knows this step's position within the flow's steps: list - see
+    docs/tracing.md and the is-flow-terminal param on catalog/pipelines/*.yaml. */}}
+    - { name: is-flow-terminal, value: {{ $isLast | quote }} }
     - { name: git-url, value: "$(body.subject.content.git-url)" }
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: image-ref, value: "$(body.subject.content.{{ $imageField }})" }
@@ -247,6 +252,7 @@ spec:
     - name: cluster
     - name: name
     - name: is-flow-root
+    - name: is-flow-terminal
     - name: git-url
     - name: git-revision
     - name: image-ref
@@ -262,6 +268,7 @@ spec:
         labels:
           platform.io/flow: {{ $flowName }}
           platform.io/stage: {{ $stageName }}
+          platform.io/step-index: {{ $index | quote }}
       spec:
         pipelineRef:
           resolver: cluster
@@ -271,6 +278,7 @@ spec:
             - { name: namespace, value: {{ $.Values.platformIdentity.catalogNamespace }} }
         params:
           - { name: is-flow-root, value: $(tt.params.is-flow-root) }
+          - { name: is-flow-terminal, value: $(tt.params.is-flow-terminal) }
           - { name: app-namespace, value: {{ $appNamespace }} }
           - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
           - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
