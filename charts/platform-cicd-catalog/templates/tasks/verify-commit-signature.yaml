@@ -13,6 +13,19 @@
 # hand-signed. open-release-pr.yaml embeds X-App-Repo/X-App-Commit trailers in that
 # commit's message specifically so this Task can find its way back to the right commit
 # without a second PaC Repository CR/webhook on the app repo.
+#
+# Walks history back from REVISION for the trailers (git log --grep, not `git log -1` on
+# REVISION's own message) - 2026-08-12, real bug found live once every commit on a release
+# PR started getting independently checked (see pull-request-policy-check.yaml's own
+# history for why that changed): open-release-pr.yaml's SECOND commit ("Add
+# outcome-reporting hooks...") never carries these trailers, only its first commit
+# ("Release: promote...") does - both commits promote the exact same app commit, the
+# second just layers unrelated bookkeeping on top. Checking only REVISION's own message
+# made this Task fail on every release PR's actual HEAD, permanently, for a commit that
+# was never supposed to carry trailers in the first place. Safe to walk back unbounded:
+# open-release-pr.yaml always branches fresh off main, so the nearest trailer-bearing
+# ancestor is always this release's own promote commit, never a stale one from a prior
+# release already merged into main's history.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -57,13 +70,15 @@ spec:
 
         # Extract the trailers open-release-pr.yaml embeds - see that file's own
         # comment on why these exist instead of a second PaC Repository CR on the app
-        # repo.
-        commit_body="$(git log -1 --format=%B)"
+        # repo. git log --grep (not `git log -1`, see this file's own header comment) -
+        # matches nothing rather than failing when no ancestor has the trailer, so this
+        # reaches the explicit empty check below instead of dying silently under set -e.
+        commit_body="$(git log -1 --format=%B --grep='^X-App-Repo: ' --extended-regexp)"
         app_repo="$(grep -E '^X-App-Repo: ' <<<"${commit_body}" | sed -E 's/^X-App-Repo: //')"
         app_commit="$(grep -E '^X-App-Commit: ' <<<"${commit_body}" | sed -E 's/^X-App-Commit: //')"
 
         if [[ -z "${app_repo}" || -z "${app_commit}" ]]; then
-          echo "FAIL: commit ${REVISION} is missing X-App-Repo/X-App-Commit trailers - cannot determine which app commit to verify" >&2
+          echo "FAIL: no commit reachable from ${REVISION} carries X-App-Repo/X-App-Commit trailers - cannot determine which app commit to verify" >&2
           exit 1
         fi
         echo "Verifying ${app_repo}@${app_commit}"
