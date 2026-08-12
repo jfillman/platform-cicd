@@ -87,6 +87,51 @@ free-form. Two live-confirmed symptoms, same root cause:
 `is-flow-terminal`, computed per-flow instead of hardcoded to one stage, fixes both:
 whichever stage is genuinely last for a given flow closes the span, and only that one.
 
+## Release outcome: a deliberately separate trace
+
+`release-outcome-notify.yaml` (fired once ArgoCD confirms a cluster-mapped release's
+sync outcome - see [multi-cluster.md](multi-cluster.md)'s "The outcome span") sends its
+own span (`catalog/tasks/release-outcome-span.yaml`), but **not** as a child of the
+original flow's trace. This is deliberate, and the reasoning is the mirror image of
+"Which stage closes the flow-root span" above: the flow-root span is already closed -
+by whichever stage was terminal for that flow, typically `release`'s own `end-flow`
+`finally` task, at PR-*open* time - long before a human reviews, approves, and merges
+the PR, and before ArgoCD confirms the sync. That gap is potentially minutes to days.
+Appending a child span to the original trace from `release-outcome-notify` would
+reproduce, on purpose, the exact bug the `is-flow-terminal` redesign above already fixed
+by accident: "a span sent after its trace's root already closed shows up with a
+start/end time after the trace's supposed end." Human review/merge/ArgoCD-sync time was
+already deliberately excluded from the automated trace for this reason (see
+[release.md](release.md)) - extending the trace to cover it would undo that on purpose.
+
+So `release-outcome-span.yaml` mints its **own** fresh trace-id (`otel_flow_root_begin`,
+the same call `build`'s own `start-flow-root-span` uses when it's a flow root) and sends
+one standalone span, no parent. Correlation back to the original flow is by `chain-id`
+(CDEvents' own causal-sequence correlator - see this file's own header on why it's kept
+distinct from the OTel trace/span ids), carried as a span *attribute*
+(`platform.chain_id`), not a structural parent - `{ platform.chain_id = "..." }` in
+Tempo/Grafana surfaces this span alongside the original flow's spans even though they
+live in genuinely different traces.
+
+**The span's start-time is `pr-created-at`, not `flow-start-time`** - a real design
+decision, not an oversight, made 2026-08-12 at the user's request to see how long PR
+creation to confirmed deployment actually takes. `flow-start-time` (commit time) would
+make this span's own duration double-count the automated pipeline's own execution time
+(commit -> PR-open), which is already fully visible as the `stage:release` span's own
+duration in the original flow trace. Anchoring on `pr-created-at` (the wall-clock moment
+`open-release-pr.yaml`'s own GitHub API call actually returned, threaded through the
+same hook-Job/relay/Trigger path chain-id uses) isolates the previously-invisible
+segment instead: review + merge + ArgoCD-sync time, with no overlap against what the
+flow trace already reports. `flow-start-time` still rides along as a span attribute
+(`platform.flow_start_time`) for anyone who wants full commit-to-deploy DORA lead time
+instead - a strict superset, derivable without re-instrumenting anything.
+
+Live-verified end to end (not just that the Pipeline completes): fired a synthetic
+outcome directly at `argocd-outcome-relay` with real, distinct `chainId`/`prCreatedAt`
+values, confirmed both reached the `release-outcome-notify` PipelineRun and its `span`
+TaskRun's own params, then queried Tempo directly and confirmed the resulting span's
+real `startTimeUnixNano` matched `prCreatedAt` exactly - not `flowStartTime`.
+
 ## otel-cli, and why spans are "begin" then "send", never "background"
 
 Span emission from bash step scripts goes through `catalog/lib/otel.sh`, which wraps
@@ -120,6 +165,40 @@ governance-stub spans) is not the right tool for sub-second in-step instrumentat
 (process-per-invocation overhead dominates at that granularity) -
 `resolve-build-config`-style config-parsing steps deliberately skip span wrapping for
 exactly this reason, see the comment in `charts/platform-cicd-catalog/templates/tasks/build-image.yaml`.
+
+## Span-send reliability (added 2026-08-12)
+
+`otel_span_send`/`otel_task_span_send` (`catalog/lib/otel.sh`) had no retry and relied
+on otel-cli's own default `--timeout` (1s) - unlike every other network call in this
+codebase, which all retry (`cdevent_send` in `catalog/lib/cdevents.sh` uses `curl --retry
+3 --retry-connrefused`). Two real, distinct problems this caused, found live debugging a
+user-reported symptom ("release trace data is missing and the flow is showing
+incomplete/running"):
+
+1. **Silent data loss on connection failure.** otel-cli is silent-by-default (its own
+   `--fail` flag: "on failure, exit with a non-zero status" - implying it does *not*
+   without that flag) - confirmed live by pointing it at an unroutable address and
+   observing exit 0 anyway. A collector that's briefly unreachable meant the span just
+   vanished, no error anywhere, nothing to retry.
+2. **A real, reproducible hard failure under load.** A genuine production TaskRun's
+   `end-release-stage-span` failed outright (`otel-cli` exit 2) during a burst of 8
+   concurrent governance-check PipelineRuns. Reproducing the *exact* same otel-cli call
+   by hand, with byte-identical params, succeeded immediately once the cluster wasn't
+   under that same load - pointing at otel-cli's 1s default timeout being too tight for
+   real contention, not a data/logic bug (the params were all well-formed - a fresh
+   random span-id, a valid traceparent, a valid start-time).
+
+`_otel_cli_send` (new, shared by both functions) fixes both: `--fail --timeout 5s` makes
+a real failure surface as a real exit code instead of a silent no-op, and 3 attempts
+with a short backoff cover a one-off blip. Deliberately does **not** propagate a final
+failure after all 3 attempts to the caller (`return 0` either way, with a stderr note) -
+losing trace data is real, but failing an otherwise-successful release PipelineRun over
+an observability side-channel would be worse; this is the same best-effort philosophy
+`notify-slack.yaml`/`comment-pr-check-result.yaml` already use for their own network
+calls. `otel_child_span` (the `otel-cli exec` path) is deliberately left alone - its
+`exec` semantics are different (it wraps and reports the exit code of a *real* command,
+`--fail` there could mean something different) and it wasn't implicated in the actual
+live failure.
 
 ## Task-level spans, and a real non-toolbox-image bug found live
 

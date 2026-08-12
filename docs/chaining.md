@@ -157,6 +157,24 @@ runs regardless (needed for `resolve-agent-image`/`integration-test`), so its
 whatever it received (or freshly resolved) in its own `service.deployed` event so
 `release` can inherit it too.
 
+**Real bug, found live 2026-08-12, fixed**: the paragraph above described the ORIGINAL
+design, built under the (then-true) assumption that every flow is a fixed
+`build->test->deploy->release` chain - so only `test`'s and `deploy`'s own events ever
+needed to carry `config_json` forward; `build`'s `artifact.published` and `release`'s
+`change.created` were left at `send-cdevent.yaml`'s default (`"{}"`). Phase 3 item 7's
+free-form flow topology broke that assumption: `flow-triggers.yaml`'s `$eventTypeMap`
+means literally any stage's own domain event can be what a next stage chains off of
+(confirmed live testing a genuine two-step `build -> release` flow, `cicd-flow-test-
+app`'s own `ci` flow) - `release` inherited `config_json: "{}"` because `build`'s event
+never carried it, and `notify-slack` silently no-op'd ("disabled in cicd.yaml") with no
+error anywhere, on both the release stage itself and the downstream release-outcome
+report (see [multi-cluster.md](multi-cluster.md), which reads the same forwarded value).
+**All four** domain events now forward `config_json` - `build`'s from `validate-config`'s
+own result (the same source its own `notify` task already used), `release`'s from
+`resolve-notify-config`'s result (matching `deploy`'s existing pattern) - so any stage
+chaining directly off any other stage inherits the real value, not just the two
+"middle" transitions the original design anticipated.
+
 `deploy.yaml`/`release.yaml` no longer have a dedicated `clone-repo` task at all, and
 their `source` workspace is `optional: true` - `flow-triggers.yaml` omits the workspace
 binding entirely for these two stages' `TriggerTemplate`s (only `test` still gets one),

@@ -241,7 +241,14 @@ plain env vars, `CONFIG_JSON_B64` (base64, the one field that's an arbitrary JSO
 rather than a flat string - sidesteps any risk of the printf-per-line manifest
 generation mis-escaping it) the same way. `PHASE` is baked in per-hook-type
 (`Succeeded`/`Failed`) rather than discovered live - which hook ran already tells you
-the outcome. The hook script itself
+the outcome. Two more fields joined this list 2026-08-12, both optional (`:-`, not
+`:?`, in the hook script - an app onboarded before either existed must keep releasing
+without them): `CHAIN_ID` (this flow's own chain-id, threaded from
+`release.yaml`'s `start-flow` result - see "The outcome span" below for what it's
+for) and `PR_CREATED_AT` (the wall-clock moment this Task's own GitHub PR-creation API
+call returned, captured immediately after `pr_url` is resolved - the real start anchor
+for that same span, deliberately NOT `FLOW_START_TIME`, see below for why). The hook
+script itself
 (`catalog/lib/argocd-outcome-hook.sh`, baked into the toolbox image, not embedded in the
 generated Job YAML - avoids re-hitting the same YAML-block-scalar-indentation class of
 bug documented below) does exactly two live things: read a small per-app,
@@ -253,9 +260,11 @@ delivered alongside the hooks, see `platform-outcome-rbac.yaml`), and `curl` the
 **A new per-app Trigger** (`charts/platform-cicd-app/templates/triggers/
 release-outcome-trigger.yaml`, rendered only for apps with a cluster-mapped upper env)
 consumes the relay's forwarded CDEvent and fires `release-outcome-notify`
-(`charts/platform-cicd-catalog/templates/pipelines/release-outcome-notify.yaml`), a
-thin wrapper around the existing `notify-slack` Task - real Slack notifications for a
-confirmed cluster-mapped release outcome, not just a CDEvent landing unseen. Its CEL
+(`charts/platform-cicd-catalog/templates/pipelines/release-outcome-notify.yaml`) - real
+Slack notifications for a confirmed cluster-mapped release outcome, not just a CDEvent
+landing unseen. Two independent tasks as of 2026-08-12 (see "The outcome span" below for
+the second one, added that day - before it, this Pipeline really was the single
+`notify-slack` wrapper this paragraph used to describe). Its CEL
 filter can't use `extensions.app_namespace` the way every Trigger in
 `flow-triggers.yaml` does (the caller is always the relay's own `platform-system`
 identity, not the target app's) - it matches on the event's own claimed
@@ -272,6 +281,46 @@ on `release-outcome-notify` -> `notify-slack.yaml`'s own `pr-url` param, which t
 priority over that Task's existing live-TaskRun-lookup path (which only works for
 `release` itself, since `release-outcome-notify` runs in a completely different
 PipelineRun than the one that has `open-release-pr` as a sibling TaskRun to look up).
+
+## The outcome span (added 2026-08-12)
+
+Slack was the only thing `release-outcome-notify` did until a real gap was found live:
+this Pipeline had **no tracing task at all**, so a confirmed cluster-mapped outcome was
+invisible in Tempo/Grafana - only reachable by pasting a trace ID by hand once you
+already somehow knew one existed. `catalog/tasks/release-outcome-span.yaml` closes that
+gap, but not by extending the original flow's trace - see docs/tracing.md's "Release
+outcome: a deliberately separate trace" for the full reasoning (short version: the
+flow-root span is already closed by the time a human merges this PR, see that doc's
+"Which stage closes the flow-root span"; appending a child span here, potentially days
+later, would reproduce the exact "span after root closed" bug already fixed there).
+
+**Why the span's start-time is `pr-created-at`, not `flow-start-time`** - a real design
+change made at the user's own request ("connect the PR release and the release outcome
+so we can see how long it takes between creating the PR and application deployment").
+`flow-start-time` (commit time) was the original anchor, but that means this span's own
+duration double-counted this platform's own automated build/test/deploy/release
+execution time - already fully visible as the `stage:release` span's own duration in the
+ORIGINAL flow trace (docs/tracing.md). Anchoring on `pr-created-at` instead isolates the
+actually-interesting, previously-invisible segment: how long the human-review-plus-
+ArgoCD-sync gap itself took, with no overlap against what the flow trace already shows.
+`flow-start-time` is still carried as a span *attribute* (`platform.flow_start_time`),
+not thrown away - anyone wanting full commit-to-deploy DORA lead time instead can still
+derive it from there, it's a strict superset of this span's own start/end.
+
+**Correlation back to the original flow is via chain-id, not trace-id** - the two
+always live in different Tempo traces (this span's own, deliberately standalone), so
+there's no structural link between them the way a parent/child span relationship would
+give. `chain-id` (CDEvents' own causal-sequence correlator - see docs/tracing.md's file
+header on `otel.sh`) rides the exact same path `pr-created-at` does (hook Job env var ->
+hook script -> relay -> CDEvent -> Trigger binding -> Pipeline param), and lands on the
+span as the `platform.chain_id` attribute - `{ platform.chain_id = "..." }` in Tempo/
+Grafana surfaces both the original flow's spans and this standalone one together, even
+though they're structurally unrelated traces. The `CICD Variant 1` dashboard
+(`observability/grafana/dashboards/cicd-mission-control.json`) exposes chain-id as an
+expandable column on both its Flow board and its Release outcomes panel for exactly this
+manual cross-reference - there's no way to make it a one-click link through Tempo's
+search API (trace-level and span-level fields don't cross that way, confirmed live
+while building the dashboard panel).
 
 ## Deferred: relay-token distribution via External Secrets Operator
 
@@ -474,3 +523,13 @@ tenants/clusters, real TLS/ingress hardening for the relay (same-host podman
 reachability is what's actually verified), a real second env/cluster beyond this one
 proof, and moving relay-token distribution onto External Secrets Operator (deferred
 until this app's k8s delivery is packaged as its own Helm chart - see above).
+
+**2026-08-12 follow-up** (see "The outcome span" above for the full design): closed a
+real gap found live - `release-outcome-notify` had never had a tracing task at all.
+`chain-id` and `pr-created-at` now ride the same hook-Job/relay/Trigger path
+`flow-start-time`/`config-json`/`pr-url` already established, feeding a new, real
+standalone span (`release-outcome-span.yaml`) live-verified end to end: fired a
+synthetic outcome directly at the relay with `chainId`/`prCreatedAt` set, confirmed both
+values reached the `release-outcome-notify` PipelineRun and its `span` TaskRun, and
+confirmed via a direct Tempo query that the resulting span's real start time was exactly
+`prCreatedAt`, not `flowStartTime` - not just that the Pipeline completed successfully.

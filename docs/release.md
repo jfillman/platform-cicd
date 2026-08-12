@@ -174,6 +174,23 @@ sast`) to re-run just that one, or `/retest` alone to re-run all four - PaC's ow
 comment mechanism, no platform code involved. Fix the underlying issue first if the
 failure is real; re-running only re-evaluates the check, it does not bypass it.
 
+**Each check also posts its own real PR comment** on top of the GitHub Check PaC already
+reports natively (`catalog/tasks/comment-pr-check-result.yaml`, 2026-08-10) - failure
+detail (a live pod-log excerpt), a gate-specific recommendation, and the exact `/retest
+<gate>` command on failure; a short confirmation on success. It edits its own prior
+comment on a gate in place (a hidden `<!-- platform-cicd:gate:<name> -->` marker) rather
+than always appending, so re-verifying an unchanged commit updates the existing comment
+instead of spamming a duplicate. **Real race, found live 2026-08-12**: for a cluster-mapped release,
+`open-release-pr.yaml` opens a release PR with two commits (the promote commit, then a
+second outcome-hooks commit pushed right after - see [multi-cluster.md](multi-cluster.md)),
+and since every commit gets independently re-verified, two check runs for the *same* gate can land close
+enough together that both read "no existing comment" before either posts - two comments,
+not deduped. Fixed without a lock: after posting, re-list this gate's own comments and
+collapse to the single earliest (lowest id) survivor - every racing run computes the
+same decision off the same eventually-consistent list, so they converge regardless of
+which one "wins" (a second run's delete of an already-deleted duplicate is expected and
+tolerated).
+
 **Break-glass** (decided with the user, 2026-08-05): who can force a release through a
 failing required check, and how it's made visible.
 
@@ -198,12 +215,20 @@ failing required check, and how it's made visible.
   with all checks green correctly produced no alert; a real PR with a genuinely failing
   `policy-check`, fed synthetically as `merged=true` (no actual bypass has happened yet
   on this repo), correctly detected it and posted a real, visible Slack message.
-  **Not yet verified**: the trigger file's own `on-cel-expression` (`body.action ==
-  "closed"`) and `{{ body.pull_request.number }}`/`{{ body.pull_request.merged }}`
-  field access - this needs a real PR close event to confirm PaC resolves them exactly
-  as written, which wasn't exercised this session (no actual bypass-eligible merge
-  occurred). Worth a real end-to-end pass once the `platform-admins` team/branch-
-  protection setting above is actually configured.
+  **Still not fully verified** (a real PR close event with an actual bypass hasn't been
+  exercised), but a real, related bug WAS found and fixed live 2026-08-12 while
+  investigating something else: PaC evaluates a Pipeline's `on-cel-expression` against
+  *every* webhook delivery for the repo once one is present, not just events shaped like
+  what the expression expects - confirmed live via a genuine push webhook (a release
+  PR's own merge fires one, alongside the `pull_request` event) throwing a real CEL "no
+  such key: action" error against this file's bare `body.action == "closed"`, reported
+  back as a false-alarm bot comment ("errors in your PipelineRun template") on the very
+  PR that had just successfully merged. Fixed with `has(body.action) && body.action ==
+  "closed"` - `has()` short-circuits the rest of the expression when the event isn't
+  PR-shaped, same fix applied to all four governance-check files below (they had the
+  identical bare-field pattern on `body.pull_request.*`). Doesn't confirm the intended
+  bypass-detection behavior itself, but does confirm this Trigger's CEL now survives
+  contact with real, mixed webhook traffic instead of erroring on it.
 
 ## Verification
 
