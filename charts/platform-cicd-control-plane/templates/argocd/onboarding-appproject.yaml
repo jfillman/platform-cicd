@@ -38,6 +38,12 @@ spec:
     single tenant's own AppProject by design - see this file's own header comment.
   sourceRepos:
     - {{ .Values.platformCicdRepoUrl }}
+    # The chart itself now lives here (OCI, GHCR), not rendered straight from the git
+    # repo above - see tenant-onboarding-applicationset.yaml's own header for the full
+    # OCI-publishing story. Confirmed live this needs its own sourceRepos entry: a
+    # real sync failure ("application repo oci://... is not permitted in project"),
+    # not assumed - the git repo URL above doesn't cover it, they're unrelated strings.
+    - {{ .Values.platformChartOciRepo }}
     # Any tenant app repo under this GitHub org - source 1 of the ApplicationSet's
     # generated Application reads cicd.yaml live from platformIdentity.appRepoUrl,
     # per-tenant, which a fixed list here can't keep pace with as new tenants are added.
