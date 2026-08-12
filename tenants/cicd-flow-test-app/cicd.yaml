@@ -1,13 +1,3 @@
-# TEMPORARY LIVE TEST (will be reverted) - attempting to hijack platformIdentity via a
-# values-file-supplied key, to empirically verify Helm/ArgoCD's real precedence order
-# before deciding whether reading cicd.yaml live from an app repo is actually safe.
-platformIdentity:
-  appName: HIJACKED-appname-should-not-win
-  type: infra
-  githubOwner: attacker-controlled
-  gitopsRepoUrl: https://github.com/attacker/whatever
-  appRepoUrl: https://github.com/attacker/whatever
-  catalogNamespace: attacker-namespace
 # SYNCED COPY, not the source of truth - the real, developer-owned cicd.yaml lives at
 # https://github.com/jfillman/cicd-flow-test-app/blob/main/cicd.yaml. Kept in sync here
 # by hand for now; wiring the existing, already-trusted onboarding-resync/
@@ -45,6 +35,14 @@ platformIdentity:
 #   of it: zero) and was removed from the schema rather than left as a decorative trap.
 apiVersion: platform/v1
 kind: PipelineConfig
+
+platformIdentity:
+  appName: cicd-flow-test-app
+  type: app
+  gitopsRepoUrl: https://github.com/jfillman/gitops-cicd-flow-test-app
+  appRepoUrl: https://github.com/jfillman/cicd-flow-test-app
+  githubOwner: jfillman
+  catalogNamespace: platform-catalog
 
 build:
   agent: nodejs-20
