@@ -33,6 +33,10 @@ set -euo pipefail
 # same chain-id the rest of this flow's spans carry, for correlation in Tempo/Grafana.
 # Not `:?`-required: an app onboarded before this field existed would otherwise break
 # every release until re-onboarded, for a correlation nicety, not a functional one.
+#
+# PR_CREATED_AT, same "optional, don't break old releases" reasoning - the real start
+# anchor for that same span (see release-outcome-span.yaml's own header for why it's
+# PR-creation time, not flow-start-time). Falls back to flow-start-time there if empty.
 
 # The shared per-cluster secret, hand-provisioned once per app namespace on THIS
 # cluster (never committed to git, never passed through open-release-pr.yaml - that
@@ -57,7 +61,8 @@ payload="$(jq -n \
   --arg prUrl "${PR_URL:-}" \
   --arg configJsonB64 "${CONFIG_JSON_B64:-}" \
   --arg chainId "${CHAIN_ID:-}" \
-  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, prUrl: $prUrl, configJsonB64: $configJsonB64, chainId: $chainId}')"
+  --arg prCreatedAt "${PR_CREATED_AT:-}" \
+  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, prUrl: $prUrl, configJsonB64: $configJsonB64, chainId: $chainId, prCreatedAt: $prCreatedAt}')"
 
 echo "[argocd-outcome-hook] app=${APP_NAME} env=${ENV} phase=${PHASE}: reporting to ${RELAY_URL}"
 curl --fail --silent --show-error --max-time 15 \

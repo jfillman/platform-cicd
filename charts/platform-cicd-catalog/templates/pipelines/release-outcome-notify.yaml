@@ -57,6 +57,13 @@ spec:
       type: string
       default: ""
       description: The original flow's own start time (DORA lead-time anchor) - see release-outcome-span.yaml.
+    - name: pr-created-at
+      type: string
+      default: ""
+      description: >-
+        When open-release-pr.yaml's own API call actually created this release PR - the
+        real start anchor for release-outcome-span.yaml's span (falls back to
+        flow-start-time there if empty, for an app onboarded before this field existed).
   tasks:
     - name: notify
       taskRef:
@@ -99,3 +106,4 @@ spec:
         - { name: status, value: $(params.status) }
         - { name: chain-id, value: $(params.chain-id) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: pr-created-at, value: $(params.pr-created-at) }

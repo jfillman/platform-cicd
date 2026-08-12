@@ -27,11 +27,21 @@
 # each of those files' own comments. Empty (backward-compatible) for an app onboarded
 # before this field existed; the span still sends, just without that attribute.
 #
-# start-time is the ORIGINAL flow's own flow-start-time (same source releases already
-# use for DORA lead time, mark-release-pending.yaml), not "when this PipelineRun
-# itself started" - so this span's own duration is a real, drillable "commit to
-# confirmed staging deployment" lead time, complementary to (not a replacement for)
-# the DORA exporter's own metric of the same thing (docs/dora-metrics.md).
+# start-time is pr-created-at (when open-release-pr.yaml's own API call actually
+# created this release PR), not flow-start-time and not "when this PipelineRun itself
+# started". Real design choice, changed 2026-08-12 at the user's request ("connect the
+# PR release and the release outcome so we can see how long it takes between creating
+# the PR and application deployment"): flow-start-time covers commit -> PR-open, which
+# is this platform's own automated build/test/deploy/release execution time - already
+# fully visible as the "stage:release" span's own end time in the ORIGINAL flow trace
+# (docs/tracing.md). Anchoring THIS span there too would double-count that segment
+# inside "release lead time" instead of isolating the actually-interesting, previously
+# invisible segment: how long the human-review-plus-ArgoCD-sync gap itself took.
+# flow-start-time is still carried as a span ATTRIBUTE (platform.flow_start_time,
+# below) for anyone who wants full commit-to-deploy DORA lead time instead - it's a
+# strict superset of this span's own start/end, derivable without re-instrumenting
+# anything. Falls back to flow-start-time (then otel_now) as the actual start-time if
+# pr-created-at is empty, for an app onboarded before that field existed.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -57,7 +67,16 @@ spec:
     - name: flow-start-time
       type: string
       default: ""
-      description: The original flow's own start time (DORA lead-time anchor) - falls back to "now" if empty, so the span still sends with a zero-ish duration rather than failing.
+      description: >-
+        The original flow's own start time - carried as a span attribute (full DORA
+        lead-time anchor) and used as the start-time fallback when pr-created-at is
+        empty. See this file's own header.
+    - name: pr-created-at
+      type: string
+      default: ""
+      description: >-
+        When this release's PR was actually created - the real start-time for this
+        span. See this file's own header for why, not flow-start-time.
   steps:
     - name: send-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -77,6 +96,8 @@ spec:
           value: $(params.chain-id)
         - name: FLOW_START_TIME
           value: $(params.flow-start-time)
+        - name: PR_CREATED_AT
+          value: $(params.pr-created-at)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -86,10 +107,15 @@ spec:
         # file's own header for why it's deliberately NOT parented under the original
         # flow's already-closed root.
         read -r traceparent _ <<< "$(otel_flow_root_begin)"
-        start_time="${FLOW_START_TIME}"
+        # pr-created-at is the real start anchor (see this file's own header); fall
+        # back to flow-start-time, then otel_now, for an app onboarded before
+        # pr-created-at existed.
+        start_time="${PR_CREATED_AT}"
+        [[ -z "${start_time}" ]] && start_time="${FLOW_START_TIME}"
         [[ -z "${start_time}" ]] && start_time="$(otel_now)"
 
         attrs="platform.app_namespace=${APP_NAMESPACE},platform.app_name=${APP_NAME},platform.env=${ENV_NAME}"
         [[ -n "${CHAIN_ID}" ]] && attrs="${attrs},platform.chain_id=${CHAIN_ID}"
+        [[ -n "${FLOW_START_TIME}" ]] && attrs="${attrs},platform.flow_start_time=${FLOW_START_TIME}"
 
         otel_span_send "release-outcome:${APP_NAME}/${ENV_NAME}" "${traceparent}" "" "${start_time}" "$(otel_now)" "${STATUS}" "${attrs}"

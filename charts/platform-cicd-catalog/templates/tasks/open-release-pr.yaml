@@ -104,6 +104,15 @@ spec:
   results:
     - name: pr-url
       description: URL of the opened (or already-open, on retry) release PR.
+    - name: pr-created-at
+      description: >-
+        Wall-clock time this Task's PR-creation API call actually returned - the real
+        start anchor for release-outcome-span.yaml's own span (see that file's own
+        header): "time from PR creation to confirmed deployment" is a genuinely
+        different, non-overlapping question from flow-start-time's own "time from
+        commit to confirmed deployment" (the latter includes this Task's own automated
+        build/test/deploy/release execution time, already fully visible in the
+        original flow trace - see docs/tracing.md).
   # Audience-bound projected ServiceAccount token for the shared broker's GitHub
   # token-minting endpoint - see catalog/lib/github-app.sh. Same pattern as
   # send-cdevent.yaml's broker-token volume, different audience/endpoint.
@@ -317,6 +326,10 @@ spec:
           "https://api.github.com/repos/${owner}/${gitops_repo}/pulls" \
           -d "${pr_body}")"
         pr_url="$(jq -r '.html_url' <<<"${pr_response}")"
+        # otel_now's own format (catalog/lib/otel.sh) - not otel_now itself, this
+        # script doesn't source otel.sh and doesn't need the rest of it for one
+        # timestamp.
+        pr_created_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")"
 
         # Outcome-reporting: tracking annotations on deployment.yaml itself, plus
         # RBAC and two ArgoCD sync-hook Jobs - deliberately a SECOND commit on this
@@ -449,6 +462,7 @@ spec:
               "            - { name: FLOW_START_TIME, value: \"${FLOW_START_TIME}\" }" \
               "            - { name: CHAIN_ID, value: \"${CHAIN_ID}\" }" \
               "            - { name: PR_URL, value: \"${pr_url}\" }" \
+              "            - { name: PR_CREATED_AT, value: \"${pr_created_at}\" }" \
               "            - { name: CONFIG_JSON_B64, value: \"${CONFIG_JSON_B64}\" }" \
               > "${hook_manifest}"
             git add "${hook_manifest}"
@@ -460,3 +474,4 @@ spec:
         fi
 
         echo "${pr_url}" | tee "$(results.pr-url.path)"
+        echo -n "${pr_created_at}" | tee "$(results.pr-created-at.path)"

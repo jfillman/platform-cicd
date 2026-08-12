@@ -40,6 +40,7 @@ spec:
     - { name: config-json, value: "$(body.subject.content.configJson)" }
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: flow-start-time, value: "$(body.subject.content.flowStartTime)" }
+    - { name: pr-created-at, value: "$(body.subject.content.prCreatedAt)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
@@ -63,6 +64,7 @@ spec:
     - name: config-json
     - name: chain-id
     - name: flow-start-time
+    - name: pr-created-at
   resourcetemplates:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
@@ -94,6 +96,7 @@ spec:
           - { name: config-json, value: $(tt.params.config-json) }
           - { name: chain-id, value: $(tt.params.chain-id) }
           - { name: flow-start-time, value: $(tt.params.flow-start-time) }
+          - { name: pr-created-at, value: $(tt.params.pr-created-at) }
         taskRunTemplate:
           serviceAccountName: pipeline-runner
 ---

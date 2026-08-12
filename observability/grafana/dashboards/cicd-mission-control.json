@@ -239,7 +239,7 @@
       "id": 20,
       "type": "table",
       "title": "Flow board - every build->test->deploy->release run, real time",
-      "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: the flow-root span is sent exactly once, from whichever stage's finally block is actually LAST in that specific flow's steps: list (any of build/test/deploy/release, per-flow - see docs/tracing.md's is-flow-terminal design) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before reaching its declared last step. Fixed 2026-08-11: this used to assume release was always last, so any flow without a release step (or with steps after release) showed this status forever even after finishing successfully - see docs/tracing.md. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below.",
+      "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: the flow-root span is sent exactly once, from whichever stage's finally block is actually LAST in that specific flow's steps: list (any of build/test/deploy/release, per-flow - see docs/tracing.md's is-flow-terminal design) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before reaching its declared last step. Fixed 2026-08-11: this used to assume release was always last, so any flow without a release step (or with steps after release) showed this status forever even after finishing successfully - see docs/tracing.md. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below. Added 2026-08-12: the Detail column expands to this trace's own real span status plus its chain-id - the same chain-id a release's release-outcome-span.yaml span carries (see the Release outcomes panel below), the way to manually connect a specific flow here to its own outcome row there, since the two always live in different Tempo traces (release-outcome-span.yaml's own header explains why).",
       "gridPos": {
         "x": 0,
         "y": 8,
@@ -253,7 +253,7 @@
       "targets": [
         {
           "queryType": "traceql",
-          "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" } | select(status)",
+          "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" } | select(status, .platform.chain_id)",
           "limit": 20
         }
       ],
@@ -261,15 +261,14 @@
         {
           "id": "organize",
           "options": {
-            "excludeByName": {
-              "nested": true
-            },
+            "excludeByName": {},
             "indexByName": {
               "traceName": 0,
               "traceService": 1,
               "startTime": 2,
               "traceDuration": 3,
-              "traceID": 4
+              "traceID": 4,
+              "nested": 5
             }
           }
         }
@@ -432,6 +431,28 @@
                     "targetBlank": false
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "nested"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Detail (click to expand: status, chain-id)"
+              },
+              {
+                "id": "custom.width",
+                "value": 260
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "nestedData"
+                }
               }
             ]
           }
@@ -884,7 +905,7 @@
       "id": 24,
       "type": "table",
       "title": "Release outcomes - PR creation through ArgoCD-confirmed sync",
-      "description": "Each row is one release-outcome-span.yaml span (catalog/tasks/release-outcome-span.yaml, added 2026-08-12) - a deliberately SEPARATE, standalone trace per release, not a child of the automated flow trace above. It exists because the automated pipeline trace intentionally ends at PR-open time (release.yaml's own end-flow finally task, gated on is-flow-terminal) - the PR's own human review/merge and ArgoCD's confirmed sync afterward are unbounded process time, not pipeline execution time, and appending them to the same trace would reproduce a real, already-fixed bug (a span reported after its trace's root already closed). 'Lead time' here is genuinely the commit-to-confirmed-deployment duration (DORA lead time), not comparable to the 'Duration so far' column in the Flow board above - the two panels answer different questions on purpose. Correlate a release-outcome row back to its originating flow via the chain-id shared between them (visible in Tempo's own span attributes on both sides), not via trace-id - the two always live in different traces.",
+      "description": "Each row is one release-outcome-span.yaml span (catalog/tasks/release-outcome-span.yaml) - a deliberately SEPARATE, standalone trace per release, not a child of the automated flow trace above. It exists because the automated pipeline trace intentionally ends at PR-open time (release.yaml's own end-flow finally task, gated on is-flow-terminal) - the PR's own human review/merge and ArgoCD's confirmed sync afterward are unbounded process time, not pipeline execution time, and appending them to the same trace would reproduce a real, already-fixed bug (a span reported after its trace's root already closed). 'Lead time' here is the PR-created -> confirmed-deployed gap specifically (2026-08-12, at the user's request to connect release-PR creation and outcome) - NOT total commit-to-deploy DORA lead time, which would also include the automated pipeline's own execution time (already fully visible as the 'stage:release' span's own duration in the Selected Flow panel above); the two are deliberately non-overlapping. Expand the Outcome column for the real status plus the chain-id/flow_start_time attributes - chain-id is the same identifier the Flow board above carries (also expandable), the way to manually connect a specific release trace to its own outcome row here, since the two always live in different Tempo traces.",
       "gridPos": {
         "x": 0,
         "y": 51,
@@ -898,7 +919,7 @@
       "targets": [
         {
           "queryType": "traceql",
-          "query": "{ name =~ \"^release-outcome:.*\" } | select(status)",
+          "query": "{ name =~ \"^release-outcome:.*\" } | select(status, .platform.chain_id)",
           "limit": 20
         }
       ],
@@ -946,7 +967,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Committed"
+                "value": "PR created"
               },
               {
                 "id": "custom.width",
@@ -962,7 +983,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Lead time (commit -> confirmed deploy)"
+                "value": "Lead time (PR created -> confirmed deploy)"
               },
               {
                 "id": "unit",

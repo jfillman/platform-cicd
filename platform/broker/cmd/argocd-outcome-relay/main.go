@@ -93,7 +93,8 @@ type outcomeRequest struct {
 	FinishedAt    string `json:"finishedAt"` // set by the hook script itself (date -u), the moment it actually runs
 	PRUrl         string `json:"prUrl"`      // the GitOps PR this release/hook Job came from - see notify-slack.yaml's own pr-url param
 	ConfigJSONB64 string `json:"configJsonB64"`
-	ChainID       string `json:"chainId"` // optional - see catalog/lib/argocd-outcome-hook.sh's own comment on why this isn't required
+	ChainID       string `json:"chainId"`     // optional - see catalog/lib/argocd-outcome-hook.sh's own comment on why this isn't required
+	PRCreatedAt   string `json:"prCreatedAt"` // optional, same reasoning - see catalog/lib/argocd-outcome-hook.sh's own comment
 }
 
 func main() {
@@ -304,6 +305,12 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 				"finishedAt":    req.FinishedAt,
 				"prUrl":         req.PRUrl,
 				"configJson":    configJSON,
+				// The real start anchor for release-outcome-span.yaml's own span -
+				// see that file's own header for why PR-creation time, not
+				// flowStartTime above, is what "lead time" should measure here.
+				// Empty for an app onboarded before this field existed (same
+				// backward-compatible default as chainId above).
+				"prCreatedAt": req.PRCreatedAt,
 			},
 		},
 		"customData": map[string]interface{}{
