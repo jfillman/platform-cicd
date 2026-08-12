@@ -1,0 +1,24 @@
+# tenants/nodejs-demo-app/identity.yaml
+#
+# See tenants/cicd-flow-test-app/identity.yaml's own header for the full design
+# rationale (including why this lives alongside a tracked cicd.yaml copy rather than an
+# ArgoCD live read of the app repo). This tenant has
+# no release stage and no PR-based ephemeral environments configured (confirmed live via
+# `helm get values app-nodejs-demo-app-cicd -n app-nodejs-demo-app-cicd`), so
+# gitopsRepoUrl/appRepoUrl are functionally unused - but set to "" explicitly, not
+# omitted, same reasoning as catalogNamespace below.
+#
+# All six fields are always present in every tenants/*.yaml file, even when a field is
+# "" - the ApplicationSet's own Go-template evaluation of these generator params is a
+# separate layer from the Helm chart's own values.yaml defaults, and a genuinely-missing
+# map key under Go's text/template is a hard render error for every tenant, not just this
+# one. catalogNamespace is set explicitly to match the chart's real default
+# (charts/platform-cicd-app/values.yaml) rather than relying on that default silently -
+# this file is now the authoritative source, so it says so explicitly.
+platformIdentity:
+  appName: nodejs-demo-app
+  type: app
+  gitopsRepoUrl: ""
+  appRepoUrl: ""
+  githubOwner: jfillman
+  catalogNamespace: platform-catalog

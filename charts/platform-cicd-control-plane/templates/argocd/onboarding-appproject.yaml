@@ -1,0 +1,69 @@
+# templates/argocd/onboarding-appproject.yaml
+#
+# Scopes the tenant-onboarding ApplicationSet's generated Applications (see
+# tenant-onboarding-applicationset.yaml in this same directory). Deliberately a
+# SEPARATE, broader AppProject from charts/platform-cicd-app/templates/argocd/
+# appproject.yaml's per-tenant one (named after that tenant's own computed namespace,
+# scoped tightly to Deployment/Service in that one tenant's own env namespaces) - that
+# project governs
+# what a tenant's RELEASE deploys, this one governs what installing/upgrading the
+# onboarding chart itself creates, which is structurally more privileged: RBAC,
+# ServiceAccounts, Tekton Trigger objects, ExternalSecrets, and the chart's own nested
+# AppProject/Application/ApplicationSet objects (confirmed live via `helm template`
+# against two real config shapes - a cluster-mapped-release tenant and a local-release+
+# ephemeral-envs tenant - rather than guessed, so this whitelist wouldn't silently drop
+# half a sync).
+#
+# This is intentionally broader than the per-tenant project, not a mistake: it mirrors
+# what a human operator's own kubeconfig could already do running `helm upgrade` by hand
+# (the thing this ApplicationSet replaces) - ArgoCD is executing the same privileged
+# action declaratively, not gaining new privilege. destinations below use
+# `app-*`/`infra-*` namespace globs (covering every env a tenant of either type might
+# have - cicd/dev/staging/pr-*) rather than a precise per-env enumeration, since this
+# chart's RBAC templates provision across multiple declared-environment namespaces, not
+# just the tenant's own `-cicd` one, and a too-narrow guess here risks silently breaking
+# some tenant's valid onboarding rather than failing loudly.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform-onboarding
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
+  namespace: argocd
+spec:
+  description: >-
+    Tenant onboarding - installs/manages the platform-cicd-app chart release for every
+    tenant registered under tenants/*/identity.yaml in this repo. Broader than any
+    single tenant's own AppProject by design - see this file's own header comment.
+  sourceRepos:
+    # Only this platform's own repo, deliberately singular - both of the
+    # ApplicationSet's sources point at it (the chart, and each tenant's tenants/<name>/
+    # directory for its tracked cicd.yaml copy). No tenant app repo is ever a sync
+    # source here - see tenant-onboarding-applicationset.yaml's own header for why that
+    # was considered and rejected (it would need standing ArgoCD read access to every
+    # app repo as a new credential class).
+    - {{ .Values.platformCicdRepoUrl }}
+  destinations:
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+    - namespace: "app-*"
+      server: https://kubernetes.default.svc
+    - namespace: "infra-*"
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+  namespaceResourceWhitelist:
+    - { group: "argoproj.io", kind: AppProject }
+    - { group: "argoproj.io", kind: Application }
+    - { group: "argoproj.io", kind: ApplicationSet }
+    - { group: "batch", kind: CronJob }
+    - { group: "external-secrets.io", kind: ExternalSecret }
+    - { group: "rbac.authorization.k8s.io", kind: Role }
+    - { group: "rbac.authorization.k8s.io", kind: RoleBinding }
+    - { group: "triggers.tekton.dev", kind: Trigger }
+    - { group: "triggers.tekton.dev", kind: TriggerBinding }
+    - { group: "triggers.tekton.dev", kind: TriggerTemplate }
+    - { group: "", kind: ConfigMap }
+    - { group: "", kind: PersistentVolumeClaim }
+    - { group: "", kind: ServiceAccount }

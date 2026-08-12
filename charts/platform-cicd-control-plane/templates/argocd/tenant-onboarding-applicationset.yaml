@@ -1,0 +1,106 @@
+# templates/argocd/tenant-onboarding-applicationset.yaml
+#
+# Replaces the manual `helm upgrade --install <type>-<app-name>-cicd
+# charts/platform-cicd-app -f cicd.yaml -f platform-identity.yaml` onboarding step
+# (docs/onboarding.md) with ArgoCD ownership. Lives in this chart, not
+# charts/platform-cicd-app itself - a chart can't define the ApplicationSet that
+# generates its own Application.
+#
+# IMPORTANT for future editors: this file's `template:` block uses ArgoCD
+# ApplicationSet's OWN Go-template syntax (goTemplate: true - `.platformIdentity.*`
+# etc, resolved by ArgoCD at generate-time), which collides with Helm's own Go-template
+# engine (this file is rendered by Helm first, at install/upgrade time) - same collision
+# charts/platform-cicd-app/templates/argocd/ephemeral-envs.yaml already documents and
+# solves. Every ArgoCD template expression below is escaped as a literal
+# double-curly-brace string for Helm to emit verbatim, for ArgoCD to evaluate later - do
+# not "simplify" these.
+#
+# Generator scans tenants/*/identity.yaml only (not tenants/*/cicd.yaml too, which would
+# generate a second, bogus Application per tenant) - see tenants/cicd-flow-test-app/
+# identity.yaml's own header for the full per-tenant directory layout.
+#
+# Two sources, but the SAME repo (platform-cicd) both times, deliberately - NOT a live
+# read of the tenant's own app repo. An earlier design (ArgoCD reading cicd.yaml live
+# from every app repo) was already considered and rejected elsewhere in this platform:
+# it would need standing ArgoCD read access to every Application's source repo as a new
+# credential class, when Pipelines-as-Code's own already-trusted, per-run-minted webhook
+# auth already solves "get a fresh cicd.yaml somewhere safe" without one - see
+# charts/platform-cicd-app/files/onboarding-templates/app-repo/onboarding-resync.yaml's
+# header and docs/onboarding.md. So `cicd.yaml` here is a tracked COPY at
+# tenants/<app-name>/cicd.yaml, kept in sync by hand for now (wiring the existing
+# onboarding-resync mechanism to PR updates to it automatically is the natural next
+# step, not built in this pass) - source 1 below just points at that copy's directory
+# within this same, already-necessary repo credential, referenced via `$tenantdata` purely
+# because Helm's own `valueFiles` can't reach outside a chart's own `path` with a single
+# source. platformIdentity itself is built ONLY from the generator's own params (source
+# 0's tenants/*/identity.yaml content), every field spelled out individually (not a
+# single `{{ "{{" }}.platformIdentity{{ "}}" }}` object interpolation - Go's text/template
+# has no built-in YAML-safe serialization for a nested map dropped straight into a YAML
+# value position) - and goTemplateOptions: ["missingkey=invalid"] below means every
+# identity.yaml must supply all six fields explicitly (see tenants/nodejs-demo-app/
+# identity.yaml's own header for why empty-string beats omission here).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenant-onboarding
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "argocd"
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=invalid"]
+  generators:
+    - git:
+        repoURL: {{ .Values.platformCicdRepoUrl }}
+        revision: main
+        files:
+          - path: "tenants/*/identity.yaml"
+  template:
+    metadata:
+      name: "{{ "{{" }}.platformIdentity.appName{{ "}}" }}-cicd"
+      labels:
+        {{- include "platform-cicd-control-plane.labels" . | nindent 8 }}
+        platform.io/subcomponent: "argocd"
+      # Cascade-deletes the chart's own resources (RBAC, Triggers, etc.) if a tenant's
+      # tenants/*/identity.yaml file is ever removed - same finalizer, same reasoning as
+      # ephemeral-envs.yaml's own use of it.
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+      namespace: argocd
+    spec:
+      project: platform-onboarding
+      sources:
+        - repoURL: {{ .Values.platformCicdRepoUrl }}
+          targetRevision: main
+          path: charts/platform-cicd-app
+          helm:
+            valuesObject:
+              platformIdentity:
+                appName: "{{ "{{" }}.platformIdentity.appName{{ "}}" }}"
+                type: "{{ "{{" }}.platformIdentity.type{{ "}}" }}"
+                gitopsRepoUrl: "{{ "{{" }}.platformIdentity.gitopsRepoUrl{{ "}}" }}"
+                appRepoUrl: "{{ "{{" }}.platformIdentity.appRepoUrl{{ "}}" }}"
+                githubOwner: "{{ "{{" }}.platformIdentity.githubOwner{{ "}}" }}"
+                catalogNamespace: "{{ "{{" }}.platformIdentity.catalogNamespace{{ "}}" }}"
+            valueFiles:
+              - $tenantdata/cicd.yaml
+        - repoURL: {{ .Values.platformCicdRepoUrl }}
+          targetRevision: main
+          path: "tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}"
+          ref: tenantdata
+      destination:
+        server: https://kubernetes.default.svc
+        # Same convention as charts/platform-cicd-app/templates/_helpers.tpl's own
+        # platform-cicd-app.namespace helper (<type>-<appName>-cicd) - can't call that
+        # helper from this chart directly (different Helm release/scope), so replicated
+        # here. docs/onboarding.md deliberately has no separate tenantNamespace field to
+        # keep in sync for exactly this reason - this is the one place besides that
+        # helper itself that computes it, and both must agree.
+        namespace: "{{ "{{" }}.platformIdentity.type{{ "}}" }}-{{ "{{" }}.platformIdentity.appName{{ "}}" }}-cicd"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

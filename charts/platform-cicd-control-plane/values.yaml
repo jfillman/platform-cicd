@@ -6,6 +6,12 @@
 # from the code that consumes it.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
+# This platform's own repo - the tenant-onboarding ApplicationSet (templates/argocd/
+# tenant-onboarding-applicationset.yaml) reads tenants/*.yaml from here (its generator
+# source) AND uses it as every generated Application's own chart source
+# (charts/platform-cicd-app). One value rather than hardcoded twice in that template.
+platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
+
 # Overlay onto Tekton Chains' own `chains-config` ConfigMap (installed empty by default -
 # confirmed live, nothing to clobber) - applied via `kubectl patch --type merge` by
 # templates/hooks/chains-config-patch-job.yaml, not `kubectl apply` replacing the whole
