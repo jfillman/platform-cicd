@@ -75,30 +75,91 @@ spec:
           --no-default-ctfe --no-default-rekor --no-default-tsa \
           --out "${workdir}/trusted-root.json"
 
+        # Manual type-filter-then-verify-blob-attestation, not a single `cosign
+        # verify-attestation --type slsaprovenance` call - same fix, same duplication
+        # precedent (see this file's own header), as verify-image-provenance.yaml's
+        # identical block - see that file's own comment here for the full live
+        # incident writeup (cosign's own --type filter doesn't reliably exclude a
+        # differently-formatted, non-matching attestation before attempting identity
+        # verification against it - confirmed live, this is the actual root cause of
+        # the previously-only-"narrowed" sbom+policyCheck conflict).
+        identity_regexp="^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$"
+        issuer="https://kubernetes.default.svc.cluster.local"
         att_dir="${workdir}/attestations"
         mkdir -p "${att_dir}"
-        cosign verify-attestation \
-          --insecure-ignore-tlog=true \
-          --insecure-ignore-sct=true \
-          --type slsaprovenance \
-          --trusted-root "${workdir}/trusted-root.json" \
-          --certificate-identity-regexp "^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$" \
-          --certificate-oidc-issuer "https://kubernetes.default.svc.cluster.local" \
-          "${image_ref}" > "${att_dir}/attestations.jsonl"
-
-        if [[ ! -s "${att_dir}/attestations.jsonl" ]]; then
-          echo "FAIL: no provenance attestations found for ${image_ref}" >&2
+        cosign download attestation "${image_ref}" > "${att_dir}/all-attestations.jsonl" 2>/dev/null || true
+        if [[ ! -s "${att_dir}/all-attestations.jsonl" ]]; then
+          echo "FAIL: no attestations found for ${image_ref}" >&2
           exit 1
         fi
 
+        att_token=""
         i=0
         provenance_files=()
         while IFS= read -r line; do
+          is_bundle="$(jq -r 'has("dsseEnvelope")' <<<"${line}")"
+          if [[ "${is_bundle}" == "true" ]]; then
+            payload_b64="$(jq -r '.dsseEnvelope.payload' <<<"${line}")"
+          else
+            payload_b64="$(jq -r '.payload' <<<"${line}")"
+          fi
+          predicate_type="$(echo "${payload_b64}" | base64 -d | jq -r '.predicateType')"
+          if [[ "${predicate_type}" != "https://slsa.dev/provenance/v0.2" ]]; then
+            continue
+          fi
+
+          if [[ "${is_bundle}" == "true" ]]; then
+            cert_der_b64="$(jq -r '.verificationMaterial.certificate.rawBytes' <<<"${line}")"
+            sig_b64="$(jq -r '.dsseEnvelope.signatures[0].sig' <<<"${line}")"
+          else
+            if [[ -z "${att_token}" ]]; then
+              att_token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+            fi
+            att_manifest="$(curl -fsSL -H "Authorization: Bearer ${att_token}" \
+              -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+              "https://${registry}/v2/${repo}/manifests/sha256-${digest#sha256:}.att")"
+            cert_pem="$(jq -r '.layers[0].annotations["dev.sigstore.cosign/certificate"]' <<<"${att_manifest}")"
+            cert_der_b64="$(echo "${cert_pem}" | openssl x509 -outform DER | base64 | tr -d '\n')"
+            sig_b64="$(jq -r '.signatures[0].sig' <<<"${line}")"
+          fi
+          payload_type="$(jq -r 'if has("dsseEnvelope") then .dsseEnvelope.payloadType else .payloadType end' <<<"${line}")"
+
+          printf '%s' "${cert_der_b64}" > "${att_dir}/cert-${i}.txt"
+          printf '%s' "${payload_b64}" > "${att_dir}/payload-${i}.txt"
+          printf '%s' "${sig_b64}" > "${att_dir}/sig-${i}.txt"
+          printf '%s' "${payload_type}" > "${att_dir}/ptype-${i}.txt"
+          bundle_file="${att_dir}/bundle-${i}.json"
+          jq -n \
+            --rawfile cert "${att_dir}/cert-${i}.txt" \
+            --rawfile payload "${att_dir}/payload-${i}.txt" \
+            --rawfile payloadType "${att_dir}/ptype-${i}.txt" \
+            --rawfile sig "${att_dir}/sig-${i}.txt" \
+            '{mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+              verificationMaterial: {certificate: {rawBytes: $cert}},
+              dsseEnvelope: {payload: $payload, payloadType: $payloadType, signatures: [{sig: $sig}]}}' \
+            > "${bundle_file}"
+
+          cosign verify-blob-attestation \
+            --bundle "${bundle_file}" \
+            --digest "${digest#sha256:}" \
+            --digestAlg sha256 \
+            --insecure-ignore-tlog=true \
+            --insecure-ignore-sct=true \
+            --trusted-root "${workdir}/trusted-root.json" \
+            --certificate-identity-regexp "${identity_regexp}" \
+            --certificate-oidc-issuer "${issuer}" \
+            --type slsaprovenance
+
           payload_file="${att_dir}/provenance-${i}.json"
-          jq -r '.payload' <<<"${line}" | base64 -d > "${payload_file}"
+          echo "${payload_b64}" | base64 -d > "${payload_file}"
           provenance_files+=("${payload_file}")
           i=$((i + 1))
-        done < "${att_dir}/attestations.jsonl"
+        done < "${att_dir}/all-attestations.jsonl"
+
+        if [[ ${#provenance_files[@]} -eq 0 ]]; then
+          echo "FAIL: no verified slsaprovenance attestations found for ${image_ref}" >&2
+          exit 1
+        fi
 
         # Same task-name field verify-image-provenance.yaml already matches git-clone
         # against - the underlying Task CRD name (Tekton's "tekton.dev/task" label),

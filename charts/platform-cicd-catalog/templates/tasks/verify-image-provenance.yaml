@@ -148,31 +148,113 @@ spec:
         # anchor and wouldn't meaningfully extend what's already verified here.
 
         # Attestation signature + extract the verified provenance payload.
-        # `cosign download attestation` returns one DSSE-signed line per attestation
-        # (Tekton Chains pushes both a TaskRun-level and a PipelineRun-level one, see
-        # sub-item 2) - verify each and decode its payload for stage 3.
+        #
+        # Deliberately NOT a single `cosign verify-attestation --type slsaprovenance
+        # <image_ref>` call any more (what this used until 2026-08-12) - confirmed live
+        # that cosign's own registry-side --type filter does not reliably exclude a
+        # non-matching-type attestation before attempting identity verification against
+        # it, when attestations on the same image are in DIFFERENT DSSE-envelope
+        # formats. This image carries two: Tekton Chains' own SLSA provenance
+        # attestation (the older plain envelope - top-level `payload`/`payloadType`/
+        # `signatures`) and generate-sbom.yaml's own CycloneDX SBOM attestation
+        # (cosign 3.x's newer "bundle" format - `dsseEnvelope.payload`, signed by
+        # THIS Application's own `pipeline-runner`, not tekton-chains-controller).
+        # `--type slsaprovenance` should skip the SBOM one outright, but instead its
+        # (correctly non-matching) identity leaked into cosign's own error as the
+        # "last error", causing this whole verification to fail even though a real,
+        # correctly-signed provenance attestation was right there too - this is the
+        # root cause of the previously-only-"narrowed"-not-closed sbom+policyCheck
+        # conflict (see docs/provenance-policy.md's original incident writeup).
+        #
+        # Fixed by doing the type-filtering ourselves, in jq, BEFORE any verification
+        # (so a non-matching attestation is never even handed to cosign), then
+        # verifying each survivor in isolation via `cosign verify-blob-attestation`
+        # (which verifies a single, already-selected attestation - no registry-side
+        # multi-candidate discovery to get confused) instead of `verify-attestation`.
+        # That command needs a proper new-bundle-format sigstore bundle as input
+        # regardless of which format the attestation actually came in as - a real,
+        # confirmed constraint (`--trusted-root only supported with --new-bundle-
+        # format`), so one is constructed by hand from whichever format's own fields:
+        # the newer bundle format already has everything in `verificationMaterial`/
+        # `dsseEnvelope`; the older plain envelope's certificate isn't in the envelope
+        # JSON at all (confirmed live: `signatures[0].cert` is null) - it lives in the
+        # `.att` OCI tag's own manifest layer annotations instead, fetched directly.
         att_dir="${workdir}/attestations"
         mkdir -p "${att_dir}"
-        cosign verify-attestation \
-          --insecure-ignore-tlog=true \
-          --insecure-ignore-sct=true \
-          --type slsaprovenance \
-          --trusted-root "${workdir}/trusted-root.json" \
-          --certificate-identity-regexp "${identity_regexp}" \
-          --certificate-oidc-issuer "${issuer}" \
-          "${image_ref}" > "${att_dir}/attestations.jsonl"
+        cosign download attestation "${image_ref}" > "${att_dir}/all-attestations.jsonl" 2>/dev/null || true
+        if [[ ! -s "${att_dir}/all-attestations.jsonl" ]]; then
+          echo "FAIL: no attestations found for ${image_ref}" >&2
+          exit 1
+        fi
 
+        att_token=""
         i=0
         provenance_files=()
         while IFS= read -r line; do
+          is_bundle="$(jq -r 'has("dsseEnvelope")' <<<"${line}")"
+          if [[ "${is_bundle}" == "true" ]]; then
+            payload_b64="$(jq -r '.dsseEnvelope.payload' <<<"${line}")"
+          else
+            payload_b64="$(jq -r '.payload' <<<"${line}")"
+          fi
+          predicate_type="$(echo "${payload_b64}" | base64 -d | jq -r '.predicateType')"
+          if [[ "${predicate_type}" != "https://slsa.dev/provenance/v0.2" ]]; then
+            continue
+          fi
+
+          if [[ "${is_bundle}" == "true" ]]; then
+            cert_der_b64="$(jq -r '.verificationMaterial.certificate.rawBytes' <<<"${line}")"
+            sig_b64="$(jq -r '.dsseEnvelope.signatures[0].sig' <<<"${line}")"
+          else
+            if [[ -z "${att_token}" ]]; then
+              att_token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+            fi
+            att_manifest="$(curl -fsSL -H "Authorization: Bearer ${att_token}" \
+              -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+              "https://${registry}/v2/${repo}/manifests/sha256-${digest#sha256:}.att")"
+            cert_pem="$(jq -r '.layers[0].annotations["dev.sigstore.cosign/certificate"]' <<<"${att_manifest}")"
+            cert_der_b64="$(echo "${cert_pem}" | openssl x509 -outform DER | base64 | tr -d '\n')"
+            sig_b64="$(jq -r '.signatures[0].sig' <<<"${line}")"
+          fi
+          payload_type="$(jq -r 'if has("dsseEnvelope") then .dsseEnvelope.payloadType else .payloadType end' <<<"${line}")"
+
+          # Values written to files, not passed via jq --arg - the base64 payload is a
+          # full in-toto statement and can genuinely exceed the OS argv size limit
+          # ("Argument list too long", confirmed live), --rawfile has no such ceiling.
+          printf '%s' "${cert_der_b64}" > "${att_dir}/cert-${i}.txt"
+          printf '%s' "${payload_b64}" > "${att_dir}/payload-${i}.txt"
+          printf '%s' "${sig_b64}" > "${att_dir}/sig-${i}.txt"
+          printf '%s' "${payload_type}" > "${att_dir}/ptype-${i}.txt"
+          bundle_file="${att_dir}/bundle-${i}.json"
+          jq -n \
+            --rawfile cert "${att_dir}/cert-${i}.txt" \
+            --rawfile payload "${att_dir}/payload-${i}.txt" \
+            --rawfile payloadType "${att_dir}/ptype-${i}.txt" \
+            --rawfile sig "${att_dir}/sig-${i}.txt" \
+            '{mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+              verificationMaterial: {certificate: {rawBytes: $cert}},
+              dsseEnvelope: {payload: $payload, payloadType: $payloadType, signatures: [{sig: $sig}]}}' \
+            > "${bundle_file}"
+
+          cosign verify-blob-attestation \
+            --bundle "${bundle_file}" \
+            --digest "${digest#sha256:}" \
+            --digestAlg sha256 \
+            --insecure-ignore-tlog=true \
+            --insecure-ignore-sct=true \
+            --trusted-root "${workdir}/trusted-root.json" \
+            --certificate-identity-regexp "${identity_regexp}" \
+            --certificate-oidc-issuer "${issuer}" \
+            --type slsaprovenance
+
           payload_file="${att_dir}/provenance-${i}.json"
-          jq -r '.payload' <<<"${line}" | base64 -d > "${payload_file}"
+          echo "${payload_b64}" | base64 -d > "${payload_file}"
           provenance_files+=("${payload_file}")
           i=$((i + 1))
-        done < "${att_dir}/attestations.jsonl"
+        done < "${att_dir}/all-attestations.jsonl"
 
         if [[ ${#provenance_files[@]} -eq 0 ]]; then
-          echo "FAIL: no provenance attestations found for ${image_ref}" >&2
+          echo "FAIL: no verified slsaprovenance attestations found for ${image_ref}" >&2
           exit 1
         fi
 
@@ -297,22 +379,19 @@ spec:
         # mismatch for this platform's cluster/hub-resolved catalog Tasks - see
         # docs/provenance-policy.md for why that's deliberately excluded, not an
         # oversight).
-        # sbom.found/sbom_cyclonedx.cdx_supported_version deliberately NOT included below
-        # (Phase 3 item 8.7) - a real, disclosed, unresolved conflict was found live:
-        # once generate-sbom.yaml's real cosign-attest SBOM attestation is attached to an
-        # image, cosign's OWN verify-attestation call above (checking the unrelated SLSA
-        # provenance attestation) starts failing with a certificate-identity mismatch
-        # citing the SBOM attestation's identity (platform-cicd-demo/pipeline-runner)
-        # instead of the expected tekton-chains-controller one - confirmed this is NOT
-        # caused by this config.include list (the failure happens in cosign's own
-        # attestation-discovery/identity-matching, well before Conforma/ec ever runs;
-        # reproduced identically with and without these two entries present). Root cause
-        # not fully diagnosed - looks like a real cosign 3.x behavior where the presence
-        # of a "new bundle format" attestation on an image affects identity verification
-        # for OTHER, differently-typed attestations on that same image, not just a --type
-        # filtering issue (an explicit full predicate-type URI didn't change the outcome
-        # either). Until resolved, do not enable both governance.sbom and
-        # governance.policyCheck for the same app - see docs/provenance-policy.md.
+        # sbom.found/sbom_cyclonedx.cdx_supported_version still deliberately NOT
+        # included below (Phase 3 item 8.7) - that's an independent design choice
+        # (whether Conforma's OWN policy should assert on SBOM presence/format), not
+        # related to the identity-verification bug below.
+        #
+        # RESOLVED 2026-08-12 (was: "a real, disclosed, unresolved conflict... root
+        # cause not fully diagnosed... until resolved, do not enable both
+        # governance.sbom and governance.policyCheck for the same app"): root cause WAS
+        # cosign's own --type filter, confirmed live - see the attestation-fetching
+        # block above (now `cosign download attestation` + manual jq type-filtering +
+        # `verify-blob-attestation`, not a single `verify-attestation --type
+        # slsaprovenance` call) for the full incident writeup. governance.sbom and
+        # governance.policyCheck can both be enabled for the same app now.
         #
         # NOTE for future editors: this explanation lives here, not inside the jq
         # program string below, on purpose - a real bug hit live once already, an
