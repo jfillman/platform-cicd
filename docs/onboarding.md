@@ -46,8 +46,10 @@ credentials).
 2. **Add `cicd.yaml`** to the repo root (see
    [user-guide/quickstart.md](user-guide/quickstart.md) and
    [user-guide/examples/](user-guide/examples/README.md)) - this is the only file the
-   developer maintains going forward. Step 3 below copies its content into this repo;
-   keep both in sync until that's automated.
+   developer maintains going forward, and the only onboarding file that lives in the app
+   repo at all. The `tenant-onboarding` `ApplicationSet` reads it live from here (see
+   step 5) - a push to `main` takes effect on ArgoCD's next sync, no separate copy to
+   keep up to date anywhere.
 
 3. **Add `tenants/<app-name>/identity.yaml`** to **this repo** (`platform-cicd`, via a
    PR an operator reviews - never the app repo) - the handful of infra-identity values
@@ -62,7 +64,7 @@ credentials).
      appName: <app-name>
      type: app  # or infra - see docs/naming-conventions.md
      gitopsRepoUrl: https://github.com/<org>/gitops-<app-name>  # "" if no release stage
-     appRepoUrl: https://github.com/<org>/<app-name>            # "" if no PR ephemeral envs
+     appRepoUrl: https://github.com/<org>/<app-name>            # ALWAYS required now - see below
      githubOwner: <org>
      catalogNamespace: platform-catalog
    ```
@@ -70,6 +72,9 @@ credentials).
    All six fields must be present (even as `""`) - the ApplicationSet's own Go-template
    evaluation of these generator params errors on a genuinely-missing key for every
    tenant, not just this one; see any `tenants/*/identity.yaml` file's header for why.
+   `appRepoUrl` specifically can no longer be `""` for any tenant - the ApplicationSet's
+   second source reads `cicd.yaml` live from exactly this URL (see step 5), not just
+   when `ephemeralEnvironments.pullRequest.enabled`.
 
    There is no `tenantNamespace` field to set - the Application's own CI/CD execution
    namespace is COMPUTED from `type`+`appName` as `<type>-<app-name>-cicd` (`type` is
@@ -81,21 +86,12 @@ credentials).
 
    `platformIdentity` is not a key `schemas/cicd.schema.json` permits - its
    `additionalProperties: false` already rejects any `cicd.yaml` that tries to define it,
-   so this can never be silently overridden by a developer's own config.
-
-   **Also add `tenants/<app-name>/cicd.yaml`** - a tracked copy of the app repo's real
-   `cicd.yaml`, which is what the ArgoCD `Application` actually renders the chart with
-   (this platform deliberately doesn't have ArgoCD read `cicd.yaml` live from the app
-   repo itself - see the ApplicationSet's own header comment for why that was considered
-   and rejected: it would need standing ArgoCD read access to every app repo as a new
-   credential class). **This means the copy in `tenants/` is the one that actually takes
-   effect - keep it in sync with the app repo's own `cicd.yaml` by hand for now** (a
-   `pipelines:` edit in the app repo alone does nothing here until this copy is updated
-   too). Wiring the existing `onboarding-resync`/`deliver-onboarding-files.yaml`
-   mechanism (already mints a fresh, single-repo-scoped GitHub App token on every
-   `cicd.yaml` push) to also PR an update to this copy automatically is the natural next
-   step - not built in this pass, same as the "Keeping onboarding boilerplate in sync"
-   section below already flags for a related gap.
+   so this can never be silently overridden by a developer's own config - not just by
+   convention, but structurally: the ApplicationSet's Helm `valuesObject` (built only
+   from this file) takes real precedence over `valueFiles` (the app repo's `cicd.yaml`,
+   read live) for any overlapping key, confirmed by a real live test, not assumed - see
+   the ApplicationSet's own header comment. `cicd.yaml` itself needs nothing added here;
+   step 5 reads it straight from the app repo.
 
 4. **Provision the dev Deployment (and any other declared env) first.** `deploy-manifests.yaml`
    expects a `Deployment` named `<app-name>` to already exist in `<type>-<app-name>-<env>`
@@ -121,12 +117,14 @@ credentials).
    way to know your Deployment's shape).
 
 5. **ArgoCD installs the app chart** - nothing to run by hand. Once step 3's
-   `tenants/<app-name>/identity.yaml` + `cicd.yaml` land on `platform-cicd`'s default
-   branch, the `tenant-onboarding` `ApplicationSet` (`charts/platform-cicd-control-plane/
-   templates/argocd/tenant-onboarding-applicationset.yaml`) picks them up on its next
-   poll and creates/syncs an `Application` named `<app-name>-cicd` in the `argocd`
-   namespace. Check `kubectl get application <app-name>-cicd -n argocd` for sync status
-   if it doesn't show healthy within a few minutes.
+   `tenants/<app-name>/identity.yaml` lands on `platform-cicd`'s default branch, the
+   `tenant-onboarding` `ApplicationSet` (`charts/platform-cicd-control-plane/
+   templates/argocd/tenant-onboarding-applicationset.yaml`) picks it up on its next poll
+   and creates/syncs a two-source `Application` named `<app-name>-cicd` in the `argocd`
+   namespace - one source is this platform's own chart, the other reads `cicd.yaml` live
+   from `appRepoUrl` (step 2's file, no separate copy). Check
+   `kubectl get application <app-name>-cicd -n argocd` for sync status if it doesn't show
+   healthy within a few minutes.
 
    This creates `pipeline-runner` and its RBAC, only the stage-transition Triggers
    `cicd.yaml` actually declares, env-deploy RBAC for each declared environment, the
@@ -137,9 +135,9 @@ credentials).
    governance policy ConfigMap (always - the release-gate commit-signature check runs
    unconditionally regardless of `governance.policyCheck`), and an `ExternalSecret` for
    `registry-credentials` (see [secrets-management.md](secrets-management.md)). Editing
-   `tenants/<app-name>/cicd.yaml` (step 3) and letting ArgoCD auto-sync is exactly how you
-   change an Application's shape later - the `Application`'s `prune: true` removes
-   whatever a stage removal makes unnecessary, same as `helm upgrade` used to.
+   `cicd.yaml` (step 2) and letting ArgoCD auto-sync is exactly how you change an
+   Application's shape later - no separate copy to update, no `helm upgrade` to remember;
+   the `Application`'s `prune: true` removes whatever a stage removal makes unnecessary.
 
 6. **Deliver the `.tekton/` boilerplate.** Trigger a real push to the app repo's `cicd.yaml`
    once (or wait for the next real one) - `onboarding-resync.yaml` (delivered from
@@ -147,11 +145,11 @@ credentials).
    that, and `charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml` opens a PR
    against the app repo (and, if a `gitopsRepoUrl` was given, the gitops repo too) with the
    generated `.tekton/*.yaml` files. Merge it once; you never hand-edit these files. This
-   replaces both the old fully-manual copy-paste step and an earlier considered design (an
-   ArgoCD Application reading `cicd.yaml` live from every app repo) that was rejected
-   because it would need standing ArgoCD read access to every Application's source repo as a
-   base requirement of onboarding itself - see this same mechanism's own header comment for
-   the full reasoning. If you don't want to wait for a real commit, you can also run the
+   replaces the old fully-manual copy-paste step, and stays PaC-triggered rather than
+   ArgoCD-driven even now that step 5 has ArgoCD reading `cicd.yaml` live for the chart's
+   own values - a genuinely separate concern (delivering files INTO the app/gitops repos,
+   not reading FROM one), see this same mechanism's own header comment for the original
+   reasoning. If you don't want to wait for a real commit, you can also run the
    `onboarding-resync` Pipeline directly (it has no workspaces of its own to declare -
    `deliver-onboarding-files.yaml` clones into a step-local `mktemp -d`, not the Pipeline's
    `source` workspace):
@@ -205,14 +203,13 @@ propagate a template change, the same as any other app-chart-rendered resource.
 nothing actually changed, so this is safe to fire often.
 
 For the app chart's own resources (Triggers, RBAC, etc.) re-rendering on a `cicd.yaml`
-change: onboarding is now ArgoCD-managed (see "Onboarding one Application" step 5 above),
-but the `Application` renders from `tenants/<app-name>/cicd.yaml` - a tracked COPY, not a
-live read of the app repo (deliberately - see the `tenant-onboarding` `ApplicationSet`'s
-own header comment). So a `cicd.yaml` push still doesn't automatically reach the chart's
-own resources; it reaches this mechanism's boilerplate-delivery half fine, but not the
-`Application`'s render input. Wiring `onboarding-resync` to also PR an update to
-`tenants/<app-name>/cicd.yaml` (reusing the exact same trusted, already-minted GitHub App
-token this Task uses for its other PRs) is the natural next step, not built in this pass.
+change: **closed** as of the ArgoCD-managed onboarding redesign (see "Onboarding one
+Application" step 5 above) - the `tenant-onboarding` `ApplicationSet`'s generated
+`Application` reads `cicd.yaml` live from the app repo (a revisited decision; see that
+ApplicationSet's own header comment for why an earlier version used a tracked copy
+instead, and why that changed), so a `cicd.yaml` push now reaches both halves - the
+boilerplate-delivery mechanism described above, and the chart's own rendered resources -
+without a manual step or a copy to keep in sync anywhere.
 
 **A real deadlock this mechanism can fall into, found and fixed live (2026-08-11)**:
 `onboarding-resync`'s own trigger file - the thing that would deliver a fix - is ITSELF

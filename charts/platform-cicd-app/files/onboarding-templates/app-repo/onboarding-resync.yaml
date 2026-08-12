@@ -7,10 +7,18 @@
 # `"cicd.yaml".pathChanged()` is a real, documented Pipelines-as-Code CEL extension
 # function, not a custom filter. This is Phase 3 item 7's replacement for both the fully
 # manual "hand-copy .tekton files" onboarding process and an earlier design considered
-# (an ArgoCD-multi-source Application reading cicd.yaml live) that was rejected because
-# it would need standing ArgoCD read access to every Application's source repo as a base
-# requirement of onboarding itself - see docs/onboarding.md. Reusing PaC's own already-
-# trusted webhook auth instead means no new credential class anywhere.
+# (an ArgoCD-multi-source Application reading cicd.yaml live) that was, AT THE TIME,
+# rejected because it would need standing ArgoCD read access to every Application's
+# source repo as a base requirement of onboarding itself. That specific tradeoff was
+# later revisited for a genuinely different purpose (charts/platform-cicd-control-plane/
+# templates/argocd/tenant-onboarding-applicationset.yaml DOES now read cicd.yaml live,
+# as the app chart's own Helm values input, once broad ArgoCD app-repo read access
+# became a given anyway for the platform's broader IDP direction - see that
+# ApplicationSet's own header for the current reasoning and the live safety test behind
+# it). This file's own job - DELIVERING .tekton boilerplate FILES INTO the app/gitops
+# repos - is a different concern from reading a values file FROM one, and stays
+# PaC-triggered either way: reusing PaC's own already-trusted webhook auth for a
+# repo-write still means no new credential class for THIS mechanism specifically.
 #
 # Also fires (same mechanism, same file) if the PLATFORM's own onboarding templates
 # change and this Application's copy goes stale - see docs/onboarding.md's "Keeping

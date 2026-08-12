@@ -1,12 +1,14 @@
 # tenants/nodejs-demo-app/identity.yaml
 #
 # See tenants/cicd-flow-test-app/identity.yaml's own header for the full design
-# rationale (including why this lives alongside a tracked cicd.yaml copy rather than an
-# ArgoCD live read of the app repo). This tenant has
-# no release stage and no PR-based ephemeral environments configured (confirmed live via
-# `helm get values app-nodejs-demo-app-cicd -n app-nodejs-demo-app-cicd`), so
-# gitopsRepoUrl/appRepoUrl are functionally unused - but set to "" explicitly, not
-# omitted, same reasoning as catalogNamespace below.
+# rationale. This tenant has no release stage and no PR-based ephemeral environments
+# configured (confirmed live via `helm get values app-nodejs-demo-app-cicd -n
+# app-nodejs-demo-app-cicd`), so gitopsRepoUrl is functionally unused for THIS tenant -
+# but set to "" explicitly, not omitted, same reasoning as catalogNamespace below.
+#
+# appRepoUrl, unlike gitopsRepoUrl, is NOT optional for any tenant any more - the
+# tenant-onboarding ApplicationSet's second source reads cicd.yaml live from exactly
+# this URL, unconditionally, not just when ephemeralEnvironments.pullRequest is enabled.
 #
 # All six fields are always present in every tenants/*.yaml file, even when a field is
 # "" - the ApplicationSet's own Go-template evaluation of these generator params is a
@@ -19,6 +21,6 @@ platformIdentity:
   appName: nodejs-demo-app
   type: app
   gitopsRepoUrl: ""
-  appRepoUrl: ""
+  appRepoUrl: https://github.com/jfillman/nodejs-demo-app
   githubOwner: jfillman
   catalogNamespace: platform-catalog

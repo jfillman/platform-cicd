@@ -15,30 +15,33 @@
 # double-curly-brace string for Helm to emit verbatim, for ArgoCD to evaluate later - do
 # not "simplify" these.
 #
-# Generator scans tenants/*/identity.yaml only (not tenants/*/cicd.yaml too, which would
-# generate a second, bogus Application per tenant) - see tenants/cicd-flow-test-app/
-# identity.yaml's own header for the full per-tenant directory layout.
+# Generator scans tenants/*/identity.yaml only - one Application per tenant, driven
+# purely by that operator-owned file (see tenants/cicd-flow-test-app/identity.yaml's own
+# header for the full per-tenant layout and why identity.yaml stays a tracked file here
+# rather than anything read from the app repo).
 #
-# Two sources, but the SAME repo (platform-cicd) both times, deliberately - NOT a live
-# read of the tenant's own app repo. An earlier design (ArgoCD reading cicd.yaml live
-# from every app repo) was already considered and rejected elsewhere in this platform:
-# it would need standing ArgoCD read access to every Application's source repo as a new
-# credential class, when Pipelines-as-Code's own already-trusted, per-run-minted webhook
-# auth already solves "get a fresh cicd.yaml somewhere safe" without one - see
-# charts/platform-cicd-app/files/onboarding-templates/app-repo/onboarding-resync.yaml's
-# header and docs/onboarding.md. So `cicd.yaml` here is a tracked COPY at
-# tenants/<app-name>/cicd.yaml, kept in sync by hand for now (wiring the existing
-# onboarding-resync mechanism to PR updates to it automatically is the natural next
-# step, not built in this pass) - source 1 below just points at that copy's directory
-# within this same, already-necessary repo credential, referenced via `$tenantdata` purely
-# because Helm's own `valueFiles` can't reach outside a chart's own `path` with a single
-# source. platformIdentity itself is built ONLY from the generator's own params (source
-# 0's tenants/*/identity.yaml content), every field spelled out individually (not a
-# single `{{ "{{" }}.platformIdentity{{ "}}" }}` object interpolation - Go's text/template
-# has no built-in YAML-safe serialization for a nested map dropped straight into a YAML
-# value position) - and goTemplateOptions: ["missingkey=invalid"] below means every
-# identity.yaml must supply all six fields explicitly (see tenants/nodejs-demo-app/
-# identity.yaml's own header for why empty-string beats omission here).
+# `cicd.yaml` IS read live from the tenant's own app repo (source 1, $ref'd), a
+# deliberate, revisited decision - see identity.yaml's header for the full history: an
+# earlier version of this file used a tracked copy in tenants/<app>/cicd.yaml instead,
+# specifically to avoid ArgoCD needing standing read access to every app repo. That
+# tradeoff was reconsidered once the user's broader IDP direction made that access a
+# given anyway (a planned self-service folder in each app repo for developer-authored
+# Crossplane XRs/CRs, synced by ArgoCD separately - out of scope here, but it means "does
+# ArgoCD read this repo" stops being a meaningfully avoidable question). Safety of
+# merging a developer-controlled values file into the SAME Application that also carries
+# platformIdentity was verified LIVE, not assumed: a real attempt to override
+# platformIdentity via a `platformIdentity:` block planted in the values-file input was
+# synced and had zero effect on the rendered resources - `helm.valuesObject` (source 0,
+# built ONLY from source 0's own generator params, spelled out field-by-field - Go's
+# text/template has no built-in YAML-safe serialization for a nested map dropped
+# straight into a YAML value position) takes precedence over `helm.valueFiles` (source
+# 1's cicd.yaml) for any overlapping key, confirmed by direct inspection of the live
+# cluster state, not just a `helm template` diff. `directory: {exclude: "*"}` on source 1
+# still matters just as much as it did with the tracked-copy design - without it, every
+# *.yaml in the app repo's root (including a future self-service CRD folder, once that
+# exists) would be auto-detected and applied as raw manifests by THIS Application, which
+# should only ever read cicd.yaml as a values file. That folder needs its own,
+# separately-scoped sync path when it's built, not a side effect of this one.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -84,24 +87,21 @@ spec:
                 githubOwner: "{{ "{{" }}.platformIdentity.githubOwner{{ "}}" }}"
                 catalogNamespace: "{{ "{{" }}.platformIdentity.catalogNamespace{{ "}}" }}"
             valueFiles:
-              # $-ref value files resolve relative to that source's checkout ROOT, not
-              # its own `path:` (confirmed live - `path:` below is otherwise unused,
-              # since this source is never itself rendered, only referenced via $ref) -
-              # so the full path from repo root is required here, not just cicd.yaml.
-              - $tenantdata/tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}/cicd.yaml
-        - repoURL: {{ .Values.platformCicdRepoUrl }}
+              # $-ref value files resolve relative to that source's checkout ROOT (the
+              # app repo's own root, confirmed live) - cicd.yaml always lives there per
+              # docs/user-guide/quickstart.md's own onboarding instructions.
+              - $appsrc/cicd.yaml
+        - repoURL: "{{ "{{" }}.platformIdentity.appRepoUrl{{ "}}" }}"
           targetRevision: main
-          path: "tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}"
-          ref: tenantdata
+          ref: appsrc
           # Without this, ArgoCD's default "directory" source-type auto-detection
-          # treats every *.yaml file in this path as a raw manifest to apply directly -
-          # confirmed live: cicd.yaml's own `apiVersion: platform/v1, kind:
-          # PipelineConfig` header got synced as if it were a real (nonexistent) CRD
-          # instance ("could not find platform/PipelineConfig ... Make sure the CRD is
-          # installed"). This source exists ONLY to be $ref'd for valueFiles below - it
-          # should never independently apply anything. Doesn't affect $ref-based
-          # valueFiles resolution, which reads a named file's raw bytes directly, not
-          # this source's own render/apply set.
+          # treats every *.yaml file in this repo as a raw manifest to apply directly -
+          # confirmed live in the tracked-copy version of this design: cicd.yaml's own
+          # `apiVersion: platform/v1, kind: PipelineConfig` header got synced as if it
+          # were a real (nonexistent) CRD instance. This source exists ONLY to be $ref'd
+          # for valueFiles above - it should never independently apply anything, doubly
+          # true now that it's the tenant's own app repo, which may one day carry a
+          # real, separately-synced self-service CRD folder.
           directory:
             exclude: "*"
       destination:
