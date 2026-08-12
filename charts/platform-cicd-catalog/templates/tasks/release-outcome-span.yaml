@@ -118,4 +118,13 @@ spec:
         [[ -n "${CHAIN_ID}" ]] && attrs="${attrs},platform.chain_id=${CHAIN_ID}"
         [[ -n "${FLOW_START_TIME}" ]] && attrs="${attrs},platform.flow_start_time=${FLOW_START_TIME}"
 
-        otel_span_send "release-outcome:${APP_NAME}/${ENV_NAME}" "${traceparent}" "" "${start_time}" "$(otel_now)" "${STATUS}" "${attrs}"
+        # Outcome baked directly into the span's own name (not just its OTel status
+        # code) - 2026-08-12, real bug found live: Tempo's TraceQL search API has no
+        # way to promote a matched span's own attribute/status to a trace-level field
+        # (the ONLY fields a search result exposes flat, without a nested per-row
+        # sub-frame Grafana can't render as a plain value - confirmed live via
+        # Grafana's own /api/ds/query). The span's NAME is one of those flat fields
+        # (Tempo's own rootTraceName), so this is the one place status can land
+        # somewhere the dashboard's Release outcomes panel can show directly, no
+        # nested-table rendering involved at all.
+        otel_span_send "release-outcome:${APP_NAME}/${ENV_NAME} [${STATUS}]" "${traceparent}" "" "${start_time}" "$(otel_now)" "${STATUS}" "${attrs}"
