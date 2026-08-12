@@ -18,8 +18,10 @@ metadata:
   generateName: sbom
   annotations:
     # See pull-request-sast.yaml's own annotation comment for why this is on-cel-expression
-    # (release-branch-only) rather than on-event/on-target-branch.
-    pipelinesascode.tekton.dev/on-cel-expression: 'body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
+    # (release-branch-only) rather than on-event/on-target-branch, and for why has()
+    # guards the pull_request field (a push webhook, e.g. from this same PR merging,
+    # has no pull_request key at all - real, live-found false-alarm bot comment).
+    pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:

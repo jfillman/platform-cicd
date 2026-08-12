@@ -52,7 +52,20 @@ metadata:
     # (a hidden marker identifies which gate's comment is which) rather than always
     # appending a new one, so re-verifying an unchanged commit updates the existing
     # comment instead of spamming a duplicate.
-    pipelinesascode.tekton.dev/on-cel-expression: 'body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
+    #
+    # has(body.pull_request) - real bug, found live 2026-08-12: merging a release PR
+    # (or any push to this repo) fires a `push` webhook to the SAME PaC listener
+    # alongside the `pull_request` one, and PaC evaluates every PipelineRun's own
+    # on-cel-expression against EVERY webhook delivery it receives for the repo, not
+    # just ones shaped like what the expression expects. A push event's body has no
+    # `pull_request` key at all, so `body.pull_request.base.ref` failed with a real
+    # CEL "no such key" error - reported back as a bot comment on the PR ("errors in
+    # your PipelineRun template") that looks like a real platform problem but isn't
+    # one; the checks themselves already ran fine off the real pull_request event
+    # minutes earlier. has() short-circuits the rest of the expression when the event
+    # isn't PR-shaped, so a push event now just doesn't match, silently, the same as
+    # any other irrelevant event already did.
+    pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:
   pipelineRef:
