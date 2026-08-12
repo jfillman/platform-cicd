@@ -93,6 +93,17 @@ spec:
           targetRevision: main
           path: "tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}"
           ref: tenantdata
+          # Without this, ArgoCD's default "directory" source-type auto-detection
+          # treats every *.yaml file in this path as a raw manifest to apply directly -
+          # confirmed live: cicd.yaml's own `apiVersion: platform/v1, kind:
+          # PipelineConfig` header got synced as if it were a real (nonexistent) CRD
+          # instance ("could not find platform/PipelineConfig ... Make sure the CRD is
+          # installed"). This source exists ONLY to be $ref'd for valueFiles below - it
+          # should never independently apply anything. Doesn't affect $ref-based
+          # valueFiles resolution, which reads a named file's raw bytes directly, not
+          # this source's own render/apply set.
+          directory:
+            exclude: "*"
       destination:
         server: https://kubernetes.default.svc
         # Same convention as charts/platform-cicd-app/templates/_helpers.tpl's own

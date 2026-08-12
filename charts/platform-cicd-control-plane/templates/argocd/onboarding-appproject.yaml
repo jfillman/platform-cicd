@@ -51,6 +51,12 @@ spec:
       server: https://kubernetes.default.svc
     - namespace: "infra-*"
       server: https://kubernetes.default.svc
+    # charts/platform-cicd-app/templates/clusters/read-registry-rbac.yaml creates a
+    # get-only Role/RoleBinding here (a cluster-mapped-release tenant reading the shared
+    # cluster-registry ConfigMap) - confirmed live via a real sync failure ("namespace
+    # platform-system is not permitted in project"), not guessed ahead of time.
+    - namespace: platform-system
+      server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     - { group: "", kind: Namespace }
   namespaceResourceWhitelist:
