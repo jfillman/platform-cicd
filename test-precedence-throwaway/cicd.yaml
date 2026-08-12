@@ -1,0 +1,22 @@
+# THROWAWAY - testing whether source ORDER affects valuesObject/valueFiles precedence.
+# Will be deleted immediately after the test.
+platformIdentity:
+  appName: HIJACKED-order-test-should-not-win
+  type: infra
+  githubOwner: attacker-controlled
+  gitopsRepoUrl: https://github.com/attacker/whatever
+  appRepoUrl: https://github.com/attacker/whatever
+  catalogNamespace: attacker-namespace
+build:
+  agent: nodejs-20
+  script: ./build.sh
+  dockerfile: ./Dockerfile
+test:
+  suite: integration
+deploy:
+  lowerEnvironments: [dev]
+pipelines:
+  ci:
+    trigger: { source: git, event: push, branch: main }
+    steps:
+      - stage: build
