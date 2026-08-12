@@ -1,231 +1,1063 @@
 {
-    "title": "CI/CD Variant 1 - Live Mission Control",
-    "uid": "platform-cicd-mission-control",
-    "description": "Real-time NOC-style view of the whole platform: what's running right now, which apps are active, and controller health. Designed for a wallboard - big numbers, bar-gauge leaderboards, short time windows. All queries are scoped by the $app_namespace variable so this stays readable as the number of onboarded apps grows.",
-    "tags": ["platform-cicd", "cicd-variant"],
-    "schemaVersion": 39,
-    "editable": true,
-    "time": { "from": "now-3h", "to": "now" },
-    "refresh": "30s",
-    "templating": {
-        "list": [
-            {
-                "name": "app_namespace",
-                "type": "query",
-                "datasource": { "type": "prometheus", "uid": "prometheus" },
-                "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
-                "includeAll": true,
-                "multi": true
-            },
-            {
-                "name": "traceId",
-                "type": "textbox",
-                "label": "Selected flow (click a row in the pipeline visualizer)",
-                "description": "Populated automatically when you click a Trace ID link in the table below - loads that flow's real waterfall into the panel underneath it. Can also be pasted directly. Defaults to a real trace so the panel below is never blank on first load.",
-                "current": { "text": "a2d4ac5979f7d1030b7a27a136668782", "value": "a2d4ac5979f7d1030b7a27a136668782" },
-                "query": "a2d4ac5979f7d1030b7a27a136668782"
-            }
-        ]
-    },
-    "panels": [
-        { "id": 100, "type": "row", "title": "Platform pulse", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
-        {
-            "id": 1, "type": "gauge", "title": "PipelineRuns running now",
-            "description": "Cluster-wide gauge from the Tekton controller itself - not scoped by $app_namespace (the controller doesn't emit this broken out per app).",
-            "gridPos": { "x": 0, "y": 1, "w": 6, "h": 6 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "min": 0, "max": 10, "unit": "short",
-                "thresholds": { "steps": [ { "value": 0, "color": "blue" }, { "value": 6, "color": "yellow" }, { "value": 9, "color": "red" } ] } } },
-            "targets": [ { "expr": "tekton_pipelines_controller_running_pipelineruns", "legendFormat": "running" } ]
+  "title": "CI/CD Variant 1 - Live Mission Control",
+  "uid": "platform-cicd-mission-control",
+  "description": "Real-time NOC-style view of the whole platform: what's running right now, which apps are active, and controller health. Designed for a wallboard - big numbers, bar-gauge leaderboards, short time windows. All queries are scoped by the $app_namespace variable so this stays readable as the number of onboarded apps grows.",
+  "tags": [
+    "platform-cicd",
+    "cicd-variant"
+  ],
+  "schemaVersion": 39,
+  "editable": true,
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "app_namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
         },
-        {
-            "id": 2, "type": "gauge", "title": "TaskRuns running now",
-            "gridPos": { "x": 6, "y": 1, "w": 6, "h": 6 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "min": 0, "max": 20, "unit": "short",
-                "thresholds": { "steps": [ { "value": 0, "color": "blue" }, { "value": 12, "color": "yellow" }, { "value": 18, "color": "red" } ] } } },
-            "targets": [ { "expr": "tekton_pipelines_controller_running_taskruns", "legendFormat": "running" } ]
+        "query": "label_values(tekton_pipelines_controller_pipelinerun_duration_seconds_count, exported_namespace)",
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "traceId",
+        "type": "textbox",
+        "label": "Selected flow (click a row in the pipeline visualizer)",
+        "description": "Populated automatically when you click a Trace ID link in the table below - loads that flow's real waterfall into the panel underneath it. Can also be pasted directly. Defaults to a real trace so the panel below is never blank on first load.",
+        "current": {
+          "text": "a2d4ac5979f7d1030b7a27a136668782",
+          "value": "a2d4ac5979f7d1030b7a27a136668782"
         },
-        {
-            "id": 3, "type": "stat", "title": "Workqueue depth (all reconcilers)",
-            "description": "Sum of tekton_pipelines_controller_workqueue_depth across every reconciler queue. Sustained non-zero means the controller is falling behind.",
-            "gridPos": { "x": 12, "y": 1, "w": 6, "h": 6 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "unit": "short",
-                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 5, "color": "red" } ] } } },
-            "targets": [ { "expr": "sum(tekton_pipelines_controller_workqueue_depth)" } ]
-        },
-        {
-            "id": 4, "type": "stat", "title": "Reconcile error rate (5m)",
-            "description": "Share of controller reconcile loops (pipelinerun/taskrun/resolutionrequest) that ended success=\"false\" in the last 5 minutes.",
-            "gridPos": { "x": 18, "y": 1, "w": 6, "h": 6 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "unit": "percentunit",
-                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 0.05, "color": "yellow" }, { "value": 0.2, "color": "red" } ] } } },
-            "targets": [ { "expr": "sum(increase(tekton_pipelines_controller_reconcile_count{success=\"false\"}[5m])) / sum(increase(tekton_pipelines_controller_reconcile_count[5m]))" } ]
-        },
-        { "id": 104, "type": "row", "title": "Pipeline visualizer", "gridPos": { "x": 0, "y": 7, "w": 24, "h": 1 } },
-        {
-            "id": 20, "type": "table", "title": "Flow board - every build->test->deploy->release run, real time",
-            "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: the flow-root span is sent exactly once, from whichever stage's finally block is actually LAST in that specific flow's steps: list (any of build/test/deploy/release, per-flow - see docs/tracing.md's is-flow-terminal design) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before reaching its declared last step. Fixed 2026-08-11: this used to assume release was always last, so any flow without a release step (or with steps after release) showed this status forever even after finishing successfully - see docs/tracing.md. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below.",
-            "gridPos": { "x": 0, "y": 8, "w": 24, "h": 11 },
-            "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "queryType": "traceql", "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" } | select(status)", "limit": 20 } ],
-            "transformations": [
-                { "id": "organize", "options": {
-                    "excludeByName": { "nested": true },
-                    "indexByName": { "traceName": 0, "traceService": 1, "startTime": 2, "traceDuration": 3, "traceID": 4 }
-                } }
-            ],
-            "fieldConfig": {
-                "defaults": {},
-                "overrides": [
-                    {
-                        "matcher": { "id": "byName", "options": "traceName" },
-                        "properties": [ { "id": "displayName", "value": "App Namespace / App" }, { "id": "custom.width", "value": 300 } ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "traceService" },
-                        "properties": [
-                            { "id": "displayName", "value": "Flow status" },
-                            { "id": "custom.width", "value": 220 },
-                            { "id": "custom.cellOptions", "value": { "type": "color-background" } },
-                            { "id": "mappings", "value": [
-                                { "type": "value", "options": { "<root span not yet received>": { "text": "● running / incomplete", "color": "orange" } } },
-                                { "type": "value", "options": { "platform-cicd": { "text": "✓ complete", "color": "green" } } }
-                            ] }
-                        ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "startTime" },
-                        "properties": [ { "id": "displayName", "value": "Started" }, { "id": "custom.width", "value": 200 } ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "traceDuration" },
-                        "properties": [
-                            { "id": "displayName", "value": "Duration so far" },
-                            { "id": "unit", "value": "ms" },
-                            { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } },
-                            { "id": "min", "value": 0 },
-                            { "id": "max", "value": 300000 },
-                            { "id": "thresholds", "value": { "steps": [ { "value": 0, "color": "blue" }, { "value": 120000, "color": "yellow" }, { "value": 240000, "color": "red" } ] } }
-                        ]
-                    },
-                    {
-                        "matcher": { "id": "byName", "options": "traceID" },
-                        "properties": [
-                            { "id": "displayName", "value": "Trace ID" },
-                            { "id": "custom.width", "value": 140 },
-                            { "id": "links", "value": [
-                                { "title": "Load waterfall below", "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}", "targetBlank": false },
-                                { "title": "Open full detail (governance + logs)", "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}", "targetBlank": false }
-                            ] }
-                        ]
-                    }
-                ]
-            }
-        },
-        {
-            "id": 23, "type": "barchart", "title": "Selected flow - span durations (clean view)",
-            "description": "Every span in the selected trace, plain bars, no filter chrome - the same underlying Tempo data as the full waterfall below, just flattened for an at-a-glance read. Sorted by start order. Fixed 2026-08-11: unit was 'ns', displaying stage/task durations (seconds-to-minutes by design, see docs/tracing.md) as sub-millisecond noise - this query path's duration field is milliseconds, matching the Flow board panel's traceDuration field from the same Tempo datasource.",
-            "gridPos": { "x": 0, "y": 19, "w": 24, "h": 9 },
-            "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "refId": "A", "query": "$traceId", "queryType": "traceql", "limit": 20, "tableType": "traces", "metricsQueryType": "range", "filters": [ { "id": "1", "operator": "=", "scope": "span", "tag": "" } ], "serviceMapQuery": "", "serviceMapUseNativeHistograms": false } ],
-            "transformations": [
-                { "id": "filterFieldsByName", "options": { "include": { "names": ["operationName", "duration"] } } },
-                { "id": "organize", "options": { "renameByName": { "operationName": "Span", "duration": "Duration" } } }
-            ],
-            "options": { "orientation": "horizontal", "xTickLabelSpacing": 0, "showValue": "always", "legend": { "showLegend": false } },
-            "fieldConfig": { "defaults": { "unit": "ms", "custom": { "lineWidth": 0, "fillOpacity": 80 } },
-                "overrides": [
-                    {
-                        "matcher": { "id": "byName", "options": "Span" },
-                        "properties": [
-                            { "id": "mappings", "value": [
-                                { "type": "value", "options": {
-                                    "stage:build": { "text": "■ BUILD" },
-                                    "stage:test": { "text": "■ TEST" },
-                                    "stage:deploy": { "text": "■ DEPLOY" },
-                                    "stage:release": { "text": "■ RELEASE" },
-                                    "sast-scan": { "text": "↳ sast-scan" },
-                                    "image-scan": { "text": "↳ image-scan" },
-                                    "generate-sbom": { "text": "↳ generate-sbom" },
-                                    "unit-test": { "text": "↳ unit-test" },
-                                    "build-source": { "text": "↳ build-source" },
-                                    "build-image": { "text": "↳ build-image" },
-                                    "governance:sast": { "text": "↳ governance:sast" },
-                                    "governance:image-scan": { "text": "↳ governance:image-scan" },
-                                    "governance:sbom": { "text": "↳ governance:sbom" },
-                                    "governance:policy-check": { "text": "↳ governance:policy-check" }
-                                } }
-                            ] }
-                        ]
-                    }
-                ] }
-        },
-        {
-            "id": 21, "type": "traces", "title": "Selected flow waterfall - full detail (each bar is one span, width = real duration)",
-            "description": "The closest thing to a live 'progress bar' this platform's telemetry can honestly give: spans are only sent once a stage finishes (see docs/tracing.md - there is no true mid-stage percent-complete signal), so this waterfall shows real, completed stages as they land, not a simulated animation. Click a Trace ID above to load it here.",
-            "gridPos": { "x": 0, "y": 28, "w": 24, "h": 22 },
-            "datasource": { "type": "tempo", "uid": "tempo" },
-            "targets": [ { "refId": "A", "query": "$traceId", "queryType": "traceql", "limit": 20, "tableType": "traces", "metricsQueryType": "range", "filters": [ { "id": "1", "operator": "=", "scope": "span", "tag": "" } ], "serviceMapQuery": "", "serviceMapUseNativeHistograms": false } ]
-        },
-        { "id": 101, "type": "row", "title": "Live activity, last 15 minutes", "gridPos": { "x": 0, "y": 50, "w": 24, "h": 1 } },
-        {
-            "id": 5, "type": "bargauge", "title": "Runs per app (15m)",
-            "description": "Every onboarded app as one bar - built to stay readable whether there are 3 apps or 300. Sorted by volume.",
-            "gridPos": { "x": 0, "y": 51, "w": 12, "h": 9 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
-            "fieldConfig": { "defaults": { "unit": "short", "min": 0,
-                "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
-            "targets": [ { "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[15m]))", "legendFormat": "{{exported_namespace}}" } ]
-        },
-        {
-            "id": 6, "type": "bargauge", "title": "Slowest tasks right now (p95, 1h)",
-            "description": "Every catalog Task's p95 duration over the last hour, across all apps and pipelines - the bottleneck leaderboard.",
-            "gridPos": { "x": 12, "y": 51, "w": 12, "h": 9 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
-            "fieldConfig": { "defaults": { "unit": "s", "min": 0,
-                "thresholds": { "steps": [ { "value": 0, "color": "green" }, { "value": 30, "color": "yellow" }, { "value": 90, "color": "red" } ] } } },
-            "targets": [ { "expr": "topk(10, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[1h]))))", "legendFormat": "{{task}}" } ]
-        },
-        { "id": 102, "type": "row", "title": "Stage funnel, last 24h", "gridPos": { "x": 0, "y": 60, "w": 24, "h": 1 } },
-        {
-            "id": 7, "type": "bargauge", "title": "Runs by stage (24h)",
-            "description": "Volume through each stage of the fixed superset DAG plus the release-governance checks. A big drop between adjacent stages is worth investigating (either real attrition or a stalled chain - see the stalled-pipeline detector).",
-            "gridPos": { "x": 0, "y": 61, "w": 24, "h": 7 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "options": { "displayMode": "lcd", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
-            "fieldConfig": { "defaults": { "unit": "short", "min": 0,
-                "thresholds": { "steps": [ { "value": 0, "color": "blue" } ] } } },
-            "targets": [ { "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[24h]))", "legendFormat": "{{pipeline}}" } ]
-        },
-        { "id": 103, "type": "row", "title": "Controller health", "gridPos": { "x": 0, "y": 68, "w": 24, "h": 1 } },
-        {
-            "id": 9, "type": "timeseries", "title": "Reconcile p99 latency by reconciler",
-            "gridPos": { "x": 0, "y": 69, "w": 8, "h": 7 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "unit": "s" } },
-            "targets": [ { "expr": "histogram_quantile(0.99, sum by (le, reconciler) (rate(tekton_pipelines_controller_reconcile_latency_bucket[5m])))", "legendFormat": "{{reconciler}}" } ]
-        },
-        {
-            "id": 10, "type": "timeseries", "title": "Workqueue depth over time",
-            "gridPos": { "x": 8, "y": 69, "w": 8, "h": 7 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "unit": "short" } },
-            "targets": [ { "expr": "sum by (name) (tekton_pipelines_controller_workqueue_depth)", "legendFormat": "{{name}}" } ]
-        },
-        {
-            "id": 11, "type": "timeseries", "title": "Running PipelineRuns / TaskRuns over time",
-            "gridPos": { "x": 16, "y": 69, "w": 8, "h": 7 },
-            "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "fieldConfig": { "defaults": { "unit": "short" } },
-            "targets": [
-                { "expr": "tekton_pipelines_controller_running_pipelineruns", "legendFormat": "pipelineruns" },
-                { "expr": "tekton_pipelines_controller_running_taskruns", "legendFormat": "taskruns" }
-            ]
-        }
+        "query": "a2d4ac5979f7d1030b7a27a136668782"
+      }
     ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Platform pulse",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 1,
+      "type": "gauge",
+      "title": "PipelineRuns running now",
+      "description": "Cluster-wide gauge from the Tekton controller itself - not scoped by $app_namespace (the controller doesn't emit this broken out per app).",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 10,
+          "unit": "short",
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "blue"
+              },
+              {
+                "value": 6,
+                "color": "yellow"
+              },
+              {
+                "value": 9,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "tekton_pipelines_controller_running_pipelineruns",
+          "legendFormat": "running"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "gauge",
+      "title": "TaskRuns running now",
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 20,
+          "unit": "short",
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "blue"
+              },
+              {
+                "value": 12,
+                "color": "yellow"
+              },
+              {
+                "value": 18,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "tekton_pipelines_controller_running_taskruns",
+          "legendFormat": "running"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Workqueue depth (all reconcilers)",
+      "description": "Sum of tekton_pipelines_controller_workqueue_depth across every reconciler queue. Sustained non-zero means the controller is falling behind.",
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              },
+              {
+                "value": 1,
+                "color": "yellow"
+              },
+              {
+                "value": 5,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(tekton_pipelines_controller_workqueue_depth)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Reconcile error rate (5m)",
+      "description": "Share of controller reconcile loops (pipelinerun/taskrun/resolutionrequest) that ended success=\"false\" in the last 5 minutes.",
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 6,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              },
+              {
+                "value": 0.05,
+                "color": "yellow"
+              },
+              {
+                "value": 0.2,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(tekton_pipelines_controller_reconcile_count{success=\"false\"}[5m])) / sum(increase(tekton_pipelines_controller_reconcile_count[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 104,
+      "type": "row",
+      "title": "Pipeline visualizer",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 20,
+      "type": "table",
+      "title": "Flow board - every build->test->deploy->release run, real time",
+      "description": "One row per flow trace, most recent first. 'Flow status' is a real signal, not a guess: the flow-root span is sent exactly once, from whichever stage's finally block is actually LAST in that specific flow's steps: list (any of build/test/deploy/release, per-flow - see docs/tracing.md's is-flow-terminal design) - so a trace still showing '<root span not yet received>' genuinely means that flow is either still running or stopped short (a stage failed) before reaching its declared last step. Fixed 2026-08-11: this used to assume release was always last, so any flow without a release step (or with steps after release) showed this status forever even after finishing successfully - see docs/tracing.md. Rows can shuffle between refreshes: Tempo's search is a scatter-gather across blocks that stops once it hits the row limit below, and which traces land closest to that limit isn't perfectly stable run to run - a real Tempo characteristic, not a bug in this query. Click a Trace ID link to load that flow's full waterfall in the panel below.",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 11
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ .service.name = \"platform-cicd\" && name =~ \"^stage:.*\" } | select(status)",
+          "limit": 20
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "nested": true
+            },
+            "indexByName": {
+              "traceName": 0,
+              "traceService": 1,
+              "startTime": 2,
+              "traceDuration": 3,
+              "traceID": 4
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceName"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "App Namespace / App"
+              },
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceService"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Flow status"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "<root span not yet received>": {
+                        "text": "\u25cf running / incomplete",
+                        "color": "orange"
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "platform-cicd": {
+                        "text": "\u2713 complete",
+                        "color": "green"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "startTime"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Started"
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceDuration"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Duration so far"
+              },
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 300000
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "steps": [
+                    {
+                      "value": 0,
+                      "color": "blue"
+                    },
+                    {
+                      "value": 120000,
+                      "color": "yellow"
+                    },
+                    {
+                      "value": 240000,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceID"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Trace ID"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Load waterfall below",
+                    "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}",
+                    "targetBlank": false
+                  },
+                  {
+                    "title": "Open full detail (governance + logs)",
+                    "url": "/d/platform-cicd-pipeline-detail/ci-cd-platform-pipeline-run-detail?var-traceId=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "type": "barchart",
+      "title": "Selected flow - span durations (clean view)",
+      "description": "Every span in the selected trace, plain bars, no filter chrome - the same underlying Tempo data as the full waterfall below, just flattened for an at-a-glance read. Sorted by start order. Fixed 2026-08-11: unit was 'ns', displaying stage/task durations (seconds-to-minutes by design, see docs/tracing.md) as sub-millisecond noise - this query path's duration field is milliseconds, matching the Flow board panel's traceDuration field from the same Tempo datasource.",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "$traceId",
+          "queryType": "traceql",
+          "limit": 20,
+          "tableType": "traces",
+          "metricsQueryType": "range",
+          "filters": [
+            {
+              "id": "1",
+              "operator": "=",
+              "scope": "span",
+              "tag": ""
+            }
+          ],
+          "serviceMapQuery": "",
+          "serviceMapUseNativeHistograms": false
+        }
+      ],
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "operationName",
+                "duration"
+              ]
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "operationName": "Span",
+              "duration": "Duration"
+            }
+          }
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelSpacing": 0,
+        "showValue": "always",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 80
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Span"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "stage:build": {
+                        "text": "\u25a0 BUILD"
+                      },
+                      "stage:test": {
+                        "text": "\u25a0 TEST"
+                      },
+                      "stage:deploy": {
+                        "text": "\u25a0 DEPLOY"
+                      },
+                      "stage:release": {
+                        "text": "\u25a0 RELEASE"
+                      },
+                      "sast-scan": {
+                        "text": "\u21b3 sast-scan"
+                      },
+                      "image-scan": {
+                        "text": "\u21b3 image-scan"
+                      },
+                      "generate-sbom": {
+                        "text": "\u21b3 generate-sbom"
+                      },
+                      "unit-test": {
+                        "text": "\u21b3 unit-test"
+                      },
+                      "build-source": {
+                        "text": "\u21b3 build-source"
+                      },
+                      "build-image": {
+                        "text": "\u21b3 build-image"
+                      },
+                      "governance:sast": {
+                        "text": "\u21b3 governance:sast"
+                      },
+                      "governance:image-scan": {
+                        "text": "\u21b3 governance:image-scan"
+                      },
+                      "governance:sbom": {
+                        "text": "\u21b3 governance:sbom"
+                      },
+                      "governance:policy-check": {
+                        "text": "\u21b3 governance:policy-check"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "type": "traces",
+      "title": "Selected flow waterfall - full detail (each bar is one span, width = real duration)",
+      "description": "The closest thing to a live 'progress bar' this platform's telemetry can honestly give: spans are only sent once a stage finishes (see docs/tracing.md - there is no true mid-stage percent-complete signal), so this waterfall shows real, completed stages as they land, not a simulated animation. Click a Trace ID above to load it here.",
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 22
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "$traceId",
+          "queryType": "traceql",
+          "limit": 20,
+          "tableType": "traces",
+          "metricsQueryType": "range",
+          "filters": [
+            {
+              "id": "1",
+              "operator": "=",
+              "scope": "span",
+              "tag": ""
+            }
+          ],
+          "serviceMapQuery": "",
+          "serviceMapUseNativeHistograms": false
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "Live activity, last 15 minutes",
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 5,
+      "type": "bargauge",
+      "title": "Runs per app (15m)",
+      "description": "Every onboarded app as one bar - built to stay readable whether there are 3 apps or 300. Sorted by volume.",
+      "gridPos": {
+        "x": 0,
+        "y": 61,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "blue"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (exported_namespace) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[15m]))",
+          "legendFormat": "{{exported_namespace}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Slowest tasks right now (p95, 1h)",
+      "description": "Every catalog Task's p95 duration over the last hour, across all apps and pipelines - the bottleneck leaderboard.",
+      "gridPos": {
+        "x": 12,
+        "y": 61,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              },
+              {
+                "value": 30,
+                "color": "yellow"
+              },
+              {
+                "value": 90,
+                "color": "red"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, task) (rate(tekton_pipelines_controller_taskrun_duration_seconds_bucket{exported_namespace=~\"$app_namespace\"}[1h]))))",
+          "legendFormat": "{{task}}"
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "Stage funnel, last 24h",
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "Runs by stage (24h)",
+      "description": "Volume through each stage of the fixed superset DAG plus the release-governance checks. A big drop between adjacent stages is worth investigating (either real attrition or a stalled chain - see the stalled-pipeline detector).",
+      "gridPos": {
+        "x": 0,
+        "y": 71,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "options": {
+        "displayMode": "lcd",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "steps": [
+              {
+                "value": 0,
+                "color": "blue"
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (pipeline) (increase(tekton_pipelines_controller_pipelinerun_duration_seconds_count{exported_namespace=~\"$app_namespace\"}[24h]))",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "type": "row",
+      "title": "Controller health",
+      "gridPos": {
+        "x": 0,
+        "y": 78,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Reconcile p99 latency by reconciler",
+      "gridPos": {
+        "x": 0,
+        "y": 79,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, reconciler) (rate(tekton_pipelines_controller_reconcile_latency_bucket[5m])))",
+          "legendFormat": "{{reconciler}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Workqueue depth over time",
+      "gridPos": {
+        "x": 8,
+        "y": 79,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (name) (tekton_pipelines_controller_workqueue_depth)",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Running PipelineRuns / TaskRuns over time",
+      "gridPos": {
+        "x": 16,
+        "y": 79,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "tekton_pipelines_controller_running_pipelineruns",
+          "legendFormat": "pipelineruns"
+        },
+        {
+          "expr": "tekton_pipelines_controller_running_taskruns",
+          "legendFormat": "taskruns"
+        }
+      ]
+    },
+    {
+      "id": 105,
+      "type": "row",
+      "title": "Release lead time - commit to confirmed deployment (separate from the automated pipeline trace above)",
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 24,
+      "type": "table",
+      "title": "Release outcomes - PR creation through ArgoCD-confirmed sync",
+      "description": "Each row is one release-outcome-span.yaml span (catalog/tasks/release-outcome-span.yaml, added 2026-08-12) - a deliberately SEPARATE, standalone trace per release, not a child of the automated flow trace above. It exists because the automated pipeline trace intentionally ends at PR-open time (release.yaml's own end-flow finally task, gated on is-flow-terminal) - the PR's own human review/merge and ArgoCD's confirmed sync afterward are unbounded process time, not pipeline execution time, and appending them to the same trace would reproduce a real, already-fixed bug (a span reported after its trace's root already closed). 'Lead time' here is genuinely the commit-to-confirmed-deployment duration (DORA lead time), not comparable to the 'Duration so far' column in the Flow board above - the two panels answer different questions on purpose. Correlate a release-outcome row back to its originating flow via the chain-id shared between them (visible in Tempo's own span attributes on both sides), not via trace-id - the two always live in different traces.",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ name =~ \"^release-outcome:.*\" } | select(status)",
+          "limit": 20
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "traceName": 0,
+              "startTime": 1,
+              "traceDuration": 2,
+              "nested": 3,
+              "traceID": 4
+            },
+            "excludeByName": {
+              "traceService": true
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceName"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Release"
+              },
+              {
+                "id": "custom.width",
+                "value": 320
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "startTime"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Committed"
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceDuration"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Lead time (commit -> confirmed deploy)"
+              },
+              {
+                "id": "unit",
+                "value": "dtdurationms"
+              },
+              {
+                "id": "custom.width",
+                "value": 280
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 86400000
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "steps": [
+                    {
+                      "value": 0,
+                      "color": "blue"
+                    },
+                    {
+                      "value": 3600000,
+                      "color": "yellow"
+                    },
+                    {
+                      "value": 86400000,
+                      "color": "red"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceID"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Trace ID"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "View this release-outcome's own (standalone) span",
+                    "url": "/d/platform-cicd-mission-control/ci-cd-variant-1-live-mission-control?var-traceId=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "nested"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Outcome (click to expand)"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "nestedData"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }
