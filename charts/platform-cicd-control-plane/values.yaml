@@ -16,12 +16,19 @@ platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
 # platform-cicd-app on every push to main - see that job's own header for why this is a
 # deliberately lightweight, ungated publish (no version review, no promotion gate) and
 # the flagged follow-up to build a real release process for all this platform's charts.
-# targetRevision "*" auto-tracks whatever was published most recently - see
-# tenant-onboarding-applicationset.yaml's own header for the live-verified reasoning
-# behind the version format this depends on.
+#
+# platformChartVersionConstraint is NOT a bare "*" - confirmed live this genuinely fails
+# to resolve ("Could not locate a version matching provided version string *") against
+# every version this platform actually publishes, because every published version is a
+# semver PRE-RELEASE (the `-<shortsha>` suffix - see the publish job's own comment for
+# why it's hyphenated, not +build), and Masterminds/semver (what both Helm and ArgoCD's
+# OCI resolution use) excludes pre-releases from an open-ended "*"/">=0.0.0" range by
+# default. ">=0.0.0-0" is the standard idiom for "match anything, prereleases included" -
+# confirmed live this one actually resolves against a real published tag
+# (0.1.0-7f5842c), where plain "*" did not.
 platformChartOciRepo: oci://ghcr.io/jfillman/charts
 platformChartName: platform-cicd-app
-platformChartVersionConstraint: "*"
+platformChartVersionConstraint: ">=0.0.0-0"
 
 # Overlay onto Tekton Chains' own `chains-config` ConfigMap (installed empty by default -
 # confirmed live, nothing to clobber) - applied via `kubectl patch --type merge` by

@@ -22,8 +22,9 @@
 #
 # Source 0 pulls the chart from an OCI registry (GHCR), not this git repo directly -
 # .github/workflows/app-chart-ci.yaml's `publish` job pushes a new OCI artifact on
-# every push to main that touches the chart, and `targetRevision: "*"` (Helm/ArgoCD
-# semver-wildcard matching, confirmed supported for OCI Helm sources) auto-tracks
+# every push to main that touches the chart, and platformChartVersionConstraint
+# (values.yaml - ">=0.0.0-0", NOT a bare "*", see that value's own comment for the live
+# test proving "*" genuinely fails to match a pre-release-tagged version) auto-tracks
 # whichever was published most recently, no manual re-pin needed here. Deliberately
 # lightweight/ungated for now (2026-08-11) at the user's explicit direction, moving
 # quickly while still in development - a proper versioned/tested/promoted release
