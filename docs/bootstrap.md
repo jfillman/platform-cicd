@@ -33,10 +33,15 @@ CONTEXT=kind-dev KIND_CLUSTER_NAME=dev VALUES_FILE=hack/values-kind-dev.yaml ./h
 See `charts/platform-cicd-control-plane/values.yaml`'s own `fulcio`/`tenantsRepoUrl`/
 `tenantOnboardingApplicationSetName`/`selfManageNamespace` comments for why each one is a
 value instead of a template literal, and `hack/values-kind-dev.yaml` for `kind-dev`'s
-actual resolved overrides. `kind-dev`'s tenant list lives in its own dedicated repo,
-[platform-cicd-kind-dev-tenants](https://github.com/jfillman/platform-cicd-kind-dev-tenants)
-- deliberately not this repo's own `tenants/`, which `kind-observe`'s instance still
-reads, to avoid one cluster's install onboarding the other's real, live tenants.
+actual resolved overrides. `kind-dev`'s tenant list lives in idp's own
+[gitops-cluster-dev-tenants](https://github.com/jfillman/gitops-cluster-dev-tenants)
+repo (`NodeJSApplication`'s own Composition commits `tenants/<app>/identity.yaml`
+straight there) - deliberately not this repo's own `tenants/`, which `kind-observe`'s
+instance still reads, to avoid one cluster's install onboarding the other's real, live
+tenants. Was a dedicated `platform-cicd-kind-dev-tenants` repo until 2026-08-16,
+eliminated once live history showed it only ever held throwaway apps and `kind-dev`'s
+platform-cicd instance was confirmed idp-exclusive (nothing else has ever onboarded to
+it, unlike `kind-observe`).
 
 Grafana is for the platform's own dashboards (DORA-ish stats, trace-based durations - see
 `charts/platform-cicd-control-plane/files/dashboards/`, rendered as ConfigMaps by

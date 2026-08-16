@@ -18,11 +18,6 @@
 # fulcio-server-config Secrets directly on kind-dev (kubectl create secret) and were
 # never written to this repo or persisted anywhere else.
 #
-# tenantsRepoUrl: a new, dedicated, empty-to-start repo
-# (https://github.com/jfillman/platform-cicd-kind-dev-tenants) - NOT platform-cicd's own
-# tenants/ directory, which kind-observe's instance still reads and which already holds
-# real, live tenants (nodejs-demo-app, cicd-flow-test-app) that must not get onboarded
-# onto kind-dev too.
 fulcio:
   issuerCACert: |
     -----BEGIN CERTIFICATE-----
@@ -56,14 +51,27 @@ fulcio:
     sw0vfyU9lephEI9icb9PlVIUle13DzDxjaJ0rs9Lz7BCLn1BBw==
     -----END CERTIFICATE-----
 
-# clusterName (2026-08-16): derives tenantsRepoUrl
-# (https://github.com/jfillman/platform-cicd-kind-dev-tenants.git) and
-# tenantOnboardingApplicationSetName (platform-cicd-tenant-onboarding, the collision-safe
-# name - see that ApplicationSet's own header comment) automatically - see
-# charts/platform-cicd-control-plane/values.yaml's own comments. Replaces what used to be
-# two separately hand-typed fields here; confirmed via a helm template diff that this
-# produces byte-identical output to the explicit fields it replaces.
+# clusterName (2026-08-16): derives tenantOnboardingApplicationSetName
+# (platform-cicd-tenant-onboarding, the collision-safe name - see that ApplicationSet's
+# own header comment) automatically - see charts/platform-cicd-control-plane/values.yaml's
+# own comments. Would also derive tenantsRepoUrl as
+# https://github.com/jfillman/platform-cicd-kind-dev-tenants.git, but that's overridden
+# explicitly below instead (same override mechanism kind-observe's own install already
+# uses, for a different reason).
 clusterName: kind-dev
+
+# tenantsRepoUrl (2026-08-16, explicit override - breaks the clusterName-derived
+# default above on purpose): gitops-cluster-dev-tenants, idp's own tenant-onboarding
+# repo - NOT platform-cicd's own tenants/ directory, which kind-observe's instance
+# still reads and which already holds real, live tenants (nodejs-demo-app,
+# cicd-flow-test-app) that must not get onboarded onto kind-dev too. Was a dedicated
+# platform-cicd-kind-dev-tenants repo until this same date, eliminated once live
+# history showed it only ever held throwaway apps and idp/README.md confirmed kind-dev's
+# platform-cicd instance is idp-exclusive - NodeJSApplication's own Composition now
+# commits identity.yaml straight into gitops-cluster-dev-tenants instead
+# (idp-service-catalog v0.3.5, see compositions/nodejsapplication/templates/
+# render-github-resources/cicd-identity-yaml.yaml's own header for the full reasoning).
+tenantsRepoUrl: https://github.com/jfillman/gitops-cluster-dev-tenants.git
 
 # See charts/platform-cicd-control-plane/templates/broker/interceptor.yaml's own header
 # comment - a truly fresh cluster needs hack/bootstrap.sh's --create-namespace instead of
