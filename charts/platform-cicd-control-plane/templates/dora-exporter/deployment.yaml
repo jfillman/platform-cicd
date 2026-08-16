@@ -80,8 +80,16 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: exporter
-          image: ghcr.io/platform-cicd/dora-exporter:latest
-          imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6 - see token-review-interceptor's identical note
+          # Real gap found+fixed 2026-08-15 (installing a second instance of this chart
+          # on kind-dev): this literal claimed "pushed to ghcr.io/jfillman (public), not
+          # kind-loaded" but was actually never pushed anywhere - hack/bootstrap.sh never
+          # built/published it, it only ran on kind-observe because it was kind-loaded by
+          # hand once, off-script (confirmed live: `docker pull
+          # ghcr.io/platform-cicd/dora-exporter:latest` -> "manifest unknown"). Now a
+          # real value, defaulting to a genuinely registry-published tag - see
+          # hack/bootstrap.sh's build+push step, same pattern as toolboxImage above it.
+          image: {{ .Values.doraExporterImage }}
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: metrics }]
           securityContext:
             allowPrivilegeEscalation: false

@@ -6,6 +6,16 @@
 # from the code that consumes it.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
+# See templates/broker/interceptor.yaml's own header comment on its Namespace resource
+# for the full reasoning (2026-08-15) - true keeps kind-observe's existing, already-
+# working behavior unchanged.
+selfManageNamespace: true
+
+# Real registry-published image, same reasoning as toolboxImage above - see
+# templates/dora-exporter/deployment.yaml's own comment for the gap this closes
+# (2026-08-15).
+doraExporterImage: ghcr.io/jfillman/platform-cicd-dora-exporter:latest
+
 # This platform's own repo - the tenant-onboarding ApplicationSet (templates/argocd/
 # tenant-onboarding-applicationset.yaml) reads tenants/*.yaml from here (its generator
 # source) AND renders the platform-cicd-app chart straight from here at main HEAD.
@@ -18,6 +28,67 @@ toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 # header for the full story and why this is folded into the already-flagged
 # proper-release-workflow follow-up instead of worked around here.
 platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
+
+# Which repo/path the tenant-onboarding ApplicationSet's generator scans for
+# tenants/*/identity.yaml (templates/argocd/tenant-onboarding-applicationset.yaml) and
+# which templates/argocd/onboarding-appproject.yaml allowlists as a sourceRepo.
+# Deliberately separate from platformCicdRepoUrl above (2026-08-15, installing a second
+# instance of this chart on kind-dev): that value also drives the SAME ApplicationSet's
+# chart-source repoURL, which legitimately should stay this platform's one shared repo
+# on every cluster this chart is installed on - but the tenant LIST must not, or a
+# second cluster's install would onboard the first cluster's real, live tenants too.
+# Defaults to platformCicdRepoUrl (zero change in behavior for the existing
+# kind-observe install); override per-cluster to give each installation its own,
+# independent tenant list.
+tenantsRepoUrl: https://github.com/jfillman/platform-cicd.git
+
+# See templates/argocd/tenant-onboarding-applicationset.yaml's own header comment for
+# the real name collision this guards against and why it's a value, not an in-place
+# rename (2026-08-15). Default is the original name - zero change for kind-observe.
+tenantOnboardingApplicationSetName: tenant-onboarding
+
+# Genuinely cluster-specific Fulcio material - see templates/sigstore/fulcio-config.yaml
+# and templates/sigstore/fulcio-root-configmap.yaml for what consumes each key and why.
+# Both default to kind-observe's own current values (read/generated live against that
+# cluster), so a plain `helm upgrade` with no override is byte-identical to before these
+# became values instead of hardcoded template literals (2026-08-15, installing a second
+# instance of this chart on kind-dev).
+fulcio:
+  # kind-observe's own kube-root-ca.crt "ca.crt" content - lets Fulcio trust a
+  # `type: kubernetes` OIDC token by trusting THIS cluster's own API server TLS cert.
+  issuerCACert: |
+    -----BEGIN CERTIFICATE-----
+    MIIDBTCCAe2gAwIBAgIISJN8q/q5nzcwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+    AxMKa3ViZXJuZXRlczAeFw0yNjA3MjYwNDU0NDlaFw0zNjA3MjMwNDU5NDlaMBUx
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+    AoIBAQDdm201tC8gV9yRwMuSNpMI1HHQcopQ3JxQOGVytveusGuah3PVzYoIL2PY
+    Jh2GaqHgXCIN40sKQ5hLscb0qIBNbY4JDZRjLnqMtS0iVO1yEGPleTmdYuM7Xln6
+    KMwBSqZ8HmgAOZfTxXq4wBbwqPqK5TLkultqpBnlawv4rHa+jxOr1FOLr4crlTyi
+    UumIjrtMLhogg1WPGcLgViqbADrqwkmjMEPNNTXoX25MVsr7GtAz/8YF97i5qOF4
+    lJbh1dRnuzlFTp0BK4Z0k5f8Hmq66Fb7tJtmus/+2AO0k3rRYSdNI19CV2oHbzD4
+    3MU2rE5tExil8Sc6AiPv3uW5L34NAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQyZd/TnuK5G8MQP0OleM3Wx1wpojAV
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCJRM+EwOOV
+    phG74EHuTSRrHYu79EXcOwMvcRmseY4HOvOuuMm1//H1Q14re4voL4etYjQga81I
+    /T8X/rc0NeFqV2eqRYeIVFZ4++9vtsGJogruRJtI6iVzagHzml8AO8deCFseScBn
+    wq+yXl5zPqkMLOXJE1s40uJDyeBE8CTw9Zdlmc18BUhzkJUCLdBJLdLe3W2ToFkN
+    8LXTXpVL8H0+xnJ/y8bYJi5NrqBmXz2WdOpk6oJXG8K0Mz9wYVMjrZ7NXCKCU8Hi
+    hYieRNWCXH75a+DradRdZb/8ImOfh/nd4FatuE+EqAMwInns9MiJx+AZ1zuYZGXO
+    ptRXZRv3U7Ip
+    -----END CERTIFICATE-----
+  # Public half of whatever fulcio-secret's key.pem was generated with
+  # (docs/image-signing.md's one-time openssl bootstrap) - kind-observe's own root.
+  rootCert: |
+    -----BEGIN CERTIFICATE-----
+    MIIBXzCCARGgAwIBAgIULS2gqk6EzoP+WqAugl3RUrr2i4gwBQYDK2VwMCQxIjAg
+    BgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVsY2lvLXJvb3QwIBcNMjYwODA0MDY1ODQx
+    WhgPMjEyNjA3MTEwNjU4NDFaMCQxIjAgBgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVs
+    Y2lvLXJvb3QwKjAFBgMrZXADIQAbzMlKYjHr/ds4pGno6IteM+L80JJAB6qcdZfv
+    cCOb2KNTMFEwHQYDVR0OBBYEFPs94gvZdJ0dtgeUbmtiF3GsnUIoMB8GA1UdIwQY
+    MBaAFPs94gvZdJ0dtgeUbmtiF3GsnUIoMA8GA1UdEwEB/wQFMAMBAf8wBQYDK2Vw
+    A0EA2qc3Z5SVC3pdT+WEEmg4lvArc3PkG79DR1Xq7zAuJGlEn8YZba2lglK+cnZX
+    VnT16fgLxASFZZatQBE7PoyzDg==
+    -----END CERTIFICATE-----
 
 # Overlay onto Tekton Chains' own `chains-config` ConfigMap (installed empty by default -
 # confirmed live, nothing to clobber) - applied via `kubectl patch --type merge` by

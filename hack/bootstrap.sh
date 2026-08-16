@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # hack/bootstrap.sh
 #
-# Targets the existing shared `kind-observe` dev cluster rather than creating a
-# dedicated one - see docs/bootstrap.md "Why kind-observe, not a fresh cluster" for the
+# Targets the existing shared `kind-observe` dev cluster by default rather than creating
+# a dedicated one - see docs/bootstrap.md "Why kind-observe, not a fresh cluster" for the
 # full reasoning and the tradeoffs that decision carries (most importantly: no
 # NetworkPolicy enforcement, see the CNI note below). This script only installs what's
 # genuinely missing on that cluster and is careful not to touch anything already owned
@@ -10,13 +10,24 @@
 # existing observability/argocd/crossplane-system stacks).
 #
 # Idempotent: safe to re-run. Each step checks whether it's already done before acting.
+#
+# Retargetable via env vars (2026-08-15, standing up a second, independent instance of
+# this control plane on kind-dev for idp - see idp/docs/service-catalog-design.md §0's
+# NodeJSApplication CicdOnboarding note): defaults below reproduce today's kind-observe
+# behavior exactly, so a plain `./hack/bootstrap.sh` is unchanged. Override for another
+# cluster, e.g. `CONTEXT=kind-dev KIND_CLUSTER_NAME=dev VALUES_FILE=hack/values-kind-dev.yaml
+# ./hack/bootstrap.sh`. The chart-level per-cluster values (Fulcio CA/root cert,
+# tenantsRepoUrl) live in VALUES_FILE, not here - see charts/platform-cicd-control-plane/
+# values.yaml's own fulcio/tenantsRepoUrl comments for why those specifically can't just
+# be hardcoded per-cluster in the templates themselves.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CONTEXT="kind-observe"
-KIND_CLUSTER_NAME="observe" # kind's own name for the cluster, i.e. context minus the "kind-" prefix
-CATALOG_IMAGE_TAG="latest"
+CONTEXT="${CONTEXT:-kind-observe}"
+KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-observe}" # kind's own name for the cluster, i.e. context minus the "kind-" prefix
+CATALOG_IMAGE_TAG="${CATALOG_IMAGE_TAG:-latest}"
+VALUES_FILE="${VALUES_FILE:-}" # optional -f override for both helm upgrade --install calls below
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
 warn() { echo -e "\033[1;33mwarning: $*\033[0m" >&2; }
@@ -29,10 +40,10 @@ require kubectl
 require helm
 require docker
 
-log "0/6 - target the existing kind-observe cluster (not creating a new one)"
+log "0/6 - target the existing ${CONTEXT} cluster (not creating a new one)"
 if ! kubectl config get-contexts -o name | grep -qx "${CONTEXT}"; then
   echo "error: context '${CONTEXT}' not found in your kubeconfig. This script assumes" >&2
-  echo "you already have the kind-observe cluster running - it does not create one." >&2
+  echo "you already have that cluster running - it does not create one." >&2
   exit 1
 fi
 kubectl config use-context "${CONTEXT}"
@@ -149,6 +160,16 @@ log "4/6 - build + publish toolbox; build + load token-review-interceptor"
 # Tekton Task, so it never triggers this bug and is left on the simpler kind-load path.
 docker build -f catalog/toolbox/Dockerfile -t "ghcr.io/jfillman/platform-cicd-toolbox:${CATALOG_IMAGE_TAG}" .
 docker push "ghcr.io/jfillman/platform-cicd-toolbox:${CATALOG_IMAGE_TAG}"
+# Real gap found+fixed 2026-08-15: this build+push step never existed before - DORA
+# exporter only ever ran on kind-observe because it was kind-loaded by hand once,
+# off-script (see charts/platform-cicd-control-plane/templates/dora-exporter/
+# deployment.yaml's own comment). Registry-published like toolbox above, not kind-loaded
+# like token-review-interceptor below - it's not a Tekton step image, so none of the
+# Chains materials-gathering imageID bug applies, and a real registry means no per-
+# cluster kind-load step going forward.
+docker build -f platform/dora-exporter/cmd/dora-exporter/Dockerfile \
+  -t "ghcr.io/jfillman/platform-cicd-dora-exporter:${CATALOG_IMAGE_TAG}" platform/dora-exporter
+docker push "ghcr.io/jfillman/platform-cicd-dora-exporter:${CATALOG_IMAGE_TAG}"
 docker build -f platform/broker/cmd/token-review-interceptor/Dockerfile \
   -t "ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}" platform/broker
 if command -v kind >/dev/null 2>&1; then
@@ -168,9 +189,21 @@ log "5/6 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecre
 # own build sessions, a real gap this closes, not just a refactor. Fulcio's root CA
 # secret is still a one-time manual bootstrap step - see docs/image-signing.md - this
 # does not create it, only consumes it.
-kubectl create namespace platform-system --dry-run=client -o yaml | kubectl apply -f -
+#
+# NOT a `kubectl create namespace platform-system` here (real bug found live 2026-08-15,
+# first true from-scratch install of this chart, on kind-dev): templates/broker/
+# interceptor.yaml already declares its own `kind: Namespace, name: platform-system` -
+# pre-creating it via plain kubectl first means Helm can't import it into the release
+# ("exists and cannot be imported... missing key app.kubernetes.io/managed-by") on this
+# Helm version (confirmed live, v3.21.3). kind-observe's platform-system happens to
+# already be cleanly Helm-owned (confirmed live) - this redundant line never mattered
+# there, just never helped either. Let the chart create it.
+HELM_VALUES_ARGS=()
+if [[ -n "${VALUES_FILE}" ]]; then
+  HELM_VALUES_ARGS=(-f "${VALUES_FILE}")
+fi
 helm upgrade --install platform-cicd-control-plane charts/platform-cicd-control-plane \
-  --namespace platform-system --wait
+  --namespace platform-system --create-namespace --wait "${HELM_VALUES_ARGS[@]}"
 
 log "6/6 - Grafana dashboards, provisioned into the existing Grafana in observability ns"
 kubectl apply -k observability/grafana/

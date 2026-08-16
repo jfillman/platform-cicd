@@ -5,17 +5,38 @@ promotions actually land) are a separate bootstrap - see
 [hack/bootstrap-upper-cluster.sh](../hack/bootstrap-upper-cluster.sh) and
 [multi-cluster.md](multi-cluster.md).
 
-`hack/bootstrap.sh` targets the existing shared `kind-observe` dev cluster rather than
-creating a dedicated one. It installs only what's genuinely missing there (Tekton
-Pipelines/Triggers/Pipelines-as-Code, External Secrets Operator, the shared catalog, the
-broker) and reuses everything else already running. It's idempotent - re-run it after
-pulling changes.
+`hack/bootstrap.sh` targets the existing shared `kind-observe` dev cluster by default
+rather than creating a dedicated one. It installs only what's genuinely missing there
+(Tekton Pipelines/Triggers/Pipelines-as-Code, External Secrets Operator, the shared
+catalog, the broker) and reuses everything else already running. It's idempotent -
+re-run it after pulling changes.
 
 ```
 ./hack/bootstrap.sh
 kubectl -n observability port-forward svc/kube-prometheus-stack-grafana 3000:80
 kubectl -n tekton-pipelines port-forward svc/tekton-dashboard 9097:9097
 ```
+
+**Second, independent instance on `kind-dev` (2026-08-15)** - a real, separate cluster
+(idp's own dev cluster, not related to `kind-observe` despite the similar name), needed
+so idp's `NodeJSApplication`-provisioned apps get a real CICD pipeline. `CONTEXT`/
+`KIND_CLUSTER_NAME`/`CATALOG_IMAGE_TAG` are all overridable via env var (defaults
+reproduce `kind-observe`'s exact current behavior, so a plain `./hack/bootstrap.sh` is
+unchanged); the chart-level per-cluster values (Fulcio CA/root cert - each instance gets
+its own independently-generated root, never shared - `tenantsRepoUrl`, the
+`tenant-onboarding` `ApplicationSet`'s own name) live in a `VALUES_FILE`:
+
+```
+CONTEXT=kind-dev KIND_CLUSTER_NAME=dev VALUES_FILE=hack/values-kind-dev.yaml ./hack/bootstrap.sh
+```
+
+See `charts/platform-cicd-control-plane/values.yaml`'s own `fulcio`/`tenantsRepoUrl`/
+`tenantOnboardingApplicationSetName`/`selfManageNamespace` comments for why each one is a
+value instead of a template literal, and `hack/values-kind-dev.yaml` for `kind-dev`'s
+actual resolved overrides. `kind-dev`'s tenant list lives in its own dedicated repo,
+[platform-cicd-kind-dev-tenants](https://github.com/jfillman/platform-cicd-kind-dev-tenants)
+- deliberately not this repo's own `tenants/`, which `kind-observe`'s instance still
+reads, to avoid one cluster's install onboarding the other's real, live tenants.
 
 Grafana is for the platform's own dashboards (DORA-ish stats, trace-based durations - see
 `observability/grafana/dashboards/`). The Tekton Dashboard (`localhost:9097` above) is

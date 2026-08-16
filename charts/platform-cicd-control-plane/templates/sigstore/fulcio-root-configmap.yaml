@@ -12,6 +12,14 @@
 #
 # Consumed by catalog/tasks/verify-image-provenance.yaml as the --ca-roots trust anchor
 # for `cosign verify`/`verify-attestation` - see docs/provenance-policy.md.
+#
+# Templated from .Values.fulcio.rootCert (2026-08-15, installing a second instance of
+# this chart on kind-dev) - the public half of whatever fulcio-secret (fulcio-
+# deployment.yaml) was generated with. Genuinely cluster-specific: each cluster gets its
+# own independently-generated root CA (docs/image-signing.md's one-time openssl
+# bootstrap), never a copy of another cluster's. Default in values.yaml is
+# kind-observe's own current root cert, so a plain `helm upgrade` with no override
+# renders byte-identical to before this change.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -22,16 +30,7 @@ metadata:
   namespace: platform-catalog
 data:
   cert.pem: |
-    -----BEGIN CERTIFICATE-----
-    MIIBXzCCARGgAwIBAgIULS2gqk6EzoP+WqAugl3RUrr2i4gwBQYDK2VwMCQxIjAg
-    BgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVsY2lvLXJvb3QwIBcNMjYwODA0MDY1ODQx
-    WhgPMjEyNjA3MTEwNjU4NDFaMCQxIjAgBgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVs
-    Y2lvLXJvb3QwKjAFBgMrZXADIQAbzMlKYjHr/ds4pGno6IteM+L80JJAB6qcdZfv
-    cCOb2KNTMFEwHQYDVR0OBBYEFPs94gvZdJ0dtgeUbmtiF3GsnUIoMB8GA1UdIwQY
-    MBaAFPs94gvZdJ0dtgeUbmtiF3GsnUIoMA8GA1UdEwEB/wQFMAMBAf8wBQYDK2Vw
-    A0EA2qc3Z5SVC3pdT+WEEmg4lvArc3PkG79DR1Xq7zAuJGlEn8YZba2lglK+cnZX
-    VnT16fgLxASFZZatQBE7PoyzDg==
-    -----END CERTIFICATE-----
+    {{- .Values.fulcio.rootCert | trim | nindent 4 }}
 ---
 # Broad, but deliberately so and narrowly-scoped by resource: this ConfigMap holds
 # genuinely public data (same trust level as Fulcio's own public API), so granting read

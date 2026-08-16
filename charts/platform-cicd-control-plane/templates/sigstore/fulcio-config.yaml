@@ -34,6 +34,14 @@
 # authority" error that appeared without this field. Setting ca-cert explicitly is the
 # documented, general-purpose escape hatch for exactly this case - see the CACert field's
 # own doc comment in that source file.
+#
+# Templated from .Values.fulcio.issuerCACert (2026-08-15, installing a second instance
+# of this chart on kind-dev) - genuinely cluster-specific content, confirmed live it
+# differs between kind-observe and kind-dev (the issuer-url string above does NOT
+# differ - confirmed live too, both clusters' own OIDC discovery return the identical
+# ".cluster.local" form, so that stays a plain literal, not a value). Default in
+# values.yaml is kind-observe's own current cert, so a plain `helm upgrade` with no
+# override renders byte-identical to before this change.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -50,25 +58,7 @@ data:
         client-id: "sigstore"
         type: "kubernetes"
         ca-cert: |
-          -----BEGIN CERTIFICATE-----
-          MIIDBTCCAe2gAwIBAgIISJN8q/q5nzcwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
-          AxMKa3ViZXJuZXRlczAeFw0yNjA3MjYwNDU0NDlaFw0zNjA3MjMwNDU5NDlaMBUx
-          EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
-          AoIBAQDdm201tC8gV9yRwMuSNpMI1HHQcopQ3JxQOGVytveusGuah3PVzYoIL2PY
-          Jh2GaqHgXCIN40sKQ5hLscb0qIBNbY4JDZRjLnqMtS0iVO1yEGPleTmdYuM7Xln6
-          KMwBSqZ8HmgAOZfTxXq4wBbwqPqK5TLkultqpBnlawv4rHa+jxOr1FOLr4crlTyi
-          UumIjrtMLhogg1WPGcLgViqbADrqwkmjMEPNNTXoX25MVsr7GtAz/8YF97i5qOF4
-          lJbh1dRnuzlFTp0BK4Z0k5f8Hmq66Fb7tJtmus/+2AO0k3rRYSdNI19CV2oHbzD4
-          3MU2rE5tExil8Sc6AiPv3uW5L34NAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
-          BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQyZd/TnuK5G8MQP0OleM3Wx1wpojAV
-          BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCJRM+EwOOV
-          phG74EHuTSRrHYu79EXcOwMvcRmseY4HOvOuuMm1//H1Q14re4voL4etYjQga81I
-          /T8X/rc0NeFqV2eqRYeIVFZ4++9vtsGJogruRJtI6iVzagHzml8AO8deCFseScBn
-          wq+yXl5zPqkMLOXJE1s40uJDyeBE8CTw9Zdlmc18BUhzkJUCLdBJLdLe3W2ToFkN
-          8LXTXpVL8H0+xnJ/y8bYJi5NrqBmXz2WdOpk6oJXG8K0Mz9wYVMjrZ7NXCKCU8Hi
-          hYieRNWCXH75a+DradRdZb/8ImOfh/nd4FatuE+EqAMwInns9MiJx+AZ1zuYZGXO
-          ptRXZRv3U7Ip
-          -----END CERTIFICATE-----
+          {{- .Values.fulcio.issuerCACert | trim | nindent 10 }}
         # NOTE: this is the cluster's kube-root-ca.crt content as of implementation time
         # - if the cluster's serving CA is ever rotated, this needs to be refreshed too
         # (a real, accepted maintenance burden of inlining rather than reading a mounted

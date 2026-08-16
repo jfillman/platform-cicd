@@ -1,0 +1,70 @@
+# hack/values-kind-dev.yaml
+#
+# Per-cluster overrides for charts/platform-cicd-control-plane, wired in by
+# hack/bootstrap.sh via VALUES_FILE when installing the kind-dev instance
+# (CONTEXT=kind-dev KIND_CLUSTER_NAME=dev VALUES_FILE=hack/values-kind-dev.yaml
+# ./hack/bootstrap.sh). See charts/platform-cicd-control-plane/values.yaml's own
+# fulcio/tenantsRepoUrl comments for why these specifically can't be hardcoded in the
+# chart templates the way the rest of this platform's config is.
+#
+# fulcio.issuerCACert: kind-dev's own kube-root-ca.crt "ca.crt" content, read live
+# 2026-08-15 (`kubectl --context kind-dev get configmap kube-root-ca.crt -n default -o
+# jsonpath='{.data.ca\.crt}'`). NOT kind-observe's - confirmed live the two differ.
+#
+# fulcio.rootCert: the public half of a freshly, independently generated Fulcio root CA
+# for kind-dev (openssl req -x509 -newkey ed25519, docs/image-signing.md's documented
+# procedure) - deliberately not a copy of kind-observe's trust root. The matching
+# private key + passphrase were used only to create the fulcio-secret and
+# fulcio-server-config Secrets directly on kind-dev (kubectl create secret) and were
+# never written to this repo or persisted anywhere else.
+#
+# tenantsRepoUrl: a new, dedicated, empty-to-start repo
+# (https://github.com/jfillman/platform-cicd-kind-dev-tenants) - NOT platform-cicd's own
+# tenants/ directory, which kind-observe's instance still reads and which already holds
+# real, live tenants (nodejs-demo-app, cicd-flow-test-app) that must not get onboarded
+# onto kind-dev too.
+fulcio:
+  issuerCACert: |
+    -----BEGIN CERTIFICATE-----
+    MIIDBTCCAe2gAwIBAgIINOVw0c+uNdQwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
+    AxMKa3ViZXJuZXRlczAeFw0yNjA4MTMxODU0NTFaFw0zNjA4MTAxODU5NTFaMBUx
+    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+    AoIBAQDy82ewlEye5x09sE9cVSg/G1f4HK6zz3zcJgZc76fBujPJIATBp/1OvYOX
+    A49EXSbBS5l2wIds3L/Fucg4c5WzE5M/B87sSaH/i//Vdi+++s4qlcevfsCrGmYc
+    VOTcqtH28Gg13Z/yzO1bE6aA3KF4LmU4G8cbL8qagT/mW0Opm0x1w0OMrmaI3KhM
+    NLmLO2LQQhha7T8fV6bZNcRd65ieRSaeErknqgMQlCUyE2L3pFBQyRNQQR/CqNgZ
+    4+Xj5hjUZy96byhkutOeRNESSCoqS3DzeJsehsopWDTIElhLBCYdAsPeqdC/ONtN
+    t2esfA+r1Wc0K0xzrRfqz/tlGZk1AgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
+    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQy74aO6EYPNuTr/200SZseJ1u8FzAV
+    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQAfGiKMhKK2
+    tNCPNG4PyoILs2skfnxqtxP1huIYBTAtjwgugPbeg8YEtzG6Wmzl70QAwBNYIxq2
+    C23k8xa4xkcDvVNFh5N6PS1LM6gm7GFpY9K7rrVZs+eg7pI7X/3qB15i4d0a3seg
+    dAIWlPa6WV8++JvHbJwX86dHcRWCeGfnAKC05uokX8myCYnvrKSJc8H+ik5BCnSt
+    PTjcGjBCGLfgDFfui6OZT9d4vG5Y1YjmqDr1vzE5i9kn9XsgT2hFNvXUKpB8QBoK
+    zhjMLDILy8scvfUxFOTKShl+zkajsQWL9ice1ZlDRQj4tzoYo8llZQesHWLKmYGR
+    /rO4Y4XgxH3n
+    -----END CERTIFICATE-----
+  rootCert: |
+    -----BEGIN CERTIFICATE-----
+    MIIBcTCCASOgAwIBAgIUUghSc+zKMIy3/i0baSfZ9TCjA4gwBQYDK2VwMC0xKzAp
+    BgNVBAMMInBsYXRmb3JtLWNpY2Qta2luZC1kZXYtZnVsY2lvLXJvb3QwIBcNMjYw
+    ODE1MjMxMTEyWhgPMjEyNjA3MjIyMzExMTJaMC0xKzApBgNVBAMMInBsYXRmb3Jt
+    LWNpY2Qta2luZC1kZXYtZnVsY2lvLXJvb3QwKjAFBgMrZXADIQACag35vxVW2K2k
+    m7n7ZETmiasPJQYBkiAMXnp46qKD4qNTMFEwHQYDVR0OBBYEFMSWTHz7Yyy8DSXw
+    SsdQ50ARxL/CMB8GA1UdIwQYMBaAFMSWTHz7Yyy8DSXwSsdQ50ARxL/CMA8GA1Ud
+    EwEB/wQFMAMBAf8wBQYDK2VwA0EAwCq+BbhTu0EV//P9tlc+KsD+tN/23VEzZvPL
+    sw0vfyU9lephEI9icb9PlVIUle13DzDxjaJ0rs9Lz7BCLn1BBw==
+    -----END CERTIFICATE-----
+
+tenantsRepoUrl: https://github.com/jfillman/platform-cicd-kind-dev-tenants.git
+
+# See charts/platform-cicd-control-plane/templates/broker/interceptor.yaml's own header
+# comment - a truly fresh cluster needs hack/bootstrap.sh's --create-namespace instead of
+# the chart's own Namespace resource, since Helm can't reconcile both for the same
+# namespace.
+selfManageNamespace: false
+
+# See charts/platform-cicd-control-plane/templates/argocd/tenant-onboarding-
+# applicationset.yaml's own header comment - kind-dev is the cluster that actually
+# collides with idp's own identically-named ApplicationSet.
+tenantOnboardingApplicationSetName: platform-cicd-tenant-onboarding

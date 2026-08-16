@@ -29,6 +29,18 @@
 # EventListener CRD's admission webhook, then silently reverted when patched directly
 # onto the generated Deployment). TokenReview-verified caller identity remains the real
 # trust boundary here regardless - see docs/chaining.md.
+{{- if .Values.selfManageNamespace }}
+# Real conflict found live 2026-08-15 (first true from-scratch install of this chart, on
+# kind-dev): Helm's --create-namespace flag and a chart's own self-declared Namespace
+# resource for that SAME namespace are mutually exclusive in this Helm version (v3.21.3)
+# - --create-namespace produces a namespace with zero Helm release-tracking metadata,
+# which this resource then can't "import" ("exists and cannot be imported... missing key
+# app.kubernetes.io/managed-by"). kind-observe's platform-system is already cleanly
+# owned by THIS resource (confirmed live) from whenever it first bootstrapped
+# successfully - selfManageNamespace defaults true so that stays exactly as-is. kind-dev
+# (and any future from-scratch install) sets it false and relies on hack/bootstrap.sh's
+# --create-namespace flag instead (a safe no-op if the namespace already exists, per
+# Helm's own docs - unconditionally added there, not gated on this value).
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -37,6 +49,7 @@ metadata:
     {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
     platform.io/subcomponent: "broker"
 ---
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

@@ -20,6 +20,15 @@
 # header for the full per-tenant layout and why identity.yaml stays a tracked file here
 # rather than anything read from the app repo).
 #
+# Generator's own repoURL is .Values.tenantsRepoUrl, NOT .Values.platformCicdRepoUrl
+# (2026-08-15, installing a second instance of this chart on kind-dev) - deliberately
+# separate values. platformCicdRepoUrl (source 0's repoURL below) legitimately stays
+# this platform's one shared repo for chart source on every cluster; tenantsRepoUrl is
+# which tenant LIST this specific installation onboards, and must be independent per
+# cluster or a second cluster's install would try to onboard the first cluster's real,
+# live tenants too. Defaults to the same repo (zero change for kind-observe's existing
+# install); override per-cluster to give each installation its own tenant list.
+#
 # Source 0 renders the chart straight from this git repo (main HEAD) - NOT from the OCI
 # registry .github/workflows/app-chart-ci.yaml's `publish` job pushes to on every chart
 # change. That OCI groundwork stays in place (real, working, verified live: a real
@@ -65,7 +74,19 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: tenant-onboarding
+  # Real collision found live 2026-08-15 (first true from-scratch install of this chart,
+  # on kind-dev): idp's own gitops-cluster-dev has an unrelated, pre-existing
+  # ApplicationSet also literally named "tenant-onboarding" in the argocd namespace
+  # (different generator/schema entirely - XR onboarding, not CICD pipeline onboarding).
+  # Name is a value, not a rename in place, deliberately: this ApplicationSet's generated
+  # Applications carry ownerReferences + resources-finalizer.argocd.argoproj.io back to
+  # it (see this file's own finalizer comment below) - renaming it in place on an
+  # already-live cluster would delete-and-regenerate every real tenant's Application via
+  # k8s GC, transiently pruning their actual deployed pipeline resources (RBAC, Triggers,
+  # ...). Defaulting to the original "tenant-onboarding" keeps kind-observe's live
+  # ApplicationSet completely untouched - zero cutover needed there, ever, for this fix.
+  # kind-dev's install overrides it since it's the one that actually collides.
+  name: {{ .Values.tenantOnboardingApplicationSetName }}
   labels:
     {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
@@ -75,7 +96,7 @@ spec:
   goTemplateOptions: ["missingkey=invalid"]
   generators:
     - git:
-        repoURL: {{ .Values.platformCicdRepoUrl }}
+        repoURL: {{ .Values.tenantsRepoUrl }}
         revision: main
         files:
           - path: "tenants/*/identity.yaml"
