@@ -15,11 +15,13 @@
 # this control plane on kind-dev for idp - see idp/docs/service-catalog-design.md §0's
 # NodeJSApplication CicdOnboarding note): defaults below reproduce today's kind-observe
 # behavior exactly, so a plain `./hack/bootstrap.sh` is unchanged. Override for another
-# cluster, e.g. `CONTEXT=kind-dev KIND_CLUSTER_NAME=dev VALUES_FILE=hack/values-kind-dev.yaml
-# ./hack/bootstrap.sh`. The chart-level per-cluster values (Fulcio CA/root cert,
-# tenantsRepoUrl) live in VALUES_FILE, not here - see charts/platform-cicd-control-plane/
-# values.yaml's own fulcio/tenantsRepoUrl comments for why those specifically can't just
-# be hardcoded per-cluster in the templates themselves.
+# cluster, e.g. `CONTEXT=kind-dev KIND_CLUSTER_NAME=dev ./hack/bootstrap.sh` - VALUES_FILE
+# no longer needs to be passed explicitly for a cluster that already has one (see
+# auto-discovery below); still overridable by hand for a one-off run. The chart-level
+# per-cluster values (Fulcio CA/root cert, tenantsRepoUrl) live in VALUES_FILE, not here -
+# see charts/platform-cicd-control-plane/values.yaml's own fulcio/tenantsRepoUrl comments
+# for why those specifically can't just be hardcoded per-cluster in the templates
+# themselves.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -28,6 +30,16 @@ CONTEXT="${CONTEXT:-kind-observe}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-observe}" # kind's own name for the cluster, i.e. context minus the "kind-" prefix
 CATALOG_IMAGE_TAG="${CATALOG_IMAGE_TAG:-latest}"
 VALUES_FILE="${VALUES_FILE:-}" # optional -f override for both helm upgrade --install calls below
+
+# Auto-discovery (2026-08-16, feedback_cluster_agnostic_idp memory): a per-cluster
+# values file at the conventional path hack/values-<context>.yaml (e.g.
+# hack/values-kind-observe.yaml, hack/values-kind-dev.yaml - see
+# hack/generate-cluster-values.sh for how a NEW cluster's file gets created) is picked
+# up automatically with zero flag needed, instead of requiring every invocation to
+# remember to pass VALUES_FILE by hand. An explicit VALUES_FILE always wins.
+if [[ -z "${VALUES_FILE}" && -f "hack/values-${CONTEXT}.yaml" ]]; then
+  VALUES_FILE="hack/values-${CONTEXT}.yaml"
+fi
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
 warn() { echo -e "\033[1;33mwarning: $*\033[0m" >&2; }

@@ -29,6 +29,19 @@ doraExporterImage: ghcr.io/jfillman/platform-cicd-dora-exporter:latest
 # proper-release-workflow follow-up instead of worked around here.
 platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
 
+# Cluster-agnostic derivation input (2026-08-16, feedback_cluster_agnostic_idp memory):
+# tenantsRepoUrl/tenantOnboardingApplicationSetName below are DERIVED from this by
+# convention for any cluster that doesn't explicitly override them - see
+# templates/argocd/tenant-onboarding-applicationset.yaml's own header for the exact
+# `default` expressions. Set this to the cluster's own name (e.g. "kind-dev") for any
+# NEW cluster instead of hand-typing both derived fields separately.
+#
+# kind-observe deliberately does NOT set this - it predates the convention and keeps
+# its own historical, explicitly-overridden values (hack/values-kind-observe.yaml) as
+# literal strings instead, so it's provably zero-behavior-change rather than relying on
+# derivation happening to produce the same output.
+clusterName: ""
+
 # Which repo/path the tenant-onboarding ApplicationSet's generator scans for
 # tenants/*/identity.yaml (templates/argocd/tenant-onboarding-applicationset.yaml) and
 # which templates/argocd/onboarding-appproject.yaml allowlists as a sourceRepo.
@@ -37,15 +50,23 @@ platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
 # chart-source repoURL, which legitimately should stay this platform's one shared repo
 # on every cluster this chart is installed on - but the tenant LIST must not, or a
 # second cluster's install would onboard the first cluster's real, live tenants too.
-# Defaults to platformCicdRepoUrl (zero change in behavior for the existing
-# kind-observe install); override per-cluster to give each installation its own,
-# independent tenant list.
-tenantsRepoUrl: https://github.com/jfillman/platform-cicd.git
+#
+# Empty by default (2026-08-16) - derived from clusterName above
+# (https://github.com/jfillman/platform-cicd-<clusterName>-tenants.git) unless
+# explicitly set here, which is what every cluster except kind-observe should now rely
+# on rather than hand-typing this URL per cluster.
+tenantsRepoUrl: ""
 
 # See templates/argocd/tenant-onboarding-applicationset.yaml's own header comment for
 # the real name collision this guards against and why it's a value, not an in-place
-# rename (2026-08-15). Default is the original name - zero change for kind-observe.
-tenantOnboardingApplicationSetName: tenant-onboarding
+# rename (2026-08-15).
+#
+# Empty by default (2026-08-16) - derived as "platform-cicd-tenant-onboarding" unless
+# explicitly set here. kind-observe is the one deliberate exception, explicitly
+# overridden to the original bare "tenant-onboarding" so it needs zero cutover, ever,
+# for this fix (see hack/values-kind-observe.yaml) - every other cluster gets the
+# collision-safe name automatically now, not by remembering to type it.
+tenantOnboardingApplicationSetName: ""
 
 # Genuinely cluster-specific Fulcio material - see templates/sigstore/fulcio-config.yaml
 # and templates/sigstore/fulcio-root-configmap.yaml for what consumes each key and why.

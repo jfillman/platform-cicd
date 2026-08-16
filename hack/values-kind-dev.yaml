@@ -56,15 +56,17 @@ fulcio:
     sw0vfyU9lephEI9icb9PlVIUle13DzDxjaJ0rs9Lz7BCLn1BBw==
     -----END CERTIFICATE-----
 
-tenantsRepoUrl: https://github.com/jfillman/platform-cicd-kind-dev-tenants.git
+# clusterName (2026-08-16): derives tenantsRepoUrl
+# (https://github.com/jfillman/platform-cicd-kind-dev-tenants.git) and
+# tenantOnboardingApplicationSetName (platform-cicd-tenant-onboarding, the collision-safe
+# name - see that ApplicationSet's own header comment) automatically - see
+# charts/platform-cicd-control-plane/values.yaml's own comments. Replaces what used to be
+# two separately hand-typed fields here; confirmed via a helm template diff that this
+# produces byte-identical output to the explicit fields it replaces.
+clusterName: kind-dev
 
 # See charts/platform-cicd-control-plane/templates/broker/interceptor.yaml's own header
 # comment - a truly fresh cluster needs hack/bootstrap.sh's --create-namespace instead of
 # the chart's own Namespace resource, since Helm can't reconcile both for the same
 # namespace.
 selfManageNamespace: false
-
-# See charts/platform-cicd-control-plane/templates/argocd/tenant-onboarding-
-# applicationset.yaml's own header comment - kind-dev is the cluster that actually
-# collides with idp's own identically-named ApplicationSet.
-tenantOnboardingApplicationSetName: platform-cicd-tenant-onboarding

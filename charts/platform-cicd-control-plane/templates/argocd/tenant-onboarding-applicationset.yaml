@@ -26,8 +26,17 @@
 # this platform's one shared repo for chart source on every cluster; tenantsRepoUrl is
 # which tenant LIST this specific installation onboards, and must be independent per
 # cluster or a second cluster's install would try to onboard the first cluster's real,
-# live tenants too. Defaults to the same repo (zero change for kind-observe's existing
-# install); override per-cluster to give each installation its own tenant list.
+# live tenants too.
+#
+# Cluster-agnostic derivation (2026-08-16): $tenantsRepoUrl/$tenantOnboardingSetName
+# below fall back to a convention derived from .Values.clusterName
+# (platform-cicd-<clusterName>-tenants.git / the fixed collision-safe ApplicationSet
+# name) whenever the corresponding value isn't explicitly set - see values.yaml's own
+# comments on clusterName/tenantsRepoUrl/tenantOnboardingApplicationSetName for why.
+# kind-observe's own install explicitly overrides both instead of relying on this
+# derivation - see hack/values-kind-observe.yaml.
+{{- $tenantsRepoUrl := .Values.tenantsRepoUrl | default (printf "https://github.com/jfillman/platform-cicd-%s-tenants.git" .Values.clusterName) }}
+{{- $tenantOnboardingSetName := .Values.tenantOnboardingApplicationSetName | default "platform-cicd-tenant-onboarding" }}
 #
 # Source 0 renders the chart straight from this git repo (main HEAD) - NOT from the OCI
 # registry .github/workflows/app-chart-ci.yaml's `publish` job pushes to on every chart
@@ -86,7 +95,7 @@ metadata:
   # ...). Defaulting to the original "tenant-onboarding" keeps kind-observe's live
   # ApplicationSet completely untouched - zero cutover needed there, ever, for this fix.
   # kind-dev's install overrides it since it's the one that actually collides.
-  name: {{ .Values.tenantOnboardingApplicationSetName }}
+  name: {{ $tenantOnboardingSetName }}
   labels:
     {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
@@ -96,7 +105,7 @@ spec:
   goTemplateOptions: ["missingkey=invalid"]
   generators:
     - git:
-        repoURL: {{ .Values.tenantsRepoUrl }}
+        repoURL: {{ $tenantsRepoUrl }}
         revision: main
         files:
           - path: "tenants/*/identity.yaml"
