@@ -1,0 +1,55 @@
+{{- if .Values.platformIdentity.registerPipelinesAsCode }}
+{{- $appNamespace := include "platform-cicd-app.namespace" . }}
+# templates/pipelines-as-code/repository.yaml
+#
+# Registers this Application's repos with Pipelines-as-Code via the PaC `Repository`
+# CRD - previously the one onboarding step docs/onboarding.md called out as manual ("not
+# something a Helm chart owns"), because it predates the Phase 3 item 7 chart split.
+# Folded in now: platformIdentity already carries every value this needs
+# (appRepoUrl/gitopsRepoUrl), and the CR itself is inert (just a name->URL registration)
+# until the platform's GitHub App is actually installed on the repo - a real, external,
+# GitHub-side prerequisite Helm genuinely can't do, but not a reason to keep the CR
+# itself manual too.
+#
+# This is also what ephemeral-envs.yaml's pullRequest generator token-refresher, and the
+# release stage's open-release-pr.yaml, both depend on: the broker's verifyAppOwnsRepo
+# (platform/broker/cmd/token-review-interceptor/main.go) authorizes a GitHub App
+# installation-token request by checking for a Repository CR, in the caller's OWN
+# namespace, whose name matches the requested repo - not by checking Kubernetes RBAC on
+# the repo itself. Without this CR, both of those fail with a 403 (see
+# docs/ephemeral-environments.md's "Credential for the ApplicationSet generator") -
+# confirmed live 2026-08-16 on a fresh nodejs-demo-app onboarding, which is what
+# surfaced this gap.
+#
+# registerPipelinesAsCode defaults true (see values.yaml) but stays overridable per-app -
+# set false to deregister a repo (e.g. one whose PaC App install was intentionally
+# removed) without the chart silently recreating the CR on the next sync.
+apiVersion: pipelinesascode.tekton.dev/v1alpha1
+kind: Repository
+metadata:
+  name: {{ .Values.platformIdentity.appName }}
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    platform.io/subcomponent: "pipelines-as-code"
+spec:
+  url: {{ .Values.platformIdentity.appRepoUrl }}
+{{- if .Values.platformIdentity.gitopsRepoUrl }}
+---
+# gitops-<app-name>'s own Repository CR - needed for the same verifyAppOwnsRepo check,
+# matched via the platform's "gitops-" naming convention (see main.go's verifyAppOwnsRepo
+# comment) rather than the requested repo name matching directly. Only rendered when
+# gitopsRepoUrl is actually set - an app with no release stage has no gitops repo to
+# register (see docs/onboarding.md: `gitopsRepoUrl: "" if no release stage`).
+apiVersion: pipelinesascode.tekton.dev/v1alpha1
+kind: Repository
+metadata:
+  name: gitops-{{ .Values.platformIdentity.appName }}
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" . | nindent 4 }}
+    platform.io/subcomponent: "pipelines-as-code"
+spec:
+  url: {{ .Values.platformIdentity.gitopsRepoUrl }}
+{{- end }}
+{{- end }}

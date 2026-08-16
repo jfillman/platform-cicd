@@ -130,3 +130,8 @@ platformIdentity:
   appRepoUrl: ""
   githubOwner: ""
   catalogNamespace: platform-catalog
+  # Renders templates/pipelines-as-code/repository.yaml's Repository CR(s) - see that
+  # file's header. Real default (not a placeholder like the fields above): false only
+  # makes sense as a deliberate per-app override, e.g. to deregister a repo without the
+  # chart recreating the CR on the next sync.
+  registerPipelinesAsCode: true
