@@ -27,7 +27,7 @@ Every governance Task in the catalog (`charts/platform-cicd-catalog/templates/ta
 3. Sets its Task result to the literal string `"stub"` - never `"passed"` or `"failed"`,
    which would imply a real judgment was made.
 
-[`observability/grafana/dashboards/pipeline-detail.json`](../observability/grafana/dashboards/pipeline-detail.json)'s
+[`charts/platform-cicd-control-plane/files/dashboards/pipeline-detail.json`](../charts/platform-cicd-control-plane/files/dashboards/pipeline-detail.json)'s
 "Governance gates in this run" panel renders any `governance.stub=true` row with a
 distinct grey background and the label "STUB - not a real check", specifically so a stub
 can never be visually confused with a real pass/fail result on the dashboard a developer

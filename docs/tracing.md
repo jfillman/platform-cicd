@@ -23,7 +23,7 @@ time `test` starts (they don't overlap), and Tempo's waterfall view interprets n
 as "this ran during my parent" - nesting sequential, non-overlapping work misrepresents
 duration. Flat siblings under one root is both more honest and still gives exactly the
 per-stage drill-down the dashboard needs (see
-[../observability/grafana/dashboards/pipeline-detail.json](../observability/grafana/dashboards/pipeline-detail.json)).
+[../charts/platform-cicd-control-plane/files/dashboards/pipeline-detail.json](../charts/platform-cicd-control-plane/files/dashboards/pipeline-detail.json)).
 
 ## How context crosses independently-triggered PipelineRuns
 

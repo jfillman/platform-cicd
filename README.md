@@ -31,8 +31,8 @@ Every pipeline step emits OpenTelemetry spans (via `otel-cli`, wrapped in
 [`catalog/lib/otel.sh`](catalog/lib/otel.sh)), stitched into **one Tempo trace per
 end-to-end flow** even though each stage is a separate PipelineRun - see
 [docs/tracing.md](docs/tracing.md). Grafana dashboards
-([`observability/grafana/dashboards/`](observability/grafana/dashboards/)) give a live +
-historical pipeline list and a per-stage drill-down.
+([`charts/platform-cicd-control-plane/files/dashboards/`](charts/platform-cicd-control-plane/files/dashboards/))
+give a live + historical pipeline list and a per-stage drill-down.
 
 Governance gates (SAST, image scanning, policy checks, SBOM) are **explicit,
 structurally-loud stubs** in this phase of the platform, not real enforcement - see

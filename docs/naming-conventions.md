@@ -159,7 +159,7 @@ e.g. `kubectl get role -A -l platform.io/component=app`.
 
 **`platform.io/subcomponent`**: which concern *within* that chart - matches the template
 subdirectory a resource's file lives in (`identity`, `triggers`, `env`, `argocd`,
-`governance`, `broker`, `dora-exporter`, `sigstore`, `hooks`, `secretstore`). Lets you
+`governance`, `broker`, `dora-exporter`, `sigstore`, `hooks`, `secretstore`, `grafana`). Lets you
 narrow `platform.io/component=control-plane` down to just
 `platform.io/subcomponent=sigstore`, for example.
 

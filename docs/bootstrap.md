@@ -39,7 +39,9 @@ actual resolved overrides. `kind-dev`'s tenant list lives in its own dedicated r
 reads, to avoid one cluster's install onboarding the other's real, live tenants.
 
 Grafana is for the platform's own dashboards (DORA-ish stats, trace-based durations - see
-`observability/grafana/dashboards/`). The Tekton Dashboard (`localhost:9097` above) is
+`charts/platform-cicd-control-plane/files/dashboards/`, rendered as ConfigMaps by
+`templates/grafana/dashboards-configmap.yaml` as part of this same chart's release - not
+a separate apply step). The Tekton Dashboard (`localhost:9097` above) is
 the complementary, lower-level view: live/historical PipelineRuns and TaskRuns across
 every Application's namespace, with step-by-step logs - useful for debugging a specific run
 without `kubectl get/describe/logs`-ing it by hand. Installed **read-only**
@@ -159,7 +161,7 @@ actually broken.
 
 Fix: `docker build` + `docker push` + `kubectl rollout restart
 deployment/cdevents-broker-auth -n platform-system` (or `deployment/argocd-outcome-relay`
-for that image) - the same steps `hack/bootstrap.sh` step 4/6 already does, just not
+for that image) - the same steps `hack/bootstrap.sh` step 4/5 already does, just not
 something anything else triggers automatically. Re-run that step (or at least the
 relevant image's rebuild+push+restart) after ANY change to
 `platform/broker/cmd/token-review-interceptor/` or `.../argocd-outcome-relay/`, not just
@@ -184,7 +186,7 @@ app-creation steps.
 
 This machine's `kind` CLI fails to talk to its container provider (`kind get clusters` /
 `kind load docker-image` error out against podman - a tooling bug, not a platform-cicd
-issue). No longer a bootstrap blocker as of 2026-08-16: step 4/6 no longer calls `kind
+issue). No longer a bootstrap blocker as of 2026-08-16: step 4/5 no longer calls `kind
 load docker-image` for anything - all four of its images (`platform-cicd-toolbox`,
 `-dora-exporter`, `-token-review-interceptor`, `-argocd-outcome-relay`) are now
 `docker push`ed to `ghcr.io/jfillman` instead (see the section above). Kept here as a

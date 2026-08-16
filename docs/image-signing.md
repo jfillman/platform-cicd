@@ -270,7 +270,7 @@ nearly every step in every pipeline, this broke signing for every real build.
 **Fix, applied in two parts:**
 
 1. **Root cause**: the toolbox image is now actually `docker push`ed to
-   `ghcr.io/jfillman/platform-cicd-toolbox` (`hack/bootstrap.sh` step 4/6) instead of
+   `ghcr.io/jfillman/platform-cicd-toolbox` (`hack/bootstrap.sh` step 4/5) instead of
    `kind load`ed - so its imageID is always a real, registry-qualified reference. This
    also simplifies onboarding a new toolbox version going forward: a normal push, no
    `docker save`/`ctr images import` dance. (A freshly-pushed GHCR package defaults to

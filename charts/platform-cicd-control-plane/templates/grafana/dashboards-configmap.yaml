@@ -1,0 +1,41 @@
+# templates/grafana/dashboards-configmap.yaml
+#
+# Migrated from observability/grafana/kustomization.yaml (2026-08-16) - that file's
+# `kubectl apply -k` was a leftover from before Phase 3 item 7 folded every other
+# previously hand-applied control-plane manifest into this chart (see hack/bootstrap.sh's
+# old step 6/6); the dashboards were the one piece never actually brought along. Same
+# `grafana_dashboard: "1"` sidecar-discovery convention as before, same one-ConfigMap-
+# per-dashboard shape (kept instead of collapsing into a single multi-key ConfigMap so a
+# `helm diff` on one dashboard edit doesn't touch every other dashboard's ConfigMap too),
+# same ConfigMap names (`dashboard-<file-basename-without-.json>`) - a plain `helm
+# upgrade` on an existing cluster produces the identical set of ConfigMaps the old
+# kustomize apply did, just now versioned/rolled-back as part of this chart's own release
+# instead of a separate untracked `kubectl apply -k`.
+#
+# namespace is a literal "observability", not a value, matching every other reference to
+# this same namespace across the platform (every catalog Task's OTEL_EXPORTER_OTLP_ENDPOINT,
+# docs/bootstrap.md) - both real clusters this chart is installed on (kind-observe,
+# kind-dev) run their observability stack there. ../values.yaml's own reference config
+# documents "platform-observability" as the name for a from-scratch cluster that doesn't
+# already have one, but no real cluster actually uses that path today - see this chart's
+# fulcio/tenantsRepoUrl values for the pattern this would follow if that ever changes.
+#
+# Source JSON lives in ../../files/dashboards/ (Helm's .Files.Glob can only read files
+# inside this chart's own directory) - same convention as charts/platform-cicd-app/
+# templates/configmaps/onboarding-templates.yaml's .Files.Glob/.AsConfig usage.
+{{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-{{ $name }}
+  labels:
+    {{- include "platform-cicd-control-plane.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "grafana"
+    grafana_dashboard: "1"
+  namespace: observability
+data:
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}

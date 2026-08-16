@@ -40,7 +40,7 @@ VALUES_FILE="${VALUES_FILE:-}" # optional -f override for both helm upgrade --in
 if [[ -z "${VALUES_FILE}" && -f "hack/values-${CONTEXT}.yaml" ]]; then
   VALUES_FILE="hack/values-${CONTEXT}.yaml"
 fi
-# Shared by both helm upgrade --install calls below (step 3/6 and step 5/6) - real bug
+# Shared by both helm upgrade --install calls below (step 3/5 and step 5/5) - real bug
 # fixed 2026-08-16: this used to only be applied to the control-plane install, silently
 # contradicting this file's own header comment ("optional -f override for both helm
 # upgrade --install calls"), so a per-cluster tektonChainsNamespace override (or any
@@ -61,7 +61,7 @@ require kubectl
 require helm
 require docker
 
-log "0/6 - target the existing ${CONTEXT} cluster (not creating a new one)"
+log "0/5 - target the existing ${CONTEXT} cluster (not creating a new one)"
 if ! kubectl config get-contexts -o name | grep -qx "${CONTEXT}"; then
   echo "error: context '${CONTEXT}' not found in your kubeconfig. This script assumes" >&2
   echo "you already have that cluster running - it does not create one." >&2
@@ -81,7 +81,7 @@ if ! kubectl get pods -n kube-system -l k8s-app=calico-node --no-headers 2>/dev/
   warn "affecting every other namespace here, and is out of scope for a repointing exercise."
 fi
 
-log "1/6 - Tekton Pipelines + Triggers + Pipelines-as-Code + Dashboard (not present on kind-observe)"
+log "1/5 - Tekton Pipelines + Triggers + Pipelines-as-Code + Dashboard (not present on kind-observe)"
 kubectl apply -f https://storage.googleapis.com/tekton-releases/pipeline/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/release.yaml
 kubectl apply -f https://storage.googleapis.com/tekton-releases/triggers/latest/interceptors.yaml
@@ -130,14 +130,14 @@ TEKTON_DASHBOARD_VERSION="v0.70.0"
 kubectl apply -f "https://github.com/tektoncd/dashboard/releases/download/${TEKTON_DASHBOARD_VERSION}/release.yaml"
 kubectl -n tekton-pipelines rollout status deployment/tekton-dashboard --timeout=180s
 
-log "1.5/6 - Tekton Chains (not present on kind-observe) - keyless image/provenance signing, see docs/image-signing.md"
+log "1.5/5 - Tekton Chains (not present on kind-observe) - keyless image/provenance signing, see docs/image-signing.md"
 # Chains ships one Deployment (tekton-chains-controller) - no separate webhook Deployment
 # like Pipelines/Triggers/PaC have (confirmed live from the release manifest, not assumed
 # from that pattern).
 kubectl apply -f https://storage.googleapis.com/tekton-releases/chains/latest/release.yaml
 kubectl -n tekton-chains rollout status deployment/tekton-chains-controller --timeout=180s
 
-log "2/6 - External Secrets Operator (not present on kind-observe)"
+log "2/5 - External Secrets Operator (not present on kind-observe)"
 if ! kubectl get ns external-secrets >/dev/null 2>&1; then
   helm repo add external-secrets https://charts.external-secrets.io --force-update
   helm upgrade --install external-secrets external-secrets/external-secrets \
@@ -146,13 +146,13 @@ else
   echo "external-secrets already installed, skipping"
 fi
 
-log "2.5/6 - reused, not (re)installed: ArgoCD (argocd ns), Crossplane (crossplane-system ns),"
+log "2.5/5 - reused, not (re)installed: ArgoCD (argocd ns), Crossplane (crossplane-system ns),"
 echo "        kube-prometheus-stack + Tempo + Loki + Grafana (observability ns) - all already"
 echo "        running on kind-observe. See docs/bootstrap.md for what got reused and why."
 echo "        The shared OTel Collector there was patched (additively) with a spanmetrics"
 echo "        connector - see observability/kind-observe/otel-collector-values-patch.yaml."
 
-log "3/6 - platform catalog (Tasks/Pipelines/StepActions, read-only for Applications)"
+log "3/5 - platform catalog (Tasks/Pipelines/StepActions, read-only for Applications)"
 # Phase 3 item 7: was bare `kubectl apply -n platform-catalog -f catalog/...` - now a
 # real Helm release, giving this the same version/rollback story as everything else this
 # platform owns (see docs/catalog-versioning.md). Chart version bumps happen in
@@ -162,7 +162,7 @@ kubectl create namespace platform-catalog --dry-run=client -o yaml | kubectl app
 helm upgrade --install platform-cicd-catalog charts/platform-cicd-catalog \
   --namespace platform-catalog --wait "${HELM_VALUES_ARGS[@]}"
 
-log "4/6 - build + publish toolbox, dora-exporter, token-review-interceptor, argocd-outcome-relay"
+log "4/5 - build + publish toolbox, dora-exporter, token-review-interceptor, argocd-outcome-relay"
 # The toolbox image is `docker push`ed to a real registry (ghcr.io/jfillman, the same
 # public GHCR namespace nodejs-demo-app's own image already pulls from with zero
 # imagePullSecrets configured anywhere - confirmed live) rather than `kind load`ed. This
@@ -206,7 +206,7 @@ docker build -f platform/broker/cmd/argocd-outcome-relay/Dockerfile \
   -t "ghcr.io/jfillman/platform-cicd-argocd-outcome-relay:${CATALOG_IMAGE_TAG}" platform/broker
 docker push "ghcr.io/jfillman/platform-cicd-argocd-outcome-relay:${CATALOG_IMAGE_TAG}"
 
-log "5/6 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecretStore)"
+log "5/5 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecretStore, Grafana dashboards)"
 # Phase 3 item 7: consolidates what used to be several separately hand-`kubectl apply`'d
 # files (platform/broker/manifests/{interceptor,eventlistener,stalled-pipeline-detector-
 # cronjob}.yaml, platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml, platform/
@@ -225,11 +225,16 @@ log "5/6 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecre
 # Helm version (confirmed live, v3.21.3). kind-observe's platform-system happens to
 # already be cleanly Helm-owned (confirmed live) - this redundant line never mattered
 # there, just never helped either. Let the chart create it.
+#
+# Grafana dashboards (2026-08-16): were the one piece Phase 3 item 7 above left behind -
+# a separate `kubectl apply -k observability/grafana/` used to run as its own untracked
+# step here. Now templates/grafana/dashboards-configmap.yaml renders them as part of THIS
+# release instead (source JSON moved to charts/platform-cicd-control-plane/files/
+# dashboards/) - same ConfigMaps, same names, same `grafana_dashboard: "1"` sidecar
+# convention, but versioned/rolled-back with everything else this chart owns rather than
+# a second, separately-tracked apply.
 helm upgrade --install platform-cicd-control-plane charts/platform-cicd-control-plane \
   --namespace platform-system --create-namespace --wait "${HELM_VALUES_ARGS[@]}"
-
-log "6/6 - Grafana dashboards, provisioned into the existing Grafana in observability ns"
-kubectl apply -k observability/grafana/
 
 log "Done. Next: onboard a pilot repo - see docs/onboarding.md."
 echo "Grafana: kubectl -n observability port-forward svc/kube-prometheus-stack-grafana 3000:80"

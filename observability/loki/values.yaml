@@ -9,7 +9,8 @@
 # overlay for the upstream grafana/loki chart (single-binary/monolithic deployment
 # mode), for Task step logs. Correlated to traces in Grafana via the pipeline-run-name /
 # trace-id labels that catalog Tasks already carry as params - see
-# observability/grafana/dashboards/pipeline-detail.json for the trace-to-logs link.
+# charts/platform-cicd-control-plane/files/dashboards/pipeline-detail.json for the
+# trace-to-logs link.
 loki:
   auth_enabled: false
   commonConfig:
