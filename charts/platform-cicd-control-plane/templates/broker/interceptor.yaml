@@ -118,12 +118,13 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: interceptor
-          image: ghcr.io/platform-cicd/token-review-interceptor:latest
-          # IfNotPresent, not the default (Always for a `:latest` tag) - this image is
-          # `kind load docker-image`-d locally on kind-observe, not actually pushed to
-          # ghcr.io. Default pull policy would make kubelet ignore the loaded image and
-          # try (and fail) to pull from a registry that doesn't have it - caught live as
-          # ImagePullBackOff, not in review.
+          image: ghcr.io/jfillman/platform-cicd-token-review-interceptor:latest
+          # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh
+          # 4/6. Real fix 2026-08-16: this used to reference ghcr.io/platform-cicd/... -
+          # that org doesn't exist (confirmed live, `docker pull` -> "manifest unknown"),
+          # so it was never actually pushable; only ever ran via kind-loaded images.
+          # IfNotPresent kept regardless - same convention as every other
+          # registry-published image in this chart (toolboxImage, doraExporterImage).
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: http }]
           securityContext:

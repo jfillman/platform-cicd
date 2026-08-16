@@ -92,8 +92,15 @@ spec:
                   expirationSeconds: 3600
       containers:
         - name: relay
-          image: ghcr.io/platform-cicd/argocd-outcome-relay:latest
-          imagePullPolicy: IfNotPresent # kind-loaded, not pushed to a real registry - see interceptor.yaml's identical comment
+          image: ghcr.io/jfillman/platform-cicd-argocd-outcome-relay:latest
+          # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh
+          # 4/6. Real bug found+fixed 2026-08-16: this referenced ghcr.io/platform-cicd/...,
+          # an org that doesn't exist (confirmed live, `docker pull` -> "manifest
+          # unknown") - kind-observe's own long-running relay pods were surviving only on
+          # a stale image cached locally from some past off-script kind-load, same class
+          # of gap dora-exporter had (see that Deployment's own comment) - a fresh
+          # install anywhere else would have hit ImagePullBackOff immediately.
+          imagePullPolicy: IfNotPresent # same convention as every other registry-published image in this chart
           ports: [{ containerPort: 8080, name: http }]
           securityContext:
             allowPrivilegeEscalation: false

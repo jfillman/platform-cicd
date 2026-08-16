@@ -123,15 +123,25 @@ encryption here is a smaller version of the same accepted gap. Revisit if this n
 run somewhere the `caBundle` mechanism can be made to work, or if a later Tekton Triggers
 version behaves differently.
 
-## The token-review-interceptor image is kind-load-only - rebuild it after touching its source
+## token-review-interceptor/argocd-outcome-relay: rebuild+restart after touching source
 
-Unlike the toolbox image (public, `docker push`, `IfNotPresent` correctly picks up a new
-push), `ghcr.io/platform-cicd/token-review-interceptor` is never pushed anywhere - step
-4/6 above only `kind load docker-image`s it, matching its narrower blast radius (nothing
-outside this cluster ever needs to pull it). The cost: a source change to
-`platform/broker/cmd/token-review-interceptor/` does nothing to the live Deployment until
-someone re-runs the rebuild+`kind load`+restart sequence - `IfNotPresent` means the node's
-already-loaded image under the same `:latest` tag just keeps getting reused silently.
+**Registry-published as of 2026-08-16** (`ghcr.io/jfillman/platform-cicd-token-review-
+interceptor`/`-argocd-outcome-relay`), fixing a real reproducibility gap: both used to
+reference `ghcr.io/platform-cicd/...`, an org that doesn't exist (confirmed live -
+`docker pull` → "manifest unknown", `gh api orgs/platform-cicd` → 404) - only ran at all
+via images loaded onto a node by hand, off-script, at some point in the past.
+token-review-interceptor had a documented `kind load` step at least; argocd-outcome-relay
+had no build/load mechanism anywhere, and was silently surviving on kind-observe purely
+on a stale locally-cached image (a fresh install anywhere else would have hit
+`ImagePullBackOff` immediately - see the git history around this note for the full
+finding).
+
+**The staleness risk below is NOT fixed by that** - it was never actually about
+kind-load vs. a real registry, it's `IfNotPresent` + a floating `:latest` tag: once a
+node has pulled (or loaded) an image under that tag once, `IfNotPresent` means it never
+re-pulls just because a new one was pushed. A source change to
+`platform/broker/cmd/token-review-interceptor/` (or `argocd-outcome-relay/`) still does
+nothing to the live Deployment until someone re-runs the rebuild+push+restart sequence.
 
 Hit live and confirmed as the root cause of a real incident: commit `c83b479` ("refactor:
 remove tenent") renamed the CEL extension this interceptor sets from
@@ -147,12 +157,13 @@ filters (no `extensions.*` reference) kept working throughout, which is what mad
 easy to misdiagnose as a CEL/RBAC/payload-validation problem instead - none of those were
 actually broken.
 
-Fix: `docker build` + `kind load docker-image` + `kubectl rollout restart
-deployment/cdevents-broker-auth -n platform-system` - the same three steps
-`hack/bootstrap.sh` step 4/6 already does, just not something anything else triggers
-automatically. Re-run that step (or at least this one image's rebuild+reload+restart)
-after ANY change to `platform/broker/cmd/token-review-interceptor/`, not just once at
-initial bootstrap - this repo has no CI/CD of its own to catch the drift otherwise (see
+Fix: `docker build` + `docker push` + `kubectl rollout restart
+deployment/cdevents-broker-auth -n platform-system` (or `deployment/argocd-outcome-relay`
+for that image) - the same steps `hack/bootstrap.sh` step 4/6 already does, just not
+something anything else triggers automatically. Re-run that step (or at least the
+relevant image's rebuild+push+restart) after ANY change to
+`platform/broker/cmd/token-review-interceptor/` or `.../argocd-outcome-relay/`, not just
+once at initial bootstrap - this repo has no CI/CD of its own to catch the drift otherwise (see
 `.github/workflows/catalog-ci.yaml`'s own header for why: no public endpoint for
 GitHub-hosted runners to reach this cluster).
 
@@ -171,13 +182,13 @@ app-creation steps.
 
 ## kind + podman
 
-This machine's `kind` CLI fails to talk to its container provider
-(`kind get clusters` / `kind load docker-image` error out against podman - a tooling
-bug, not a platform-cicd issue). `hack/bootstrap.sh` treats `kind load docker-image`
-failures as non-fatal and warns rather than aborting; if it fails for you too, load the
-`ghcr.io/jfillman/platform-cicd-toolbox` and `ghcr.io/platform-cicd/token-review-interceptor`
-images into the cluster manually (`podman save` + `kind load image-archive`, or push to
-a registry the cluster can pull from) before continuing.
+This machine's `kind` CLI fails to talk to its container provider (`kind get clusters` /
+`kind load docker-image` error out against podman - a tooling bug, not a platform-cicd
+issue). No longer a bootstrap blocker as of 2026-08-16: step 4/6 no longer calls `kind
+load docker-image` for anything - all four of its images (`platform-cicd-toolbox`,
+`-dora-exporter`, `-token-review-interceptor`, `-argocd-outcome-relay`) are now
+`docker push`ed to `ghcr.io/jfillman` instead (see the section above). Kept here as a
+known-issue note in case `kind load` is ever needed again for something else.
 
 ## What's different on a real (non-kind-observe) cluster
 
@@ -191,7 +202,5 @@ a registry the cluster can pull from) before continuing.
 - A real, enforced NetworkPolicy-capable CNI (Calico/Cilium) - see the gap noted above.
 - Ingress/DNS for the PaC controller's webhook endpoint and Grafana - not set up here at
   all; a real cluster needs a real Ingress controller and DNS record instead of a tunnel.
-- `ghcr.io/platform-cicd/*` images need to actually be pushed to a real registry your
-  cluster can pull from, instead of `kind load docker-image`.
 - Pod Security Standards `restricted` + kaniko: validate this combination on your actual
   target cluster/CNI before onboarding real apps - see [rootless-builds.md](rootless-builds.md).

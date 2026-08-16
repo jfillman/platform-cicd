@@ -153,43 +153,49 @@ kubectl create namespace platform-catalog --dry-run=client -o yaml | kubectl app
 helm upgrade --install platform-cicd-catalog charts/platform-cicd-catalog \
   --namespace platform-catalog --wait
 
-log "4/6 - build + publish toolbox; build + load token-review-interceptor"
+log "4/6 - build + publish toolbox, dora-exporter, token-review-interceptor, argocd-outcome-relay"
 # The toolbox image is `docker push`ed to a real registry (ghcr.io/jfillman, the same
 # public GHCR namespace nodejs-demo-app's own image already pulls from with zero
-# imagePullSecrets configured anywhere - confirmed live) rather than `kind load`ed, unlike
-# token-review-interceptor below. This is a real bug fix, not a style choice: a
-# kind-loaded/`ctr images import`ed image has no registry-qualified name, so every Tekton
-# step's containerStatus.imageID for it comes back as a bare `sha256:<digest>` (confirmed
-# live via `kubectl get taskrun ... -o json | jq '.status.steps[].imageID'`) instead of
-# `repo@sha256:<digest>`. Tekton Chains' PipelineRun-level SLSA materials-gathering walks
-# every constituent TaskRun's step imageIDs, and chokes hard on the bare one ("expected
-# imageID sha256:... to be separable by @"), breaking signing for the ENTIRE PipelineRun -
-# not just skipping that one material. Since the toolbox image is used by nearly every
-# step in every pipeline, this broke Chains signing for every real build. Reproduced
-# identically across two independent real builds before finding the root cause - see
+# imagePullSecrets configured anywhere - confirmed live) rather than `kind load`ed. This
+# is a real bug fix, not a style choice: a kind-loaded/`ctr images import`ed image has no
+# registry-qualified name, so every Tekton step's containerStatus.imageID for it comes
+# back as a bare `sha256:<digest>` (confirmed live via `kubectl get taskrun ... -o json |
+# jq '.status.steps[].imageID'`) instead of `repo@sha256:<digest>`. Tekton Chains'
+# PipelineRun-level SLSA materials-gathering walks every constituent TaskRun's step
+# imageIDs, and chokes hard on the bare one ("expected imageID sha256:... to be separable
+# by @"), breaking signing for the ENTIRE PipelineRun - not just skipping that one
+# material. Since the toolbox image is used by nearly every step in every pipeline, this
+# broke Chains signing for every real build. Reproduced identically across two
+# independent real builds before finding the root cause - see
 # platform/sigstore/chains-config-patch.yaml's artifacts.taskrun.storage comment for the
-# full incident note. token-review-interceptor isn't referenced as a step image by any
-# Tekton Task, so it never triggers this bug and is left on the simpler kind-load path.
+# full incident note.
 docker build -f catalog/toolbox/Dockerfile -t "ghcr.io/jfillman/platform-cicd-toolbox:${CATALOG_IMAGE_TAG}" .
 docker push "ghcr.io/jfillman/platform-cicd-toolbox:${CATALOG_IMAGE_TAG}"
 # Real gap found+fixed 2026-08-15: this build+push step never existed before - DORA
 # exporter only ever ran on kind-observe because it was kind-loaded by hand once,
 # off-script (see charts/platform-cicd-control-plane/templates/dora-exporter/
-# deployment.yaml's own comment). Registry-published like toolbox above, not kind-loaded
-# like token-review-interceptor below - it's not a Tekton step image, so none of the
-# Chains materials-gathering imageID bug applies, and a real registry means no per-
-# cluster kind-load step going forward.
+# deployment.yaml's own comment). Registry-published like toolbox above - it's not a
+# Tekton step image, so none of the Chains materials-gathering imageID bug applies, and a
+# real registry means no per-cluster kind-load step going forward.
 docker build -f platform/dora-exporter/cmd/dora-exporter/Dockerfile \
   -t "ghcr.io/jfillman/platform-cicd-dora-exporter:${CATALOG_IMAGE_TAG}" platform/dora-exporter
 docker push "ghcr.io/jfillman/platform-cicd-dora-exporter:${CATALOG_IMAGE_TAG}"
+# Real bugs found+fixed 2026-08-16 (cluster-agnostic declarative install work, idp): both
+# of these referenced ghcr.io/platform-cicd/... - an org that doesn't exist (confirmed
+# live via `docker pull` -> "manifest unknown" and `gh api orgs/platform-cicd` -> 404),
+# so neither was ever really publishable under that name. token-review-interceptor was
+# `kind load`-ed as a workaround (fine on a cluster kind-load actually reaches, but not
+# reproducible/declarative); argocd-outcome-relay had NO build/load step anywhere at all
+# - kind-observe's long-running relay pods were surviving purely on a stale image cached
+# from some past off-script load, same class of gap dora-exporter had. Both now real,
+# registry-published images under the same ghcr.io/jfillman namespace as everything else.
+# Neither is a Tekton step image, so the imageID/Chains bug above doesn't apply to either.
 docker build -f platform/broker/cmd/token-review-interceptor/Dockerfile \
-  -t "ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}" platform/broker
-if command -v kind >/dev/null 2>&1; then
-  kind load docker-image "ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}" --name "${KIND_CLUSTER_NAME}" || true
-else
-  warn "kind CLI not found or unusable - load this image into the cluster manually:"
-  warn "  ghcr.io/platform-cicd/token-review-interceptor:${CATALOG_IMAGE_TAG}"
-fi
+  -t "ghcr.io/jfillman/platform-cicd-token-review-interceptor:${CATALOG_IMAGE_TAG}" platform/broker
+docker push "ghcr.io/jfillman/platform-cicd-token-review-interceptor:${CATALOG_IMAGE_TAG}"
+docker build -f platform/broker/cmd/argocd-outcome-relay/Dockerfile \
+  -t "ghcr.io/jfillman/platform-cicd-argocd-outcome-relay:${CATALOG_IMAGE_TAG}" platform/broker
+docker push "ghcr.io/jfillman/platform-cicd-argocd-outcome-relay:${CATALOG_IMAGE_TAG}"
 
 log "5/6 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecretStore)"
 # Phase 3 item 7: consolidates what used to be several separately hand-`kubectl apply`'d
