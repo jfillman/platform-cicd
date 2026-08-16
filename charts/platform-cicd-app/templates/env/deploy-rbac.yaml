@@ -9,13 +9,20 @@
 # declared deploy.lowerEnvironments/upperEnvironments entry, rendered only if cicd.yaml's
 # pipeline: declares a "deploy" stage)
 #
-# Without this, catalog/tasks/deploy-manifests.yaml's `kubectl -n <type>-<app>-<env> set
-# image ...` fails with Forbidden: pipeline-runner's Role only grants rights inside the
-# Application's OWN namespace, which is where pipelines execute, not where the deployed
-# app lives - a namespace-scoped Role never extends into a different namespace. The
-# deploy namespace is a PEER of the app's own cicd namespace under the flat
-# <type>-<app-name>-<env> pattern (env="dev"/"staging"/etc here), not built on top of it
-# - see docs/concepts.md.
+# Without this, catalog/tasks/deploy-manifests.yaml's `kubectl -n <type>-<app>-<env> get
+# rollout ...` (waiting for the env's Rollout to become Healthy after pushing a
+# platform/envs/<env>.yaml change) fails with Forbidden: pipeline-runner's Role only
+# grants rights inside the Application's OWN namespace, which is where pipelines
+# execute, not where the deployed app lives - a namespace-scoped Role never extends
+# into a different namespace. The deploy namespace is a PEER of the app's own cicd
+# namespace under the flat <type>-<app-name>-<env> pattern (env="dev"/"staging"/etc
+# here), not built on top of it - see docs/concepts.md.
+#
+# rollouts.argoproj.io, not apps/deployments - Phase 2's deploy-manifests.yaml no
+# longer mutates anything in this namespace directly (the image change goes through a
+# git commit to the app's own repo instead, synced by argocd-apps' automated selfHeal),
+# so read-only (get/list/watch) is all this Task needs now, and it needs it on the
+# Rollout idp-application's chart creates, not a Deployment.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -25,9 +32,9 @@ metadata:
     platform.io/subcomponent: "env"
   namespace: {{ include "platform-cicd-app.envNamespace" (list $ .) }}
 rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments", "deployments/status"]
-    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts", "rollouts/status"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

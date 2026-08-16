@@ -35,9 +35,11 @@ deploy (dev) succeeds
 
 ## Performance: no clone, no schema re-validation, for the common (event-chained) case
 
-Neither `deploy.yaml` (deploys via `kubectl set image`) nor `release.yaml`
-(`open-release-pr.yaml` does its own separate clone of the *gitops* repo, a different
-repo entirely) ever reads from the app repo's own source tree. Both used to
+Neither `deploy.yaml` (`deploy-manifests.yaml` does its own separate clone of the *app*
+repo itself, via the GitHub App token broker, to commit `platform/envs/<env>.yaml`) nor
+`release.yaml` (`open-release-pr.yaml` does its own separate clone of the *gitops* repo,
+a different repo entirely) ever reads from the app repo's source tree through this
+Pipeline's own `source` workspace. Both used to
 unconditionally clone it and run full JSON-schema validation on `cicd.yaml` anyway,
 purely so `notify-slack`'s finally step could read two fields off it - a full clone plus
 a dynamically-provisioned PVC, on every single stage transition, for a workspace that

@@ -41,7 +41,7 @@ flowchart LR
         validate["validate-cicd-config\nfails fast on a bad cicd.yaml"]
         build["build\ncompile, unit test,\ncontainer image"]
         test["test\nintegration tests\nagainst the image"]
-        deploy["deploy\nkubectl set image\ninto a dev/staging ns"]
+        deploy["deploy\ncommit platform/envs/*.yaml,\nArgoCD syncs it"]
         release["release\nGitOps PR + governance\nchecks, human-reviewed"]
 
         pac --> validate --> build
