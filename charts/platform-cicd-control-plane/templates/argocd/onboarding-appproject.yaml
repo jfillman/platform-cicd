@@ -72,6 +72,10 @@ spec:
     - { group: "triggers.tekton.dev", kind: Trigger }
     - { group: "triggers.tekton.dev", kind: TriggerBinding }
     - { group: "triggers.tekton.dev", kind: TriggerTemplate }
+    # charts/platform-cicd-app/templates/pipelines-as-code/repository.yaml - confirmed
+    # live via a real sync failure ("one or more synchronization tasks are not valid"),
+    # same discovery pattern as platform-system above.
+    - { group: "pipelinesascode.tekton.dev", kind: Repository }
     - { group: "", kind: ConfigMap }
     - { group: "", kind: PersistentVolumeClaim }
     - { group: "", kind: ServiceAccount }
