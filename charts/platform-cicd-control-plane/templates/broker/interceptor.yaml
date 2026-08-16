@@ -11,10 +11,13 @@
 # Application's namespace, and cannot write Repository CRs either.
 #
 # github-app-creds (github-application-id/github-private-key) is a COPY of the same two
-# fields already in pipelines-as-code-secret (pipelines-as-code namespace) - Kubernetes
+# fields already in pipelines-as-code-secret (the `pipelines-as-code` namespace on a
+# raw-manifest install like kind-observe's; the operator's single targetNamespace, e.g.
+# `tekton-pipelines`, on a tektoncd/operator install like kind-dev's - see
+# gitops-cluster-dev/50-platform-cicd/tekton-operator/) - Kubernetes
 # Secrets are namespace-scoped, so this Pod (platform-system) can't mount that Secret
 # directly. Create the copy yourself (never pastes the actual key material through this
-# chat - see docs/release.md):
+# chat - see docs/release.md), substituting the real namespace for -n below:
 #   kubectl get secret pipelines-as-code-secret -n pipelines-as-code -o json \
 #     | jq '{apiVersion, kind, type, data: {"github-application-id": .data["github-application-id"], "github-private-key": .data["github-private-key"]}, metadata: {name: "github-app-creds", namespace: "platform-system"}}' \
 #     | kubectl apply -f -

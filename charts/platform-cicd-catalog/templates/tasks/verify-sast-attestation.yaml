@@ -83,7 +83,7 @@ spec:
         # differently-formatted, non-matching attestation before attempting identity
         # verification against it - confirmed live, this is the actual root cause of
         # the previously-only-"narrowed" sbom+policyCheck conflict).
-        identity_regexp="^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$"
+        identity_regexp="^https://kubernetes\.io/namespaces/{{ .Values.tektonChainsNamespace }}/serviceaccounts/.*$"
         issuer="https://kubernetes.default.svc.cluster.local"
         att_dir="${workdir}/attestations"
         mkdir -p "${att_dir}"

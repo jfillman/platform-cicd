@@ -8,3 +8,14 @@
 
 rbac:
   readOnlyGroup: system:serviceaccounts
+
+# Cluster-agnostic namespace derivation (2026-08-16, feedback_cluster_agnostic_idp
+# memory): which namespace Tekton Chains runs in - matters here because
+# verify-image-provenance.yaml/verify-sast-attestation.yaml verify the Chains
+# controller's own signing identity by SERVICE ACCOUNT NAMESPACE
+# (certificate-identity-regexp), a security-critical check, not cosmetic. Default
+# matches every cluster's historical layout (Chains in its own dedicated namespace,
+# raw-manifest install). A cluster running Tekton via tektoncd/operator's single-
+# targetNamespace model (see gitops-cluster-dev/50-platform-cicd/tekton-operator/)
+# overrides this to that same targetNamespace instead.
+tektonChainsNamespace: tekton-chains

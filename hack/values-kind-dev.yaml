@@ -70,3 +70,13 @@ clusterName: kind-dev
 # the chart's own Namespace resource, since Helm can't reconcile both for the same
 # namespace.
 selfManageNamespace: false
+
+# tektonChainsNamespace (2026-08-16): kind-dev runs Tekton via tektoncd/operator
+# (gitops-cluster-dev/50-platform-cicd/tekton-operator/), which installs every component
+# (Pipelines/Triggers/Chains/Dashboard/PaC) into ONE targetNamespace rather than each
+# component's own conventional namespace - real, confirmed live against a throwaway
+# operator install, not assumed. tekton-pipelines here must match that TektonConfig's own
+# spec.targetNamespace exactly, or verify-image-provenance.yaml/verify-sast-attestation.yaml's
+# cosign identity-regexp check (security-critical - verifies the signature really came
+# from the real Chains controller) would fail every real build.
+tektonChainsNamespace: tekton-pipelines

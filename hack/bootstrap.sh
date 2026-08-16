@@ -40,6 +40,15 @@ VALUES_FILE="${VALUES_FILE:-}" # optional -f override for both helm upgrade --in
 if [[ -z "${VALUES_FILE}" && -f "hack/values-${CONTEXT}.yaml" ]]; then
   VALUES_FILE="hack/values-${CONTEXT}.yaml"
 fi
+# Shared by both helm upgrade --install calls below (step 3/6 and step 5/6) - real bug
+# fixed 2026-08-16: this used to only be applied to the control-plane install, silently
+# contradicting this file's own header comment ("optional -f override for both helm
+# upgrade --install calls"), so a per-cluster tektonChainsNamespace override (or any
+# other charts/platform-cicd-catalog value) never actually reached that chart's install.
+HELM_VALUES_ARGS=()
+if [[ -n "${VALUES_FILE}" ]]; then
+  HELM_VALUES_ARGS=(-f "${VALUES_FILE}")
+fi
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
 warn() { echo -e "\033[1;33mwarning: $*\033[0m" >&2; }
@@ -151,7 +160,7 @@ log "3/6 - platform catalog (Tasks/Pipelines/StepActions, read-only for Applicat
 # `git log` on that one line is the release history.
 kubectl create namespace platform-catalog --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade --install platform-cicd-catalog charts/platform-cicd-catalog \
-  --namespace platform-catalog --wait
+  --namespace platform-catalog --wait "${HELM_VALUES_ARGS[@]}"
 
 log "4/6 - build + publish toolbox, dora-exporter, token-review-interceptor, argocd-outcome-relay"
 # The toolbox image is `docker push`ed to a real registry (ghcr.io/jfillman, the same
@@ -216,10 +225,6 @@ log "5/6 - control plane (broker, DORA exporter, detectors, Fulcio, ClusterSecre
 # Helm version (confirmed live, v3.21.3). kind-observe's platform-system happens to
 # already be cleanly Helm-owned (confirmed live) - this redundant line never mattered
 # there, just never helped either. Let the chart create it.
-HELM_VALUES_ARGS=()
-if [[ -n "${VALUES_FILE}" ]]; then
-  HELM_VALUES_ARGS=(-f "${VALUES_FILE}")
-fi
 helm upgrade --install platform-cicd-control-plane charts/platform-cicd-control-plane \
   --namespace platform-system --create-namespace --wait "${HELM_VALUES_ARGS[@]}"
 

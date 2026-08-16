@@ -132,7 +132,7 @@ spec:
           --no-default-ctfe --no-default-rekor --no-default-tsa \
           --out "${workdir}/trusted-root.json"
 
-        identity_regexp="^https://kubernetes\.io/namespaces/tekton-chains/serviceaccounts/.*$"
+        identity_regexp="^https://kubernetes\.io/namespaces/{{ .Values.tektonChainsNamespace }}/serviceaccounts/.*$"
         issuer="https://kubernetes.default.svc.cluster.local"
 
         # No separate bare-image `cosign verify` step, deliberately - confirmed live

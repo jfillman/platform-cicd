@@ -6,6 +6,12 @@
 # from the code that consumes it.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
+# Same field, same default, same reasoning as charts/platform-cicd-catalog/values.yaml's
+# own tektonChainsNamespace comment (2026-08-16) - kept in sync across both charts
+# deliberately, not duplicated by accident. Consumed by templates/hooks/
+# chains-config-patch-job.yaml here.
+tektonChainsNamespace: tekton-chains
+
 # See templates/broker/interceptor.yaml's own header comment on its Namespace resource
 # for the full reasoning (2026-08-15) - true keeps kind-observe's existing, already-
 # working behavior unchanged.
