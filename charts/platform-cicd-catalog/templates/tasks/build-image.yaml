@@ -125,7 +125,15 @@ spec:
         echo -n "$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")" | tee "$(step.results.span-start-time.path)"
 
     - name: build-and-push
-      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      # Bumped from v1.23.2-debug 2026-08-16: that image's baked-in ca-certificates.crt
+      # was dated 2024-07-08 - over 2 years stale - and failed to verify ghcr.io's current
+      # TLS certificate ("x509: certificate signed by unknown authority"), confirmed live
+      # via a real push attempt, not assumed. v1.24.0 is the latest kaniko release as of
+      # this fix (no newer tag exists) - its own bundle is dated 2025-05-21, confirmed via
+      # `ls -la /kaniko/ssl/certs/ca-certificates.crt` inside the image directly. Pinned,
+      # not "latest", same reasoning as every other version pin in this platform - revisit
+      # if this ever goes stale again.
+      image: gcr.io/kaniko-project/executor:v1.24.0-debug
       # No bash here by design - see the exception note at the top of this file.
       command: ["/kaniko/executor"]
       volumeMounts:
