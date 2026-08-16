@@ -197,14 +197,14 @@ secretStore:
 # needed - no name to keep in sync by hand beyond type+appName, which both charts
 # already require anyway.
 #
-# Empty by default - adding an Application here (and re-running `helm upgrade` on this
-# chart) is a deliberate, manual, one-time-per-Application step, matching this
-# platform's existing "manual by design" secrets philosophy above (populating
+# Empty by default - adding an Application here (and pushing to main, this chart's
+# own ArgoCD Application - platform-cicd-control-plane - has selfHeal automated sync,
+# not a manual `helm upgrade`) is a deliberate, one-time-per-Application step, matching
+# this platform's existing "manual by design" secrets philosophy above (populating
 # platform-secrets is exactly as manual).
-appSecretStores: []
-# appSecretStores:
-#   - type: app
-#     appName: cicd-flow-test-app
+appSecretStores:
+  - type: app
+    appName: checkout-api
 
 # Phase 3 item 4 (docs/multi-cluster.md): the cluster registry. An app's cicd.yaml never
 # names infrastructure directly - a release step's env: (e.g. "staging") is a

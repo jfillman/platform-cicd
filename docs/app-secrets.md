@@ -138,7 +138,9 @@ once now covers both, and every future case, for the same cost.
 To enable Slack notifications for an Application today:
 
 1. Add the Application to control-plane's `appSecretStores` list (one-time, if not
-   already there) and `helm upgrade` that chart.
+   already there) and push to `main` - the `platform-cicd-control-plane` ArgoCD
+   Application has automated selfHeal sync, so it picks this up on its own; no manual
+   `helm upgrade` needed.
 2. Declare the secret in the Application's own `cicd.yaml`:
    ```yaml
    secrets:
