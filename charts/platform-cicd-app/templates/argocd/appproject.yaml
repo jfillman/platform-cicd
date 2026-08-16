@@ -46,6 +46,16 @@ spec:
     {{- if $hasEphemeral }}
     - {{ .Values.platformIdentity.appRepoUrl }}
     {{- end }}
+  {{- if $hasEphemeral }}
+  # Lets the pr-envs ApplicationSet (templates/argocd/ephemeral-envs.yaml), which lives
+  # in this app's own -cicd namespace rather than argocd's, reference this project.
+  # Required by ArgoCD's ApplicationSet-in-any-namespace feature - the project must list
+  # a namespace here before anything resident in it can use `project: {{ $appNamespace }}`.
+  # Matched by argocd-platform's own applicationsetcontroller.namespaces/
+  # application.namespaces (*-cicd glob) - see gitops-cluster-dev/01-argocd-platform.
+  sourceNamespaces:
+    - {{ $appNamespace }}
+  {{- end }}
   destinations:
     {{- /* Cluster-mapped upper envs (docs/multi-cluster.md) get no destination entry
     here at all - this AppProject only governs what THIS cluster's ArgoCD is allowed to

@@ -65,7 +65,9 @@ risk - fixed here rather than repeated:
   anything). Here: no Tekton pipeline ServiceAccount needs any new RBAC at all for this
   feature - ArgoCD's own already-trusted `applicationset-controller` does all
   namespace/Application creation. The only new RBAC is the token-refresher CronJob's
-  narrowly-scoped access to exactly one named Secret in `argocd` (see below).
+  narrowly-scoped access to exactly one named Secret, in the app's own `-cicd` namespace
+  (see below - this used to be a cross-namespace grant into `argocd`, moved same-namespace
+  once the ApplicationSet itself moved there too).
 
 Also different: images are tagged per-PR-per-SHA already (`charts/platform-cicd-catalog/templates/tasks/build-image.yaml`
 truncates to 12 characters - confirmed live, no fix was actually needed here despite the
@@ -82,9 +84,31 @@ controller polls GitHub independently, not through a live per-call exchange like
 installation token's 1-hour lifetime) as a dedicated `pr-env-token-refresher`
 ServiceAccount in the Application's own namespace, calls the same
 `/github-installation-token` endpoint built for the release stage, and writes the result
-into `<app-name>-pr-generator-token` in `argocd` - the only thing it's allowed to touch
-there (`create` unscoped since the Secret doesn't exist yet the first time, `get`/
-`update`/`patch` scoped by `resourceNames` after that).
+into `<app-name>-pr-generator-token` - the only thing it's allowed to touch there
+(`create` unscoped since the Secret doesn't exist yet the first time, `get`/`update`/
+`patch` scoped by `resourceNames` after that).
+
+**The ApplicationSet and this Secret both live in the app's own `<type>-<app-name>-cicd`
+namespace, not `argocd`.** Originally the ApplicationSet (like every other Application/
+ApplicationSet on this instance) was pinned to `argocd`, which forced the Secret there
+too, which in turn meant the refresher CronJob (running in the app's own namespace)
+needed a cross-namespace RBAC grant just to write one Secret it didn't otherwise have
+any business touching. ArgoCD's ApplicationSet-in-any-namespace feature removes that:
+`argocd-platform`'s `argocd-cmd-params-cm` sets `application.namespaces` and
+`applicationsetcontroller.namespaces` to the `*-cicd` glob (see
+`gitops-cluster-dev/01-argocd-platform`), and the per-tenant `AppProject`
+(`templates/argocd/appproject.yaml`) lists its own namespace in `sourceNamespaces` -
+together these let the ApplicationSet, the Secret, and the refresher's RBAC all live
+in the one namespace the chart already owns, no cross-namespace grant needed.
+
+This also turns on ArgoCD's `tokenRef` strict mode
+(`applicationsetcontroller.enable.tokenref.strict.mode`) cluster-wide, which is why the
+Secret needs the `argocd.argoproj.io/secret-type: scm-creds` label (set by the refresher
+CronJob at creation time) - without it, an ApplicationSet living outside `argocd` could
+otherwise read any Secret in its own namespace via `tokenRef`, not just ones meant for
+it. Confirmed live: before the label was in place, the applicationset-controller
+rejected the old (pre-migration) Secret outright with `secret must have label
+"argocd.argoproj.io/secret-type"="scm-creds"`, not a silent fallback.
 
 This required one real change to `token-review-interceptor`: `verifyAppOwnsRepo`
 (then still named `verifyTenantOwnsGitOpsRepo`) only authorized an Application to mint a
@@ -210,8 +234,10 @@ kubectl port-forward -n platform-cicd-demo-pr-<number> svc/nodejs-demo-app-<numb
 ## Verification
 
 - Label a real PR `preview` on `nodejs-demo-app`. Within ~180s (the generator's
-  `requeueAfterSeconds`), `kubectl get application.argoproj.io -n argocd` should show
-  `nodejs-demo-app-pr-<number>`, and `kubectl get ns platform-cicd-demo-pr-<number>`
+  `requeueAfterSeconds`), `kubectl get application.argoproj.io -n app-nodejs-demo-app-cicd`
+  should show `nodejs-demo-app-pr-<number>` (generated Applications land in the same
+  namespace as their ApplicationSet - not `argocd`, see "Credential for the
+  ApplicationSet generator" above), and `kubectl get ns platform-cicd-demo-pr-<number>`
   should exist with a running pod on that PR's own uniquely-tagged image.
 - `kubectl port-forward` into it and confirm the PR's actual code is running (not just
   any deploy).

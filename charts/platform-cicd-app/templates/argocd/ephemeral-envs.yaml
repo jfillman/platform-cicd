@@ -25,6 +25,20 @@
 #
 # The GitHub App installation token this generator reads is minted by a periodic CronJob
 # (see pr-token-refresher-cronjob.yaml below), not a long-lived PAT.
+#
+# Lives in this app's own -cicd namespace, not argocd - ArgoCD's ApplicationSet-in-any-
+# namespace feature (argocd-platform's applicationsetcontroller.namespaces/
+# application.namespaces, both set to the *-cicd glob - see
+# gitops-cluster-dev/01-argocd-platform), which lets the tokenRef Secret below live here
+# too instead of needing a cross-namespace RBAC grant into argocd just to write it (the
+# old shape - a Role/RoleBinding scoped to one named Secret in argocd - is gone below).
+# tokenRef strict mode is enabled cluster-wide alongside this
+# (applicationsetcontroller.enable.tokenref.strict.mode), so the Secret this generator
+# reads must carry the argocd.argoproj.io/secret-type: scm-creds label - set by the
+# refresher CronJob at creation time below, not a static field here since the Secret
+# itself is never part of this chart's rendered manifest (minted live, never persisted,
+# matching this platform's existing preference for never-persisted over cached
+# credentials).
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -32,7 +46,7 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
-  namespace: argocd
+  namespace: {{ $appNamespace }}
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=invalid"]
@@ -100,11 +114,12 @@ spec:
 # trust model already built for the release stage, not a new credential class. 20
 # minutes comfortably inside a GitHub App installation token's 1-hour lifetime.
 #
-# Runs as a dedicated ServiceAccount in the APPLICATION's own namespace (not argocd) -
-# authorization for minting the token depends on the caller's own namespace owning a
-# Repository CR for this app, which only exists in the Application's own namespace. A
-# second, narrowly-scoped RoleBinding in argocd grants this same identity permission to
-# write exactly one named Secret there - nothing else in argocd.
+# Runs as a dedicated ServiceAccount in the APPLICATION's own namespace - authorization
+# for minting the token depends on the caller's own namespace owning a Repository CR for
+# this app, which only exists in the Application's own namespace. The Secret it writes
+# lives in this same namespace now too (the ApplicationSet above reads it from here), so
+# unlike before this no longer needs a cross-namespace grant into argocd - the Role/
+# RoleBinding below is scoped to this one namespace only.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -114,10 +129,11 @@ metadata:
     platform.io/subcomponent: "argocd"
   namespace: {{ $appNamespace }}
 ---
-# Lets this SA write (but not read arbitrary/list) exactly one named Secret in argocd.
-# `create` can't be resourceName-scoped (the object doesn't exist yet at authorization
-# time), so it's granted unscoped but still restricted to the `secrets` resource type in
-# this one namespace; get/update/patch are scoped to the one Secret name by name.
+# Lets this SA write (but not read arbitrary/list) exactly one named Secret in this
+# namespace. `create` can't be resourceName-scoped (the object doesn't exist yet at
+# authorization time), so it's granted unscoped but still restricted to the `secrets`
+# resource type in this one namespace; get/update/patch are scoped to the one Secret
+# name by name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -125,7 +141,7 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
-  namespace: argocd
+  namespace: {{ $appNamespace }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -142,7 +158,7 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"
-  namespace: argocd
+  namespace: {{ $appNamespace }}
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: allow-pr-token-refresher-{{ .Values.platformIdentity.appName }} }
 subjects:
   - kind: ServiceAccount
@@ -205,7 +221,13 @@ spec:
                     -H "Content-Type: application/json" \
                     -d '{"owner":"{{ .Values.platformIdentity.githubOwner }}","repo":"{{ .Values.platformIdentity.appName }}"}')"
                   token="$(jq -er '.token' <<<"${resp}")"
+                  # argocd.argoproj.io/secret-type: scm-creds - required by ArgoCD's
+                  # tokenRef strict mode (applicationsetcontroller.enable.tokenref.
+                  # strict.mode, enabled cluster-wide) once this Secret's read by an
+                  # ApplicationSet living outside the argocd namespace.
                   kubectl create secret generic {{ .Values.platformIdentity.appName }}-pr-generator-token \
-                    -n argocd --from-literal=token="${token}" \
-                    --dry-run=client -o yaml | kubectl apply -f -
+                    -n {{ $appNamespace }} --from-literal=token="${token}" \
+                    --dry-run=client -o yaml \
+                    | kubectl label --local -f - argocd.argoproj.io/secret-type=scm-creds -o yaml \
+                    | kubectl apply -f -
 {{- end }}
