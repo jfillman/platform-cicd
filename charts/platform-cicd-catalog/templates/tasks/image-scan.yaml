@@ -61,6 +61,18 @@ spec:
       secret:
         secretName: app-secrets
         optional: true
+    # Registry pull credentials for trivy's remote image fetch - same Secret/key mapping
+    # generate-sbom.yaml already uses for cosign, consumed the same way (DOCKER_CONFIG),
+    # since trivy's remote scanner is also built on go-containerregistry. Missing until
+    # now: trivy was always attempting an anonymous pull, which 401s the moment a
+    # package is private - GHCR's real default visibility for a freshly-pushed package
+    # (see generate-sbom.yaml's own build-image.yaml sibling comment on this).
+    - name: registry-credentials
+      secret:
+        secretName: registry-credentials
+        items:
+          - key: .dockerconfigjson
+            path: config.json
   steps:
     # onError: continue - a real bug found live: Tekton's DEFAULT behavior is to skip
     # every subsequent step once one fails ("Skipping step because a previous step
@@ -76,9 +88,15 @@ spec:
       onError: continue
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      volumeMounts:
+        - name: registry-credentials
+          mountPath: /var/run/secrets/registry
+          readOnly: true
       env:
         - name: IMAGE_REF
           value: $(params.image-ref)
+        - name: DOCKER_CONFIG
+          value: /var/run/secrets/registry
         - name: FLOW_TRACEPARENT
           value: $(params.flow-traceparent)
         - name: STAGE_SPAN_ID
