@@ -125,19 +125,12 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    (webhook delivery, checks) may not already include these, since this App is now also
    doing git operations, not just receiving webhooks.
 
-4. **Apply a PaC `Repository` CR** for the new repo, in the Application's own namespace
-   (same pattern as the app repo's own Repository CR):
-   ```
-   kubectl apply -f - <<EOF
-   apiVersion: pipelinesascode.tekton.dev/v1alpha1
-   kind: Repository
-   metadata:
-     name: gitops-nodejs-demo-app
-     namespace: platform-cicd-demo
-   spec:
-     url: https://github.com/<org>/gitops-nodejs-demo-app
-   EOF
-   ```
+4. **Nothing to do here anymore** - as long as `platformIdentity.gitopsRepoUrl` is set,
+   `charts/platform-cicd-app/templates/pipelines-as-code/repository.yaml` renders the
+   `gitops-<app-name>` PaC `Repository` CR automatically (same file that renders the app
+   repo's own Repository CR - see [onboarding.md](onboarding.md) step 1). Previously a
+   manual `kubectl apply`, folded into the chart once step 2 above already needs
+   `gitopsRepoUrl` to be set at install time regardless.
 
 5. **Apply the ArgoCD template**, with `<APP_NAMESPACE>`, `<APP_NAME>`, `<GITOPS_REPO_URL>`
    substituted:

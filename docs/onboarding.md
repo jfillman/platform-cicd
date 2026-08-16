@@ -38,10 +38,15 @@ credentials).
 
 ## Onboarding one Application
 
-1. **Register the repo with Pipelines-as-Code.** Create a PaC `Repository` CR pointing at
-   the app's GitHub repo (requires the platform's GitHub App - see
-   [bootstrap.md](bootstrap.md) - to be installed on that repo first). Same manual step as
-   before; not something a Helm chart owns.
+1. **Install the platform's GitHub App on the app's repo** (see
+   [bootstrap.md](bootstrap.md)) - the one manual, GitHub-side prerequisite left. The PaC
+   `Repository` CR itself (pointing at the app's repo, and at its gitops repo if
+   `gitopsRepoUrl` is set) is now rendered by the chart -
+   `charts/platform-cicd-app/templates/pipelines-as-code/repository.yaml`, gated on
+   `platformIdentity.registerPipelinesAsCode` (default `true`) - not a separate manual
+   step anymore. This is also what the ephemeral-envs `pullRequest` generator's
+   token-refresher and the release stage's `open-release-pr.yaml` both depend on (see
+   that template's header comment).
 
 2. **Add `cicd.yaml`** to the repo root (see
    [user-guide/quickstart.md](user-guide/quickstart.md) and
