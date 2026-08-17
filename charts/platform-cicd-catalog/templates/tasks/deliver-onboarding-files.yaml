@@ -254,6 +254,37 @@ spec:
               if [[ -n "${branch}" ]]; then
                 branch_line="    pipelinesascode.tekton.dev/on-target-branch: \"[${branch}]\""
               fi
+              # Always AND in a guard against deploy-manifests.yaml's own commits
+              # re-triggering this exact flow - a real infinite loop hit live on
+              # checkout-api: that Task commits straight to platform/envs/<env>.yaml on
+              # this SAME branch (see deploy-manifests.yaml's own header), which is
+              # itself a `push` to `main`, which re-triggered build, which deployed
+              # again, forever (~20 min / 10 real commits + image pushes before it
+              # happened to stop on its own - a live incident, not a hypothetical).
+              #
+              # Deliberately a CEL expression here, not the separate
+              # on-path-change-ignore annotation, even though checkout-api's own case
+              # has no other on-cel-expression to combine with - PaC's own matcher
+              # (pkg/matcher/annotation_matcher.go, confirmed by reading its real
+              # source) takes CEL's branch of the if/else ENTIRELY whenever
+              # on-cel-expression is set and never evaluates on-path-change-ignore at
+              # all, so an app that ALSO sets trigger.paths (producing its own
+              # cel_line below) would silently keep looping if this guard were the
+              # separate annotation instead. One mechanism, always applied, works for
+              # both cases.
+              #
+              # !("platform/envs/**".pathChanged()) rather than trying to express PaC's
+              # docs' stated "skip only if ALL changed files are under this path"
+              # semantics precisely: pathChanged() (like the annotation) actually
+              # matches on ANY changed file (confirmed the same way, reading the real
+              # source) - a real gap between the docs and the implementation. Accepted
+              # tradeoff, not a mistake: a push that touches platform/envs/*.yaml
+              # alongside real app code in the SAME commit also gets skipped, but
+              # deploy-manifests.yaml's own commits never touch anything else, and a
+              # human intentionally hand-editing platform/envs/ (gitops-strategy.md
+              # §10's own self-service path) is expected to do it as its own
+              # standalone commit anyway.
+              local loop_guard='!("platform/envs/**".pathChanged())'
               if [[ "${file_paths_json}" != "[]" ]]; then
                 local expr
                 # pathChanged() is a suffix method on the glob-pattern string itself
@@ -262,7 +293,9 @@ spec:
                 # catch it) but PaC's CEL evaluator rejects it at webhook-delivery time
                 # with "no matching overload for 'pathChanged' applied to '(string)'".
                 expr="$(echo "${file_paths_json}" | jq -r 'map("\"" + . + "\".pathChanged()") | join(" || ")')"
-                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${expr}'"
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '(${expr}) && ${loop_guard}'"
+              else
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${loop_guard}'"
               fi
               ;;
             pull_request)
