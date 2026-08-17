@@ -15,9 +15,10 @@ plan for the full comparison of what was ported vs. deliberately left behind.
 deploy (dev) succeeds
   -> dev.cdevents.service.deployed CDEvent, now carrying git-url/revision forward
   -> broker fires `release` PipelineRun
-  -> release opens a PR against gitops-<app-name>, bumping the staging image tag
-     (charts/platform-cicd-catalog/templates/tasks/open-release-pr.yaml) - this is where the automated part of the
-     flow ends; the flow-root trace closes here (see docs/tracing.md)
+  -> release opens a PR against gitops-<app-name>, bumping the image tag in
+     <cluster>/<env>/values.yaml (charts/platform-cicd-catalog/templates/tasks/
+     open-release-pr.yaml) - this is where the automated part of the flow ends; the
+     flow-root trace closes here (see docs/tracing.md)
   -> 4 independent GitHub Checks run on that PR (sast/image-scan/policy-check/sbom -
      all still stubs, see docs/governance-stubs.md), each individually re-triggerable
   -> branch protection on the gitops repo requires all 4 checks + N human reviewers
@@ -95,6 +96,24 @@ second endpoint, `/github-installation-token`, that:
 `catalog/lib/github-app.sh` wraps this call for `open-release-pr.yaml`.
 
 ## Onboarding an Application's release stage (per app)
+
+**2026-08-16: superseded for any app onboarded through `idp`** (Crossplane-based,
+`idp-service-catalog`'s `ApplicationEnvironment` composition) - that composition already
+scaffolds `gitops-<app-name>` with the `<cluster>/<env>/values.yaml` layout
+`open-release-pr.yaml` now requires (an `idp-application` Helm values file, not a raw
+Deployment manifest), and its own tenant-onboarding `ApplicationSet` already creates and
+owns the ArgoCD `Application` generically for every env - steps 2 and 5 below (manually
+pushing `deployment.yaml`, applying `release-application.yaml`) don't apply and would
+actively conflict with idp's mechanism. `cicd.yaml`'s `deploy.upperEnvironments` must use
+the `{ name: <env>, cluster: <cluster> }` object form, matching that
+`ApplicationEnvironment`'s own `spec.cluster` - see `open-release-pr.yaml`'s own
+2026-08-16 header for the full story. See idp's own docs for that onboarding path.
+
+The steps below are the ORIGINAL, pre-idp procedure - kept accurate as a historical
+record and because it's still what the platform's own remaining non-idp demo tenants
+(`nodejs-demo-app`, `cicd-flow-test-app`) are on, but it no longer produces a working
+release for any *new* app: `open-release-pr.yaml` hard-requires `cluster` now and writes
+a Helm values file, not the raw `deployment.yaml` this procedure describes seeding.
 
 This is all one-time setup per app, same spirit as onboarding the app repo itself (see
 `docs/onboarding.md`) - not something a developer does per release.

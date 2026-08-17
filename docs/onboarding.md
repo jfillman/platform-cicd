@@ -116,10 +116,9 @@ credentials).
    only creates ITS OWN `<type>-<app-name>-cicd` namespace, not each declared env's - this
    step is still a real manual prerequisite. If `cicd.yaml` also declares a `release`
    stage, do the equivalent for the gitops repo now too - see [release.md](release.md)'s
-   "Create the gitops-\<app-name\>-repo" step for the `<app-name>/staging/deployment.yaml`
-   + `service.yaml` it needs pre-seeded (the platform delivers the governance-check
-   `.tekton/` files there automatically in step 6 below, but not these two - it has no
-   way to know your Deployment's shape).
+   "Create the gitops-\<app-name\>-repo" step for what it needs pre-seeded (the platform
+   delivers the governance-check `.tekton/` files there automatically in step 6 below,
+   but not the app's own manifest content - it has no way to know your workload's shape).
 
 5. **ArgoCD installs the app chart** - nothing to run by hand. Once step 3's
    `tenants/<app-name>/identity.yaml` lands on `platform-cicd`'s default branch, the

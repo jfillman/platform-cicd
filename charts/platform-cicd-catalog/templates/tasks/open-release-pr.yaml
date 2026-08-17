@@ -4,8 +4,8 @@
 # rebuilt) image to whichever upper env the release step declared (env:, validated
 # against deploy.upperEnvironments - see docs/multi-cluster.md) - the actual
 # GitOps-repo->cluster deploy happens later,
-# driven entirely by ArgoCD once the PR merges (see platform/argocd/ manifests). This
-# Task never touches the cluster directly.
+# driven entirely by ArgoCD once the PR merges. This Task never touches the cluster
+# directly.
 #
 # Ported from a real prior production pattern (analyzed live from
 # gitops-main/charts/cd-pipelines' task-gitops-deploy-yq.yaml/task-create-pr.yaml - see
@@ -20,6 +20,32 @@
 # app's own git-url - rather than a new cicd.yaml field, deliberately not assuming
 # app-namespace == org (see charts/platform-cicd-app/templates/triggers/fire-test.yaml's
 # git-url comment for why that assumption already broke once in this platform).
+#
+# 2026-08-16: this Task's own GitOps-delivered Application/RBAC/outcome-hook-Job
+# writing (docs/multi-cluster.md's "app-of-apps delivery" mechanism, live-verified
+# 2026-08-10/11 against a since-decommissioned kind-prod registration) was removed -
+# the gitops-<app-name> repo is now scaffolded by idp-service-catalog's
+# ApplicationEnvironment composition, whose own tenant-onboarding ApplicationSet
+# already creates and owns the ArgoCD Application for every <cluster>/<env>/values.yaml
+# generically (confirmed live against the real gitops-checkout-api repo -
+# kind-prod/prod/values.yaml). Having this Task write a SECOND, competing Application
+# for the same path would just race idp's own, not add anything. This Task's own scope
+# is back down to what its header above always described: patch the image, open the
+# PR - nothing else. `cluster` is consequently now load-bearing for every release (the
+# manifest path itself is <cluster>/<env>/values.yaml, not just an app-of-apps
+# side-mechanism), not just the "different physical cluster" case docs/multi-cluster.md
+# originally scoped it for.
+#
+# Real, disclosed follow-up gap this leaves open (deferred, not solved here): DORA
+# outcome metrics and the release-outcome Slack notification for these releases relied
+# entirely on the now-removed hook Jobs -> argocd-outcome-relay path (still real code,
+# see release-outcome-span.yaml/release-outcome-trigger.yaml, just structurally
+# unreachable now that nothing writes a hook Job). mark-release-pending.yaml's
+# same-cluster `kubectl annotate` mechanism doesn't cover this either - it targets an
+# Application object on THIS (dev) cluster, not one idp's tenant-onboarding
+# ApplicationSet creates on a remote upper cluster. Revisit once there's a real
+# idp-side outcome signal to wire this to (e.g. reading the ApplicationEnvironment XR's
+# own status) instead of platform-cicd re-deriving its own parallel one.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -50,69 +76,24 @@ spec:
         explicitly via release.yaml's own env param.
     - name: cluster
       type: string
-      default: ""
       description: >-
-        Name of a cluster-registry entry (see docs/multi-cluster.md), set only when
-        this env is mapped to a different physical cluster. Empty for the common
-        same-cluster case. When set, this Task also writes/updates that cluster's
-        GitOps-delivered Application manifest, RBAC, and outcome-reporting hook Jobs
-        (since mark-release-pending.yaml can't reach a remote cluster's API) in the
-        SAME commit as the image-tag patch - see the app-of-apps section below.
-    - name: app-namespace
-      type: string
-      default: ""
-      description: Only used when cluster is set - see mark-release-pending.yaml's own param of the same name for what this feeds.
-    - name: app-type
-      type: string
-      default: ""
-      description: >-
-        Only used when cluster is set - platformIdentity.type, needed to construct the
-        GitOps-delivered Application's destination namespace as
-        <app-type>-<app-name>-<env>, matching deploy.yaml's own identical convention
-        (see docs/concepts.md) rather than the shorter <app-name>-<env> this Task uses
-        for the Application's own metadata.name (a different, deliberately type-less
-        convention - see release-application.yaml).
-    - name: flow-start-time
-      type: string
-      default: ""
-      description: Only used when cluster is set - the Lead Time start anchor, same as mark-release-pending.yaml's own param.
-    - name: chain-id
-      type: string
-      default: ""
-      description: >-
-        Only used when cluster is set - this flow's own chain-id (see
-        catalog/lib/otel.sh), baked into the outcome-reporting hook Jobs below so the
-        eventual ArgoCD-hook -> relay -> broker path (docs/multi-cluster.md) can tag the
-        release-outcome span it sends with the SAME chain-id the rest of this flow's
-        spans carry - real correlation across a gap the platform's own tracing model
-        deliberately doesn't span structurally (the flow-root span is already closed by
-        the time a human merges this PR and ArgoCD confirms sync - see release.yaml's
-        own header). chain-id, not traceparent, is what's threaded through for this:
-        it's CDEvents' own causal-sequence correlator, already meant for exactly this
-        kind of "same logical flow, different trace" linkage - see release-outcome-
-        span.yaml.
-    - name: config-json
-      type: string
-      default: "{}"
-      description: >-
-        Only used when cluster is set - this Pipeline's own already-resolved
-        config-json (see release.yaml/resolve-notify-config.yaml), baked (as base64)
-        into the outcome-reporting hook Jobs below so the eventual ArgoCD-hook -> relay
-        -> broker path (docs/multi-cluster.md) can feed it straight to notify-slack
-        without a second clone+resolve - it's already been resolved once, in this very
-        Pipeline run.
+        Name of the physical cluster this env is provisioned on (idp-service-catalog's
+        ApplicationEnvironment.spec.cluster - see that XRD's own cluster-gate).
+        Required, not optional any more: the gitops-<app-name> repo's own layout is
+        <cluster>/<env>/values.yaml, so there's no manifest path to compute without it.
+        Threaded through from cicd.yaml's deploy.upperEnvironments object form
+        ({ name: <env>, cluster: <cluster> }), not derived - this Task doesn't read
+        idp's own cluster registry (a deliberately separate source of truth, see this
+        file's own 2026-08-16 header note).
   results:
     - name: pr-url
       description: URL of the opened (or already-open, on retry) release PR.
     - name: pr-created-at
       description: >-
-        Wall-clock time this Task's PR-creation API call actually returned - the real
-        start anchor for release-outcome-span.yaml's own span (see that file's own
-        header): "time from PR creation to confirmed deployment" is a genuinely
-        different, non-overlapping question from flow-start-time's own "time from
-        commit to confirmed deployment" (the latter includes this Task's own automated
-        build/test/deploy/release execution time, already fully visible in the
-        original flow trace - see docs/tracing.md).
+        Wall-clock time this Task's PR-creation API call actually returned. Currently
+        unconsumed (see this file's 2026-08-16 header note on the deferred DORA/Slack
+        outcome-reporting gap) - kept because it's a free byproduct of the PR-creation
+        call and whatever eventually replaces the outcome-reporting path will want it.
   # Audience-bound projected ServiceAccount token for the shared broker's GitHub
   # token-minting endpoint - see catalog/lib/github-app.sh. Same pattern as
   # send-cdevent.yaml's broker-token volume, different audience/endpoint.
@@ -147,20 +128,15 @@ spec:
           value: $(params.env)
         - name: CLUSTER
           value: $(params.cluster)
-        - name: APP_NAMESPACE
-          value: $(params.app-namespace)
-        - name: APP_TYPE
-          value: $(params.app-type)
-        - name: FLOW_START_TIME
-          value: $(params.flow-start-time)
-        - name: CHAIN_ID
-          value: $(params.chain-id)
-        - name: CONFIG_JSON
-          value: $(params.config-json)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+
+        if [[ -z "${CLUSTER}" ]]; then
+          echo "error: cluster is required - gitops-${APP_NAME}'s layout is <cluster>/<env>/values.yaml, there's no manifest path to write without one. Set deploy.upperEnvironments' object form ({ name: ${ENV}, cluster: <cluster-name> }) in this app's cicd.yaml." >&2
+          exit 1
+        fi
 
         # GIT_URL is "https://github.com/<owner>/<repo>[.git]" - only the owner segment
         # is used; the gitops repo's own name is always gitops-<app-name> by convention.
@@ -177,98 +153,22 @@ spec:
         branch="release-${GIT_REVISION:0:8}-$(date +%s)"
         git checkout -b "${branch}"
 
-        manifest="${APP_NAME}/${ENV}/deployment.yaml"
-        yq -i -e ".spec.template.spec.containers[0].image = \"${IMAGE_REF}\"" "${manifest}"
-
-        # GitOps app-of-apps delivery (docs/multi-cluster.md) - only when this env is
-        # mapped to a different physical cluster. The Application CR is written into
-        # THIS SAME repo/commit/PR rather than applied to the remote cluster directly -
-        # that remote cluster's own ArgoCD (bootstrapped once, out of band, to watch
-        # this path - see hack/bootstrap-upper-cluster.sh) picks it up on its own once
-        # this PR merges. This is the whole point of the design: this Task never holds
-        # a credential for, or makes a single API call to, the remote cluster - only
-        # ever a git commit it already had rights to make.
-        if [[ -n "${CLUSTER}" ]]; then
-          registry_entry="$(kubectl get configmap cluster-registry -n platform-system -o jsonpath="{.data.${CLUSTER}}")"
-          if [[ -z "${registry_entry}" ]]; then
-            echo "error: cluster '${CLUSTER}' has no entry in the cluster-registry ConfigMap (platform-system) - see charts/platform-cicd-control-plane's clusters: values." >&2
-            exit 1
-          fi
-          apps_path="$(jq -r '.gitopsApplicationsPath' <<<"${registry_entry}")"
-          mkdir -p "${apps_path}"
-          app_manifest="${apps_path}/${APP_NAME}-${ENV}.yaml"
-
-          # Application manifest: STRUCTURAL only (name/labels/spec) - no
-          # per-release annotations here. A real race condition, caught by the user
-          # reviewing this design rather than by testing: this file is synced by the
-          # app-of-apps ROOT Application, on its own independent reconcile loop,
-          # decoupled from when the CHILD Application (watching ${APP_NAME}/${ENV}/,
-          # below) actually syncs deployment.yaml. Nothing guarantees the root's
-          # sync of THIS file completes before the child's deploy sync does, so any
-          # per-release data written here could still be a PREVIOUS release's values
-          # by the time anything downstream reads it. Fixed not by moving the data
-          # somewhere the root still writes (an earlier version of this Task tried
-          # that, twice), but by never putting per-release data anywhere the root
-          # owns at all - see the outcome-reporting hook Jobs further down, written
-          # into the path the CHILD watches instead, and docs/multi-cluster.md.
-          #
-          # project: default (ArgoCD's built-in, unscoped project) - this pass
-          # doesn't also GitOps-deliver a matching scoped AppProject to the remote
-          # cluster; a real gap, not hidden - see docs/multi-cluster.md.
-          #
-          # Plain public HTTPS URL, no embedded credential (unlike clone_url above,
-          # which carries this Task's own short-lived, single-repo-scoped token) - the
-          # remote cluster's ArgoCD needs its OWN way to read this repo, configured
-          # separately at that cluster's onboarding time, out of scope for this Task.
-          # Assumes a public repo for now, matching every gitops-<app> repo this
-          # platform has onboarded so far (see docs/multi-cluster.md) - a private
-          # gitops repo would need a repo-credential Secret configured on the target
-          # cluster's ArgoCD, not handled here.
-          #
-          # syncOptions: [CreateNamespace=true] here, unlike the same-cluster path
-          # (release-application.yaml renders an explicit Namespace object instead) -
-          # this is a fresh delivery mechanism with no existing pattern to match
-          # exactly, and letting ArgoCD create the destination namespace itself avoids
-          # needing to author/maintain a second resource in this same generated file.
-          #
-          # printf with explicit \n's, one line per arg - NOT a raw multi-line heredoc.
-          # This file's own commit_message/governance_text below already hit this
-          # exact bug once: a block of literal, unindented multi-line content sitting
-          # inside this Task's YAML `script: |` block scalar de-indents relative to it
-          # and prematurely terminates the block scalar, corrupting the surrounding
-          # Task's own YAML (confirmed live while building this - `helm lint` failed
-          # with "could not find expected ':'" pointing at unrelated LATER lines).
-          printf '%s\n' \
-            'apiVersion: argoproj.io/v1alpha1' \
-            'kind: Application' \
-            'metadata:' \
-            "  name: ${APP_NAME}-${ENV}" \
-            '  namespace: argocd' \
-            '  labels:' \
-            "    platform.io/app: ${APP_NAME}" \
-            "    platform.io/env: ${ENV}" \
-            '    platform.io/subcomponent: argocd' \
-            '    platform.io/dora-track: "true"' \
-            'spec:' \
-            '  project: default' \
-            '  source:' \
-            "    repoURL: https://github.com/${owner}/${gitops_repo}.git" \
-            '    targetRevision: main' \
-            "    path: ${APP_NAME}/${ENV}" \
-            '  destination:' \
-            '    server: https://kubernetes.default.svc' \
-            "    namespace: ${APP_TYPE}-${APP_NAME}-${ENV}" \
-            '  syncPolicy:' \
-            '    automated:' \
-            '      prune: true' \
-            '      selfHeal: true' \
-            '    syncOptions:' \
-            '      - CreateNamespace=true' \
-            > "${app_manifest}"
-
-          git add "${app_manifest}"
-          echo "[open-release-pr] cluster=${CLUSTER}: wrote ${app_manifest}"
-        fi
+        # <cluster>/<env>/values.yaml, not <app-name>/<env>/deployment.yaml - the
+        # gitops-<app-name> repo is now scaffolded by idp-service-catalog's
+        # ApplicationEnvironment composition (idp-application's own Helm values file,
+        # confirmed live against the real gitops-checkout-api repo), not a raw
+        # Deployment manifest this Task used to own the shape of. repository/tag are
+        # split fields in that schema (idp-application's rollout.yaml renders
+        # "%s:%s" .Values.rollout.image.{repository,tag}), not a single image: string -
+        # same split deploy-manifests.yaml's own dev/self-service path already does for
+        # platform/envs/<env>.yaml, reused here rather than re-derived.
+        manifest="${CLUSTER}/${ENV}/values.yaml"
+        image_repo="${IMAGE_REF%:*}"
+        image_tag="${IMAGE_REF##*:}"
+        yq -i -e "
+          .rollout.image.repository = \"${image_repo}\" |
+          .rollout.image.tag = \"${image_tag}\"
+        " "${manifest}"
 
         git config user.name "platform-cicd release automation"
         git config user.email "release@platform-cicd.invalid"
@@ -328,150 +228,8 @@ spec:
         pr_url="$(jq -r '.html_url' <<<"${pr_response}")"
         # otel_now's own format (catalog/lib/otel.sh) - not otel_now itself, this
         # script doesn't source otel.sh and doesn't need the rest of it for one
-        # timestamp.
+        # timestamp. Currently unconsumed - see this file's 2026-08-16 header note.
         pr_created_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")"
-
-        # Outcome-reporting: tracking annotations on deployment.yaml itself, plus
-        # RBAC and two ArgoCD sync-hook Jobs - deliberately a SECOND commit on this
-        # same branch, pushed only now, AFTER the PR above already exists. Both the
-        # annotations and the hook Jobs carry this PR's own URL (pr_url, just
-        # resolved), and a PR's URL/number don't exist until GitHub actually creates
-        # it - there's no way to have included them in the first commit. A second
-        # commit on an already-open PR's branch is ordinary: GitHub just shows it as
-        # one more commit already part of the same PR, nothing to re-open.
-        if [[ -n "${CLUSTER}" ]]; then
-          # Deployment annotations are pure operator visibility - NOT part of the
-          # outcome-reporting mechanism itself (the hook Jobs below carry the data
-          # ArgoCD actually reports with, independently). This just lets a human
-          # doing `kubectl describe deployment`/`get -o yaml` on the live upper-env
-          # cluster see which build/commit/PR produced what's running, without
-          # cross-referencing pipeline logs. Redundant with the hook payload by
-          # design - different reader, same underlying facts. platform.io/dora-
-          # prefix matches mark-release-pending.yaml's own same-cluster annotation
-          # convention, even though the DORA exporter itself doesn't read these (it
-          # gets its own copy via the hook Jobs) - same namespace, same intent, one
-          # convention rather than two.
-          yq -i -e "
-            .metadata.annotations[\"platform.io/dora-git-revision\"] = \"${GIT_REVISION}\" |
-            .metadata.annotations[\"platform.io/dora-image\"] = \"${IMAGE_REF}\" |
-            .metadata.annotations[\"platform.io/dora-flow-start-time\"] = \"${FLOW_START_TIME}\" |
-            .metadata.annotations[\"platform.io/dora-gitops-pr-url\"] = \"${pr_url}\"
-          " "${manifest}"
-          git add "${manifest}"
-
-          # Two ArgoCD sync-hook Jobs, deliberately in ${APP_NAME}/${ENV}/ alongside
-          # deployment.yaml (NOT ${apps_path} alongside the Application manifest
-          # above) - this is the path the CHILD Application actually syncs, so these
-          # hooks run as part of the exact same sync operation as the image-tag
-          # change, with no dependency on the app-of-apps ROOT Application's own,
-          # independently-timed reconcile at all.
-          #
-          # This replaced an ArgoCD-Notifications-based design entirely, not just its
-          # data source - see docs/multi-cluster.md for the two real, live-confirmed
-          # reasons: Notifications fired on ANY completed sync (including pure
-          # selfHeal drift-correction with zero release involved), and per-release
-          # data read off the Application object's own metadata was racy against the
-          # root's reconcile timing. A hook only runs when the resources in ITS OWN
-          # sync actually needed reapplying, and PostSync specifically only fires once
-          # those resources are deployed AND healthy (both confirmed live) - so there
-          # is no live object to read here at all, only env vars baked in below, at
-          # the exact moment this Task already has the real values in hand.
-          #
-          # hook-delete-policy: BeforeHookCreation is load-bearing, not cleanup - a
-          # Job with unchanged content across releases wouldn't be re-applied at all
-          # (nothing for ArgoCD to diff), so without this the hook would only ever
-          # fire on the FIRST release to this env and silently never again.
-          #
-          # PHASE is the one thing that differs between the two Jobs - which hook ran
-          # already tells us the outcome, no live status read needed. PR_URL rides
-          # along purely so the eventual release-outcome Slack message can link back
-          # to this PR - see notify-slack.yaml's own pr-url param.
-          #
-          # config-json travels as base64, not raw JSON - the one field here that can
-          # contain real quotes/braces, and base64 sidesteps any risk of this
-          # printf-per-line approach mis-escaping it (catalog/lib/argocd-outcome-hook.sh
-          # only decodes it at the very end, right before sending). Every other field
-          # is a plain flat string, safe as-is.
-          registry_relay_url="$(jq -r '.outcomeRelayURL' <<<"${registry_entry}")"
-          CONFIG_JSON_B64="$(printf '%s' "${CONFIG_JSON}" | base64 | tr -d '\n')"
-
-          rbac="${APP_NAME}/${ENV}/platform-outcome-rbac.yaml"
-          printf '%s\n' \
-            'apiVersion: v1' \
-            'kind: ServiceAccount' \
-            'metadata:' \
-            '  name: platform-outcome-hook' \
-            '---' \
-            'apiVersion: rbac.authorization.k8s.io/v1' \
-            'kind: Role' \
-            'metadata:' \
-            '  name: platform-outcome-hook' \
-            'rules:' \
-            '  - apiGroups: [""]' \
-            '    resources: ["secrets"]' \
-            '    resourceNames: ["platform-outcome-relay-token"]' \
-            '    verbs: ["get"]' \
-            '---' \
-            'apiVersion: rbac.authorization.k8s.io/v1' \
-            'kind: RoleBinding' \
-            'metadata:' \
-            '  name: platform-outcome-hook' \
-            'roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: platform-outcome-hook }' \
-            'subjects:' \
-            '  - kind: ServiceAccount' \
-            '    name: platform-outcome-hook' \
-            > "${rbac}"
-          git add "${rbac}"
-
-          for hook_variant in "postsync:PostSync:Succeeded" "syncfail:SyncFail:Failed"; do
-            hook_file="${hook_variant%%:*}"; rest="${hook_variant#*:}"
-            hook_type="${rest%%:*}"; hook_phase="${rest#*:}"
-            hook_manifest="${APP_NAME}/${ENV}/platform-outcome-${hook_file}.yaml"
-            printf '%s\n' \
-              'apiVersion: batch/v1' \
-              'kind: Job' \
-              'metadata:' \
-              "  name: platform-outcome-${hook_file}" \
-              '  annotations:' \
-              "    argocd.argoproj.io/hook: ${hook_type}" \
-              '    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation' \
-              '  labels:' \
-              "    platform.io/app: ${APP_NAME}" \
-              '    platform.io/subcomponent: outcome-hook' \
-              'spec:' \
-              '  backoffLimit: 2' \
-              '  activeDeadlineSeconds: 60' \
-              '  template:' \
-              '    spec:' \
-              '      serviceAccountName: platform-outcome-hook' \
-              '      restartPolicy: Never' \
-              '      containers:' \
-              '        - name: notify' \
-              '          image: ghcr.io/jfillman/platform-cicd-toolbox:latest' \
-              '          command: ["/opt/platform/lib/argocd-outcome-hook.sh"]' \
-              '          env:' \
-              '            - name: POD_NAMESPACE' \
-              '              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }' \
-              "            - { name: RELAY_URL, value: \"${registry_relay_url}\" }" \
-              "            - { name: APP_NAMESPACE, value: \"${APP_NAMESPACE}\" }" \
-              "            - { name: APP_NAME, value: \"${APP_NAME}\" }" \
-              "            - { name: ENV, value: \"${ENV}\" }" \
-              "            - { name: PHASE, value: \"${hook_phase}\" }" \
-              "            - { name: GIT_URL, value: \"${GIT_URL}\" }" \
-              "            - { name: GIT_REVISION, value: \"${GIT_REVISION}\" }" \
-              "            - { name: FLOW_START_TIME, value: \"${FLOW_START_TIME}\" }" \
-              "            - { name: CHAIN_ID, value: \"${CHAIN_ID}\" }" \
-              "            - { name: PR_URL, value: \"${pr_url}\" }" \
-              "            - { name: PR_CREATED_AT, value: \"${pr_created_at}\" }" \
-              "            - { name: CONFIG_JSON_B64, value: \"${CONFIG_JSON_B64}\" }" \
-              > "${hook_manifest}"
-            git add "${hook_manifest}"
-            echo "[open-release-pr] cluster=${CLUSTER}: wrote ${hook_manifest}"
-          done
-
-          git commit --quiet -m "Add outcome-reporting hooks for ${ENV} (see ${pr_url})"
-          git push --quiet "${clone_url}" "${branch}"
-        fi
 
         echo "${pr_url}" | tee "$(results.pr-url.path)"
         echo -n "${pr_created_at}" | tee "$(results.pr-created-at.path)"

@@ -50,7 +50,7 @@ spec:
       type: string
     - name: app-name
       type: string
-      description: Used to find <app-name>/staging/deployment.yaml in the gitops repo, and <app-name>-policy-config in this Application's own namespace.
+      description: Used to find <app-name>-policy-config in this Application's own namespace.
   steps:
     - name: verify
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -75,13 +75,26 @@ spec:
 
         # The promoted image ref, straight from the same manifest open-release-pr.yaml
         # itself patches - no new trailer needed, this is already the authoritative
-        # record of what's actually being promoted by this PR.
-        manifest="${APP_NAME}/staging/deployment.yaml"
-        image_ref="$(yq '.spec.template.spec.containers[0].image' "${manifest}")"
-        if [[ -z "${image_ref}" || "${image_ref}" == "null" ]]; then
-          echo "FAIL: could not read image ref from ${manifest}" >&2
+        # record of what's actually being promoted by this PR. Found via `git diff`
+        # rather than a hardcoded <app-name>/staging/deployment.yaml path - this Task,
+        # like extract-promoted-image.yaml (see that file's own header for the full
+        # reasoning), is invoked directly by PaC off the gitops repo's own PR webhook
+        # with no env/cluster param to hardcode a path from, and the gitops-<app-name>
+        # repo is now idp-service-catalog's ApplicationEnvironment-scaffolded
+        # <cluster>/<env>/values.yaml (idp-application's own Helm values file), not a
+        # raw Deployment manifest with a fixed "staging" path.
+        manifest="$(git diff --name-only HEAD~1 HEAD -- '*/values.yaml' | head -1)"
+        if [[ -z "${manifest}" ]]; then
+          echo "FAIL: no */values.yaml changed between HEAD~1 and ${REVISION} - expected open-release-pr.yaml's single surgical image-tag commit" >&2
           exit 1
         fi
+        image_repo="$(yq -r '.rollout.image.repository' "${manifest}")"
+        image_tag="$(yq -r '.rollout.image.tag' "${manifest}")"
+        if [[ -z "${image_repo}" || "${image_repo}" == "null" || -z "${image_tag}" || "${image_tag}" == "null" ]]; then
+          echo "FAIL: could not read rollout.image.repository/tag from ${manifest}" >&2
+          exit 1
+        fi
+        image_ref="${image_repo}:${image_tag}"
 
         # Resolve the tag to its digest - cosign's signature/attestation lookup is
         # digest-keyed (the .sig/.att OCI tags are derived from the digest), so a plain

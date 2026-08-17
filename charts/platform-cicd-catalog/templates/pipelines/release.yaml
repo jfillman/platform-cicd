@@ -71,11 +71,13 @@ spec:
     - name: app-type
       type: string
       description: >-
-        platformIdentity.type ("app"/"infra"/...) - only used for the cluster-mapped
-        case (open-release-pr.yaml's GitOps-delivered Application manifest needs it to
-        construct <app-type>-<app-name>-<env>, matching deploy.yaml's own identical
-        convention - see docs/concepts.md). Already threaded through by
-        flow-triggers.yaml for every stage; this Pipeline just didn't declare it before.
+        platformIdentity.type ("app"/"infra"/...) - declared because
+        flow-triggers.yaml/deliver-onboarding-files.yaml thread it through uniformly to
+        every stage Pipeline's PipelineRun regardless of whether that stage actually
+        uses it (admission requires every param a generator passes to be declared).
+        Currently unused within this Pipeline itself - open-release-pr.yaml's own
+        GitOps-delivered Application-manifest writing (the previous consumer) was
+        removed 2026-08-16, see that Task's own header.
     - name: flow-traceparent
       type: string
       default: ""
@@ -219,11 +221,6 @@ spec:
         - { name: git-revision, value: $(params.git-revision) }
         - { name: env, value: $(params.env) }
         - { name: cluster, value: $(params.cluster) }
-        - { name: app-namespace, value: $(params.app-namespace) }
-        - { name: app-type, value: $(params.app-type) }
-        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
-        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
-        - { name: config-json, value: $(tasks.resolve-notify-config.results.config-json) }
 
     # Hands off to the DORA exporter (platform/dora-exporter) - only runs if
     # open-release-pr actually succeeded (standard Tekton DAG failure propagation, no

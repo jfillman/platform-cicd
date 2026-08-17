@@ -108,8 +108,10 @@ check alone already proves "this identity vouches for exactly this image digest.
 Same trailer mechanism sub-item 1 already built for `verify` -
 `open-release-pr.yaml`'s commit carries `X-App-Repo`/`X-App-Commit` trailers - reused
 as-is for `verify`. `verify-provenance` doesn't need that pointer at all: the promoted
-**image** reference is read straight from `<app-name>/staging/deployment.yaml`'s own
-`.spec.template.spec.containers[0].image` field in the gitops PR - the same manifest
+**image** reference is read straight from the single `*/values.yaml` file the gitops PR
+changed (found via `git diff`, not a hardcoded `<app-name>/staging/deployment.yaml`
+path - see `verify-image-provenance.yaml`'s own header, 2026-08-16), reconstructed from
+its `rollout.image.repository`/`rollout.image.tag` fields - the same manifest
 `open-release-pr.yaml` itself already `yq`-patched, so it's already the authoritative
 record of what's being promoted, no new plumbing needed.
 

@@ -4,6 +4,23 @@ Phase 3 item 4. `build`/`test`/`deploy` stay on the dev cluster (`kind-observe`)
 this doc is only about where `release` promotions land and how their outcome gets back
 to the dev cluster's broker.
 
+**2026-08-16: the GitOps app-of-apps delivery mechanism this doc describes below (the
+Application manifest `open-release-pr.yaml` used to write into `gitopsApplicationsPath`,
+plus the RBAC/outcome-hook Jobs and everything downstream of them - the relay, the
+`release-outcome-*` Pipeline/Trigger, cluster-mapped DORA) was removed from
+`open-release-pr.yaml`.** `idp-service-catalog`'s `ApplicationEnvironment` composition
+now scaffolds every `gitops-<app-name>` repo as `<cluster>/<env>/values.yaml`, and its
+own tenant-onboarding `ApplicationSet` already creates and owns the ArgoCD `Application`
+for that path generically - this platform writing a second, competing `Application` for
+the same path would only race idp's, not add anything. `open-release-pr.yaml`'s job is
+back down to patching the image and opening the PR; `cluster` is now required on every
+release (the manifest path itself needs it), not just the cluster-mapped case this doc
+originally scoped it for. Everything below this point is kept as an honest record of
+what was actually built and live-verified, same spirit as the Notifications->hooks
+supersession later in this doc - not a current, working mechanism. The DORA-metrics/
+Slack-notification gap this leaves for cluster-mapped releases is a disclosed, deferred
+follow-up - see `open-release-pr.yaml`'s own 2026-08-16 header for the reasoning.
+
 ## Terminology
 
 - **env** - a logical upper-environment name from `cicd.yaml` (`deploy.upperEnvironments`,
