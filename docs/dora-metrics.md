@@ -230,3 +230,8 @@ Application's ArgoCD Application object, no other resource type.
   `get`/`list`/`watch`/`patch` on `applications.argoproj.io`, and confirm
   `pipeline-runner` still cannot touch any Application other than its own
   `<app-name>-staging`.
+- The above all cover the same-cluster path (Phase F's original scope). For the
+  cluster-mapped path (`forwardToDoraExporter`, fed by `argocd-outcome-relay`), see
+  `multi-cluster.md`'s "Live-verified end to end, 2026-08-17" section - a real
+  `checkout-api`/`kind-prod` release confirmed both `dora_deployments_total` and
+  `dora_releases_total{outcome="succeeded"|"failed"}` incrementing via that path too.

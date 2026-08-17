@@ -631,3 +631,56 @@ to fix both at once.
 per app namespace on the upper cluster (`hack/bootstrap-upper-cluster.sh`'s own
 instructions) - the deferred External Secrets Operator distribution noted below hasn't
 been built.
+
+**Live-verified end to end, 2026-08-17**, against the real `checkout-api` tenant on the
+real `kind-prod` cluster - not just `helm template`. A real commit to `checkout-api`
+(`main`) ran the full `build -> test -> deploy(dev) -> release(prod)` chain;
+`open-release-pr.yaml` opened a real two-commit PR against `gitops-checkout-api`
+(image-tag patch, then `releaseTracking:`) - confirmed via `gh pr diff` that the second
+commit's `releaseTracking:` block held real, non-placeholder values (`chainId`,
+`flowStartTime`, `prCreatedAt`, and `configJsonB64` decoding to the real `cicd.yaml`).
+Merging it synced on `kind-prod`; both hook variants fired for real:
+
+- **`SyncFail`** fired repeatedly while `checkout-api`'s own container crash-looped
+  (unrelated app-level liveness-probe issue, not this mechanism - see below) - 8
+  real, distinct `release-outcome-notify` PipelineRuns succeeded, `notify-slack` logged
+  `ok` (a real post, not a skip) each time, `dora_releases_total{outcome="failed"}`
+  reached 8.
+- **`PostSync`** fired once `checkout-api` was scaled to 0 (trivially Healthy) - one more
+  `release-outcome-notify` PipelineRun succeeded, and both `dora_deployments_total` and
+  `dora_releases_total{outcome="succeeded"}` incremented to 1.
+
+Confirmed via `argocd-outcome-relay`'s own code that it logs nothing on a fully
+successful request (only on auth/forward failure) - empty relay logs during this test
+were a red herring, not evidence the mechanism wasn't firing; the real proof is the
+PipelineRuns/Slack/metrics above, plus a manual debug-pod run of the exact hook script
+(`platform-outcome-hook` ServiceAccount identity) that confirmed the RBAC/secret-read
+path works in isolation too.
+
+**Three separate, real infra gaps found and fixed getting here** (none caused by this
+session's code changes, all pre-existing on `kind-prod`):
+
+1. `kind-prod` had no `rollouts.argoproj.io` or `monitoring.coreos.com/v1` (ServiceMonitor)
+   CRDs at all - `hack/bootstrap-upper-cluster.sh` only ever installed ArgoCD there.
+   Installed Argo Rollouts (the exact pinned manifest `gitops-cluster-dev/
+   10-crds-operators/argo-rollouts/install.yaml` already vendors) and just the
+   ServiceMonitor CRD (extracted from the same `kube-prometheus-stack` chart
+   version `40-observability` pins, not the full stack - `kind-prod` still has no
+   Prometheus of its own).
+2. The control-plane's own `clusters:` registry had gone back to `[]` (and
+   `argocd-outcome-relay` - gated behind `if .Values.clusters` - wasn't even deployed)
+   at some point after platform-cicd's control plane moved onto its own, independent
+   `kind-dev` instance. Re-populated with a real `kind-prod` entry (see this doc's own
+   "Outcome reporting, rebuilt" section above).
+3. `ghcr.io/jfillman/checkout-api` is a private package and `kind-prod` has no
+   ExternalSecret mechanism (no ESO installed) - fixed with a hand-provisioned
+   `ghcr-pull-secret` `docker-registry` Secret, referenced via
+   `serviceAccount.imagePullSecrets` directly in `kind-prod/prod/values.yaml` (committed,
+   not live-patched - see the comment there).
+
+**Separate, NOT fixed here**: `checkout-api`'s own container genuinely crash-loops on
+`kind-prod` (exit 137, liveness probe on `/` never passes) - an application-level issue
+in the `checkout-api` repo itself, unrelated to any of the above. Scaled to 0 in
+`kind-prod/prod/values.yaml` as a stopgap so ArgoCD's periodic retry doesn't keep
+generating real-but-redundant `SyncFail` Slack messages/DORA `failed` counts - remove
+that override once the app side is fixed.
