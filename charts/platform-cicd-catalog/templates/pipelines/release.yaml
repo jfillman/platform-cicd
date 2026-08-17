@@ -218,9 +218,17 @@ spec:
         - { name: image-ref, value: $(tasks.resolve-image-ref.results.image-ref) }
         - { name: git-url, value: $(params.git-url) }
         - { name: app-name, value: $(params.app-name) }
+        - { name: app-namespace, value: $(params.app-namespace) }
         - { name: git-revision, value: $(params.git-revision) }
         - { name: env, value: $(params.env) }
         - { name: cluster, value: $(params.cluster) }
+        # Threaded through so open-release-pr can write idp-application's
+        # releaseTracking block (see that Task's own 2026-08-17 header note) - the
+        # same values notify/end-flow below already use, no new plumbing upstream of
+        # this Pipeline needed.
+        - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
+        - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
+        - { name: config-json, value: $(tasks.resolve-notify-config.results.config-json) }
 
     # Hands off to the DORA exporter (platform/dora-exporter) - only runs if
     # open-release-pr actually succeeded (standard Tekton DAG failure propagation, no

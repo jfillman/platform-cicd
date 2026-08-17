@@ -55,11 +55,13 @@ spec:
       default: ""
       description: >-
         Set when env is mapped to a different physical cluster (idp-service-catalog's
-        ApplicationEnvironment.spec.cluster - see open-release-pr.yaml's own 2026-08-16
-        header note) - when non-empty, this Task is a deliberate no-op: its own live
-        kubectl patch can't reach a remote cluster's API, and there's currently no
-        replacement tracking mechanism for that case (a disclosed, deferred gap - see
-        open-release-pr.yaml's header for the full story, not solved here).
+        ApplicationEnvironment.spec.cluster - see open-release-pr.yaml's own header
+        note) - when non-empty, this Task is a deliberate no-op: its own live kubectl
+        patch can't reach a remote cluster's API. The replacement tracking mechanism
+        for that case is idp-application's own releaseTracking PostSync/SyncFail
+        hook Jobs (idp-service-catalog/charts/idp-application/templates/
+        release-tracking/, wired up by open-release-pr.yaml - see that Task's own
+        2026-08-17 header note), not this Task reaching further than it safely can.
   steps:
     - name: mark-pending
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest

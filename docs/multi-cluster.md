@@ -15,11 +15,26 @@ for that path generically - this platform writing a second, competing `Applicati
 the same path would only race idp's, not add anything. `open-release-pr.yaml`'s job is
 back down to patching the image and opening the PR; `cluster` is now required on every
 release (the manifest path itself needs it), not just the cluster-mapped case this doc
-originally scoped it for. Everything below this point is kept as an honest record of
-what was actually built and live-verified, same spirit as the Notifications->hooks
-supersession later in this doc - not a current, working mechanism. The DORA-metrics/
-Slack-notification gap this leaves for cluster-mapped releases is a disclosed, deferred
-follow-up - see `open-release-pr.yaml`'s own 2026-08-16 header for the reasoning.
+originally scoped it for. Everything below this point (through the "GitOps app-of-apps
+delivery" section and the two live-verification write-ups) is kept as an honest record
+of what was actually built and live-verified, same spirit as the Notifications->hooks
+supersession later in this doc - **not a current, working mechanism for the
+Application/RBAC-manifest-writing part.**
+
+**2026-08-17: the DORA-metrics/Slack-notification gap this left is rebuilt** - see the
+"Outcome reporting, rebuilt (2026-08-17)" section further down for the current design.
+Short version: the two ArgoCD sync-hook Jobs described below (PostSync/SyncFail,
+`platform-outcome-postsync`/`platform-outcome-syncfail`) are real again, unchanged in
+shape and behavior - same relay, same HTTP path, same per-app shared secret. What
+changed is WHO writes them: `open-release-pr.yaml` no longer writes a second,
+GitOps-delivered Application manifest to carry them (the mechanism the rest of this
+section describes) - they're now rendered directly by `idp-service-catalog`'s own
+`idp-application` Helm chart, off a `releaseTracking:` values block
+`open-release-pr.yaml` patches into the SAME `<cluster>/<env>/values.yaml` commit it
+already writes `rollout.image.*` into. Read everything below as accurate history of the
+mechanism's *design* (why hooks over Notifications, why a shared secret, why the relay
+is shaped the way it is, the real bugs found live) - just not accurate about WHERE the
+hook Jobs get written from any more.
 
 ## Terminology
 
@@ -555,3 +570,64 @@ synthetic outcome directly at the relay with `chainId`/`prCreatedAt` set, confir
 values reached the `release-outcome-notify` PipelineRun and its `span` TaskRun, and
 confirmed via a direct Tempo query that the resulting span's real start time was exactly
 `prCreatedAt`, not `flowStartTime` - not just that the Pipeline completed successfully.
+
+## Outcome reporting, rebuilt (2026-08-17)
+
+`open-release-pr.yaml`'s 2026-08-16 migration to `<cluster>/<env>/values.yaml` (see the
+top-of-file note) retired the GitOps app-of-apps delivery mechanism above wholesale -
+including the outcome-hook Jobs it used to write, since they lived inside the same
+now-removed Application manifest. Everything downstream of the hook Jobs (the relay, the
+`release-outcome-*` Pipeline/Trigger/span, cluster-mapped DORA) stayed real code the
+whole time, just structurally unreachable with nothing calling it.
+
+**Design constraint that ruled out the obvious alternative**: could the dev cluster just
+read the upper cluster's `Application.status` directly instead of waiting for a push? No
+- that's exactly the "extend ArgoCD on the dev cluster to manage a remote cluster"
+approach rejected at the top of this doc, for the same reason: it would mean a
+dev-cluster-resident credential capable of touching the upper cluster, the blast-radius
+shape this platform's broker/impersonation model was built to avoid. The only sanctioned
+crossing stays a reviewed git commit (dev -> upper) plus a hook Job pushing over HTTP
+with a shared secret (upper -> dev, the relay) - never a live API call from dev to an
+upper cluster.
+
+**The fix: relocate the hook Jobs, not their trust model.** The two ArgoCD sync-hook
+Jobs (`PostSync`/`SyncFail`) are unchanged in shape and behavior from the "What feeds the
+relay" section above - same `catalog/lib/argocd-outcome-hook.sh` script, same
+`hook-delete-policy: BeforeHookCreation`, same env-var payload. What changed is who
+renders them:
+
+- **Before**: `open-release-pr.yaml` wrote a second, competing Application manifest
+  (`<gitopsApplicationsPath>/<app-name>-<env>.yaml`) purely to carry the hook Jobs
+  alongside it, race-prone against idp's own ApplicationSet-owned Application for the
+  same path.
+- **Now**: `idp-service-catalog/charts/idp-application` renders the hook Jobs itself
+  (`templates/release-tracking/hooks.yaml`+`rbac.yaml`), gated behind a `releaseTracking:`
+  values block that's `null` by default - see that chart's own `values.yaml` header.
+  They render as part of the SAME Application idp's tenant-onboarding `ApplicationSet`
+  already owns. No second writer, no race.
+
+`open-release-pr.yaml` patches that `releaseTracking:` block into the SAME
+`<cluster>/<env>/values.yaml` commit it already writes `rollout.image.*` into - well, a
+SECOND commit on the same PR branch, pushed right after the PR opens, for the same
+reason as before: `prUrl`/`prCreatedAt` don't exist until the PR does. `outcomeRelayURL`
+is resolved live from platform-cicd's OWN cluster-registry ConfigMap (`platform-system`)
+via a re-added, narrowly-scoped Role (`charts/platform-cicd-app/templates/clusters/
+read-registry-rbac.yaml`, get-only, this ConfigMap only) - `gitopsApplicationsPath`, the
+other field that ConfigMap used to carry, was dropped from the schema entirely since
+nothing writes an Application manifest from it any more.
+
+**Also fixed while rebuilding this**: the control-plane's own `clusters:` registry
+(`charts/platform-cicd-control-plane/values.yaml`) had gone back to empty (`[]`) at some
+point after platform-cicd's control plane moved onto `kind-dev` as its own, independent
+instance - confirmed live, not assumed
+(`clusters: []`, `data: null` on the real ConfigMap). Since `argocd-outcome-relay`'s own
+Deployment/RBAC/Service are all gated behind `if .Values.clusters`
+(`templates/clusters/argocd-outcome-relay.yaml`), the relay wasn't even deployed on
+`kind-dev` at all - a second, independent reason cluster-mapped outcome reporting had no
+working path, on top of the hook-Job removal. Re-populated with a real `kind-prod` entry
+to fix both at once.
+
+**Still manual, unchanged**: `platform-outcome-relay-token` still needs hand-provisioning
+per app namespace on the upper cluster (`hack/bootstrap-upper-cluster.sh`'s own
+instructions) - the deferred External Secrets Operator distribution noted below hasn't
+been built.

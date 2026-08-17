@@ -216,11 +216,6 @@ appSecretStores:
 # pipeline Tasks and the ArgoCD-outcome relay both resolve live against, rather than
 # being duplicated into every app's own Helm values - see that file's header for why.
 #
-# gitopsApplicationsPath: where this cluster's ArgoCD app-of-apps root Application
-# watches, relative to a tenant's own gitops repo root. Per-cluster, not per-app - every
-# app releasing onto this cluster gets a file under the same prefix, named by the app
-# (open-release-pr.yaml computes the full path).
-#
 # relaySecretName: name of a Secret (hand-created, same convention as platform-secrets -
 # see docs/secrets-management.md) in THIS namespace holding the shared bearer token the
 # outcome-reporting hook Jobs on THAT cluster present to the outcome relay (a copy of
@@ -236,9 +231,16 @@ appSecretStores:
 # can't resolve this cluster's in-cluster DNS name. Same-host podman reachability only
 # for now (docs/multi-cluster.md) - a genuinely remote cluster would need a real
 # ingress/DNS name here instead.
-clusters: []
-# clusters:
-#   - name: kind-prod
-#     gitopsApplicationsPath: clusters/kind-prod/applications
-#     relaySecretName: cluster-kind-prod-relay-token
-#     outcomeRelayURL: http://10.89.0.2:30880/outcome/kind-prod
+# Real entry, not just documentation, as of 2026-08-17: kind-prod is checkout-api's
+# real upper-env cluster (idp-service-catalog's ApplicationEnvironment.spec.cluster).
+# outcomeRelayURL's IP is dev-control-plane's own address on the shared podman `kind`
+# bridge network (`podman inspect dev-control-plane` - re-check this if the dev
+# cluster is ever recreated, podman does not guarantee the same IP survives that;
+# see docs/multi-cluster.md's cross-cluster-reachability section). This value
+# rendering .Values.clusters non-empty is also what turns on argocd-outcome-relay
+# itself (templates/clusters/argocd-outcome-relay.yaml's own `if .Values.clusters`) -
+# it was NOT deployed at all before this entry existed, confirmed live 2026-08-17.
+clusters:
+  - name: kind-prod
+    relaySecretName: cluster-kind-prod-relay-token
+    outcomeRelayURL: http://10.89.0.2:30880/outcome/kind-prod

@@ -36,16 +36,29 @@
 # side-mechanism), not just the "different physical cluster" case docs/multi-cluster.md
 # originally scoped it for.
 #
-# Real, disclosed follow-up gap this leaves open (deferred, not solved here): DORA
-# outcome metrics and the release-outcome Slack notification for these releases relied
-# entirely on the now-removed hook Jobs -> argocd-outcome-relay path (still real code,
-# see release-outcome-span.yaml/release-outcome-trigger.yaml, just structurally
-# unreachable now that nothing writes a hook Job). mark-release-pending.yaml's
-# same-cluster `kubectl annotate` mechanism doesn't cover this either - it targets an
-# Application object on THIS (dev) cluster, not one idp's tenant-onboarding
-# ApplicationSet creates on a remote upper cluster. Revisit once there's a real
-# idp-side outcome signal to wire this to (e.g. reading the ApplicationEnvironment XR's
-# own status) instead of platform-cicd re-deriving its own parallel one.
+# 2026-08-17: the DORA/Slack outcome-reporting gap disclosed above is rebuilt, not
+# left open any more - but relocated, not simply restored. The old design had THIS
+# Task write its own PostSync/SyncFail hook Jobs into a SECOND, competing Application
+# manifest (exactly the mechanism this file's 2026-08-16 note above describes
+# retiring). Rebuilding it the same way would just reintroduce that race. Instead:
+# idp-application's own Helm chart (idp-service-catalog/charts/idp-application) now
+# owns those two hook Jobs itself, rendered conditionally off a `releaseTracking:`
+# block in ITS values.yaml (see that chart's own header comment on the field) - so
+# they render as part of the SAME Application idp's ApplicationSet already owns, not
+# a second writer. This Task's only new responsibility is patching that block into
+# the SAME <cluster>/<env>/values.yaml commit it already writes rollout.image.* into
+# (well, a second commit on the same PR branch - prUrl/prCreatedAt don't exist until
+# the PR does, see below) - never a manifest of its own again. outcomeRelayURL is
+# resolved live from platform-cicd's OWN cluster-registry ConfigMap (a live lookup,
+# not duplicated into this app's values - see charts/platform-cicd-control-plane/
+# templates/clusters/cluster-registry.yaml's own header) via a narrowly-scoped,
+# get-only Role re-added for exactly this (charts/platform-cicd-app/templates/
+# clusters/read-registry-rbac.yaml) - the "only a reviewed git commit crosses from
+# dev to an upper cluster" boundary docs/multi-cluster.md's design discussion settled
+# on is unchanged; this Task still never calls the upper cluster's API directly, and
+# neither does anything on the dev cluster now read the upper cluster's live state -
+# the hook Jobs still push, over HTTP, with a per-app shared secret, exactly as
+# before.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -63,6 +76,15 @@ spec:
       description: The app repo's git-url - only its GitHub org/owner is used, to derive the gitops repo's owner.
     - name: app-name
       type: string
+    - name: app-namespace
+      type: string
+      default: ""
+      description: >-
+        This app's own platform-cicd namespace (the dev cluster) - rides into
+        idp-application's releaseTracking.appNamespace so release-outcome-trigger.yaml
+        can match the outcome CDEvent back to the right app's Trigger. NOT the same
+        thing as the release's own upper-env namespace (that's read live by the hook
+        Job itself, via the downward API - see idp-application's hooks.yaml).
     - name: git-revision
       type: string
     - name: env
@@ -84,16 +106,30 @@ spec:
         Threaded through from cicd.yaml's deploy.upperEnvironments object form
         ({ name: <env>, cluster: <cluster> }), not derived - this Task doesn't read
         idp's own cluster registry (a deliberately separate source of truth, see this
-        file's own 2026-08-16 header note).
+        file's own 2026-08-16 header note). Platform-cicd's OWN cluster registry
+        (charts/platform-cicd-control-plane's clusters:) IS read live by this Task,
+        though - just for outcomeRelayURL, see the 2026-08-17 header note.
+    - name: chain-id
+      type: string
+      default: ""
+      description: This flow's own chain-id (start-flow's result) - rides into releaseTracking.chainId for release-outcome-span.yaml's Tempo correlation. See this file's 2026-08-17 header note.
+    - name: flow-start-time
+      type: string
+      default: ""
+      description: This flow's own start time (start-flow's result) - rides into releaseTracking.flowStartTime, the DORA lead-time attribute carried on the eventual outcome span.
+    - name: config-json
+      type: string
+      default: "{}"
+      description: cicd.yaml's resolved content (resolve-notify-config's result) - rides into releaseTracking.configJsonB64 (base64, see this Task's own step below) so notify-slack can render the outcome message once the hook Job reports back.
   results:
     - name: pr-url
       description: URL of the opened (or already-open, on retry) release PR.
     - name: pr-created-at
       description: >-
-        Wall-clock time this Task's PR-creation API call actually returned. Currently
-        unconsumed (see this file's 2026-08-16 header note on the deferred DORA/Slack
-        outcome-reporting gap) - kept because it's a free byproduct of the PR-creation
-        call and whatever eventually replaces the outcome-reporting path will want it.
+        Wall-clock time this Task's PR-creation API call actually returned. Rides
+        into releaseTracking.prCreatedAt - the real start anchor for
+        release-outcome-span.yaml's own span, see that file's header. Was unconsumed
+        before 2026-08-17 - see this file's own 2026-08-16 header note.
   # Audience-bound projected ServiceAccount token for the shared broker's GitHub
   # token-minting endpoint - see catalog/lib/github-app.sh. Same pattern as
   # send-cdevent.yaml's broker-token volume, different audience/endpoint.
@@ -128,6 +164,14 @@ spec:
           value: $(params.env)
         - name: CLUSTER
           value: $(params.cluster)
+        - name: APP_NAMESPACE
+          value: $(params.app-namespace)
+        - name: CHAIN_ID
+          value: $(params.chain-id)
+        - name: FLOW_START_TIME
+          value: $(params.flow-start-time)
+        - name: CONFIG_JSON
+          value: $(params.config-json)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -228,8 +272,46 @@ spec:
         pr_url="$(jq -r '.html_url' <<<"${pr_response}")"
         # otel_now's own format (catalog/lib/otel.sh) - not otel_now itself, this
         # script doesn't source otel.sh and doesn't need the rest of it for one
-        # timestamp. Currently unconsumed - see this file's 2026-08-16 header note.
+        # timestamp.
         pr_created_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")"
+
+        # Second commit, same branch: release-tracking data for idp-application's own
+        # PostSync/SyncFail hook Jobs (idp-service-catalog/charts/idp-application/
+        # templates/release-tracking/) - deliberately AFTER the PR above, since
+        # pr_url/pr_created_at don't exist until it does. GitHub just shows this as
+        # one more commit already part of the same open PR, nothing to re-open - see
+        # this file's own 2026-08-17 header note.
+        #
+        # outcomeRelayURL is resolved live from platform-cicd's OWN cluster-registry
+        # ConfigMap (platform-system) - RBAC: charts/platform-cicd-app/templates/
+        # clusters/read-registry-rbac.yaml, get-only, this ConfigMap only.
+        registry_entry="$(kubectl get configmap cluster-registry -n platform-system -o jsonpath="{.data.${CLUSTER}}")"
+        if [[ -z "${registry_entry}" ]]; then
+          echo "error: cluster '${CLUSTER}' has no entry in the platform-cicd cluster-registry ConfigMap (platform-system, charts/platform-cicd-control-plane's clusters:) - can't resolve outcomeRelayURL, so release-tracking can't be wired up for this release. The PR above was still opened successfully." >&2
+          exit 1
+        fi
+        registry_relay_url="$(jq -r '.outcomeRelayURL' <<<"${registry_entry}")"
+
+        # Base64, not raw JSON - the one field here that can contain quotes/braces;
+        # base64 sidesteps any risk of yq mis-escaping it into the surrounding YAML.
+        # Only decoded at the very end, by catalog/lib/argocd-outcome-hook.sh, right
+        # before sending.
+        config_json_b64="$(printf '%s' "${CONFIG_JSON}" | base64 | tr -d '\n')"
+
+        yq -i -e "
+          .releaseTracking.relayUrl = \"${registry_relay_url}\" |
+          .releaseTracking.appNamespace = \"${APP_NAMESPACE}\" |
+          .releaseTracking.gitUrl = \"${GIT_URL}\" |
+          .releaseTracking.gitRevision = \"${GIT_REVISION}\" |
+          .releaseTracking.flowStartTime = \"${FLOW_START_TIME}\" |
+          .releaseTracking.chainId = \"${CHAIN_ID}\" |
+          .releaseTracking.prUrl = \"${pr_url}\" |
+          .releaseTracking.prCreatedAt = \"${pr_created_at}\" |
+          .releaseTracking.configJsonB64 = \"${config_json_b64}\"
+        " "${manifest}"
+        git add "${manifest}"
+        git commit --quiet -m "Add release-tracking outcome data for ${ENV} (see ${pr_url})"
+        git push --quiet "${clone_url}" "${branch}"
 
         echo "${pr_url}" | tee "$(results.pr-url.path)"
         echo -n "${pr_created_at}" | tee "$(results.pr-created-at.path)"
