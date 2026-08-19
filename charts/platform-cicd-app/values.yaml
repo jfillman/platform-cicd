@@ -73,12 +73,12 @@ pipelines: {}
 # array is no longer used.
 
 # Optional. Each entry pulls one key out of this Application's own idp-managed
-# Infisical project (see docs/admin/app-secrets.md) into an ExternalSecret-synced
-# app-secrets Kubernetes Secret. Empty by default - the ExternalSecret template only
-# renders when non-empty. Every secret declared here is this Application's OWN - the
-# backend store (rendered by the control-plane chart, see its own app-secret-stores.
-# yaml) points at that app's own idp-managed Infisical project, not a platform-cicd-
-# owned one, so nothing declared here needs planting twice.
+# Infisical project into an ExternalSecret-synced app-secrets Kubernetes Secret. Empty
+# by default - the ExternalSecret template only renders when non-empty. Every secret
+# declared here is this Application's OWN, read directly from the SAME
+# ClusterSecretStore idp's own NodeJSApplication XR already provisions for it (see
+# app-secrets-external-secret.yaml's own header) - nothing declared here needs
+# planting twice, and platform-cicd itself never owns or copies it.
 #
 # - name: slack-webhook-url  # key inside the synced Secret's data, and the secret's
 #                              # own name in Infisical (same key idp-application's own
@@ -86,6 +86,14 @@ pipelines: {}
 #   key: slack-webhook-url    # optional - only needed if the two differ (defaults to
 #                              # `name`)
 secrets: []
+
+# The dev cluster's name, matching idp-service-catalog's own SecretStore XRD naming
+# convention (<appName>-<cluster>) - app-secrets-external-secret.yaml uses this to
+# compute this Application's own idp-managed ClusterSecretStore name directly
+# (<appName>-<devClusterName>). Must match whatever idp's NodeJSApplication XR actually
+# used for this Application's `cluster` field (today, always kind-dev - this
+# platform's CI stays on the dev cluster always).
+devClusterName: kind-dev
 
 # Platform-wide constants every Application install shares (not per-app identity, so
 # kept outside platformIdentity). Defaults to this repo's own published image (real,

@@ -50,32 +50,43 @@ Infisical directly (UI or API), never through this chart or committed to this re
 this changes nothing about who creates real credential material or how, only where it
 lives and how every chart consumes it.
 
-## Application-owned secrets: each app's own idp-managed project, never platform-cicd's
+## Application-owned secrets: each app's own idp-managed ClusterSecretStore, directly
 
 An Application's own secrets (Slack webhook, SAST scan credentials, ...) - see
 [app-secrets.md](app-secrets.md) - come from THAT Application's own idp-managed
-Infisical project (`<appName>-<devClusterName>`, provisioned by idp's
-`NodeJSApplication` XR), via a dedicated `ClusterSecretStore` per Application
-(control-plane's own `appSecretStores` values list) that mirrors idp's own store for
-that app field for field. Never a platform-cicd-owned project - app secrets are the
-app owner's to manage, once, in the one place idp already gives every onboarded app.
+`ClusterSecretStore` (`<appName>-<devClusterName>`, e.g. `checkout-api-kind-dev`,
+provisioned by idp's `NodeJSApplication` XR) - referenced **directly, by name**, from
+`platform-cicd-app`'s own `app-secrets-external-secret.yaml`. No platform-cicd-rendered
+store in between. Never a platform-cicd-owned project either - app secrets are the app
+owner's to manage, once, in the one place idp already gives every onboarded app.
 
-**2026-08-19 correction, same day as the initial migration**: the first pass at this
-put every Application's secrets in a platform-cicd-owned `platform-cicd-kind-dev`
-project instead, path-scoped per app (`/<type>/<appName>/`) - a real design mistake,
-not a style choice. It meant `slack-webhook-url` specifically needed planting TWICE:
-once there, and once in the app's own project, where `idp-application`'s own AI-triage
-Slack notifications already read it from. Fixed by pointing the whole per-Application
-mechanism at the app's own project - see `app-secret-stores.yaml`'s own header for the
-full story. `platform-cicd-kind-dev` now holds only genuinely platform-wide material
+**Two corrections to this mechanism, both made the same day as the initial
+migration**:
+
+1. The first pass put every Application's secrets in a platform-cicd-owned
+   `platform-cicd-kind-dev` project instead, path-scoped per app
+   (`/<type>/<appName>/`) - a real design mistake. It meant `slack-webhook-url`
+   specifically needed planting TWICE: once there, and once in the app's own project,
+   where `idp-application`'s own AI-triage Slack notifications already read it from.
+2. The immediate fix still rendered a platform-cicd-owned `ClusterSecretStore`
+   (`<type>-<appName>-secret-store`) per app, just repointed at the app's own project -
+   a real, live-caught redundancy: `kubectl get clustersecretstore checkout-api-kind-dev
+   app-checkout-api-secret-store -o yaml` showed byte-identical `spec.provider`
+   blocks, except idp's own store also carried a `namespaceRegexes` scope the mirror
+   never had - the mirror was strictly WIDER than the original, a real least-privilege
+   gap, not just duplication. Fixed by deleting the mirror entirely
+   (`app-secret-stores.yaml`, and the `appSecretStores` values list) and referencing
+   idp's object directly.
+
+`platform-cicd-kind-dev` now holds only genuinely platform-wide material
 (`registry-credentials`, `github-app-creds`, relay tokens) - never any app's own
-secret.
+secret, and never a second copy of an object idp already owns.
 
 This does mean an Application's CI secrets require that Application to have been
 onboarded through idp's `NodeJSApplication` XR first (a real, accepted coupling, not
 true for every platform-cicd tenant today) - an app that hasn't just gets a
-not-ready `ClusterSecretStore`/`ExternalSecret`, the same graceful-degrade shape every
-other "not configured yet" case in this platform already tolerates.
+not-ready `ExternalSecret` (no store to reference at all), the same graceful-degrade
+shape every other "not configured yet" case in this platform already tolerates.
 
 Before Infisical, this worked off each Application's own `<type>-<appName>-dev`
 namespace, treated as an ad hoc vault (a real `Secret` created there by hand) - CI/

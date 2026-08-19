@@ -1,9 +1,10 @@
 # templates/secretstore/infisical-project.yaml (docs/admin/secrets-management.md)
 #
-# The control plane's own Infisical project - platform-wide operational secrets
-# (registry-credentials, github-app-creds, per-cluster relay tokens) and every
-# onboarded app's CI secrets (secretsPath-scoped, see app-secret-stores.yaml) all live
-# here, under ONE project. Deliberately NOT one of idp-service-catalog's own
+# The control plane's own Infisical project - genuinely platform-wide operational
+# secrets ONLY (registry-credentials, github-app-creds, per-cluster relay tokens), never
+# any Application's own secrets (those come from that Application's own idp-managed
+# project instead - see docs/admin/app-secrets.md; a real, since-corrected mistake
+# briefly put them here too). Deliberately NOT one of idp-service-catalog's own
 # per-(app,cluster) projects (slug <appName>-<cluster>, created by its SecretStore
 # XRD/Composition) - this control plane isn't an "app" in that sense, and reusing an
 # app's own project would tie this platform's operational secrets to whichever app
