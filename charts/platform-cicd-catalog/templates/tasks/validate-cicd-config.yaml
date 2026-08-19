@@ -46,7 +46,7 @@ spec:
       description: "governance.sbom - 'true'/'false'."
   steps:
     - name: validate
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       script: |
         #!/usr/bin/env bash

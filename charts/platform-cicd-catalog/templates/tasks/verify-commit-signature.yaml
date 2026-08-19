@@ -48,7 +48,7 @@ spec:
       description: Used to find <app-name>-policy-config in this Application's own namespace (charts/platform-cicd-app/templates/governance/policy-config.yaml).
   steps:
     - name: verify
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: REPO_URL

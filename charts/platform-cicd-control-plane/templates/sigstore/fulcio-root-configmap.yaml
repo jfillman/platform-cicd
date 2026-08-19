@@ -22,7 +22,7 @@ metadata:
   namespace: platform-catalog
 data:
   cert.pem: |
-    {{- .Values.fulcio.rootCert | trim | nindent 4 }}
+    {{- required "fulcio.rootCert must be set - see hack/generate-cluster-values.sh (docs/admin/installation.md)" .Values.fulcio.rootCert | trim | nindent 4 }}
 ---
 # Broad but narrowly-scoped by resourceName: this ConfigMap holds genuinely public data,
 # so granting read to every ServiceAccount cluster-wide (rather than enumerating each

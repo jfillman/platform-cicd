@@ -43,7 +43,7 @@ spec:
     - name: image-ref
   steps:
     - name: resolve
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       script: |
         #!/usr/bin/env bash

@@ -61,7 +61,7 @@ spec:
         name: onboarding-templates-gitops-repo
   steps:
     - name: deliver-app-repo-files
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent
       volumeMounts:
         - name: github-token-broker-token
@@ -388,7 +388,7 @@ spec:
         fi
 
     - name: deliver-gitops-repo-files
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent
       volumeMounts:
         - name: github-token-broker-token

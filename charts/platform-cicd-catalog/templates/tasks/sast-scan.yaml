@@ -115,7 +115,7 @@ spec:
     # Runs whether scan passed or failed, because scan has onError: continue (unlike
     # build-source/run-tests' emit-span, which only runs on success).
     - name: emit-span
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: FLOW_TRACEPARENT
@@ -149,7 +149,7 @@ spec:
     # pipeline-level `finally` step - a `finally` task referencing a failed task's
     # result gets skipped entirely (see notify-slack.yaml), so it has to live here.
     - name: notify-slack
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: slack-webhook

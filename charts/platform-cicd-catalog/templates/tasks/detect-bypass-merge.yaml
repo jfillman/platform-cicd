@@ -46,7 +46,7 @@ spec:
         optional: true
   steps:
     - name: check
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: github-token-broker-token

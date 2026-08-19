@@ -31,7 +31,7 @@ spec:
       description: Set only if the unit-test step itself succeeded (or tests were disabled) - see emit-span's own header comment for the honest limit a real test failure implies.
   steps:
     - name: resolve-test-command
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
         - name: command
@@ -95,7 +95,7 @@ spec:
     # for the full rationale (a failing test halts the TaskRun before this step runs, so
     # a failed unit-test gets no span - an honest, documented gap, not a silent one).
     - name: emit-span
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: FLOW_TRACEPARENT

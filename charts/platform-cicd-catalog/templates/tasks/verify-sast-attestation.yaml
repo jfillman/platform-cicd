@@ -38,7 +38,7 @@ spec:
       description: Full image reference (repo:tag) whose build attestation records the sast-scan outcome to check.
   steps:
     - name: verify
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: IMAGE_REF

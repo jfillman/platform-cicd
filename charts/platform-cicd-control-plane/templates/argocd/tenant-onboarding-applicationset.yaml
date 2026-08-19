@@ -22,8 +22,11 @@
 #
 # $tenantsRepoUrl/$tenantOnboardingSetName fall back to a convention derived from
 # .Values.clusterName when not explicitly set - see values.yaml's comments on
-# clusterName/tenantsRepoUrl/tenantOnboardingApplicationSetName.
-{{- $tenantsRepoUrl := .Values.tenantsRepoUrl | default (printf "https://github.com/jfillman/platform-cicd-%s-tenants.git" .Values.clusterName) }}
+# clusterName/tenantsRepoUrl/tenantOnboardingApplicationSetName. The derived URL's
+# owner comes from platformCicdRepoUrl (via the githubOwner helper), not a hardcoded
+# org, so this convention works for any fork/deployment of this chart.
+{{- $githubOwner := include "platform-cicd-control-plane.githubOwner" . }}
+{{- $tenantsRepoUrl := .Values.tenantsRepoUrl | default (printf "https://github.com/%s/platform-cicd-%s-tenants.git" $githubOwner .Values.clusterName) }}
 {{- $tenantOnboardingSetName := .Values.tenantOnboardingApplicationSetName | default "platform-cicd-tenant-onboarding" }}
 #
 # Source 0 renders straight from this git repo at main HEAD, not the OCI chart
@@ -78,7 +81,7 @@ spec:
     spec:
       project: platform-onboarding
       sources:
-        - repoURL: {{ .Values.platformCicdRepoUrl }}
+        - repoURL: {{ required "platformCicdRepoUrl must be set" .Values.platformCicdRepoUrl }}
           targetRevision: main
           path: charts/platform-cicd-app
           helm:

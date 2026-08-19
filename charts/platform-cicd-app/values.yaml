@@ -11,7 +11,7 @@
 #
 # Non-platformIdentity defaults below mirror schemas/cicd.schema.json's own defaults, so
 # `helm template`/`helm lint` work standalone without a real cicd.yaml (see
-# docs/catalog-versioning.md's fixture-matrix testing).
+# docs/admin/catalog-versioning.md's fixture-matrix testing).
 
 build:
   agent: nodejs-20
@@ -50,10 +50,6 @@ notifications:
   slack:
     enabled: false
 
-onboarding:
-  sync:
-    enabled: true
-
 # Optional named pipeline flows. Each entry defines a root trigger plus an ordered list
 # of stages (build -> deploy -> test -> release) without hand-writing Tekton YAML.
 #
@@ -77,24 +73,31 @@ pipelines: {}
 # array is no longer used.
 
 # Optional. Each entry pulls one key out of this Application's own backend secret store
-# into an ExternalSecret-synced app-secrets Kubernetes Secret (see docs/app-secrets.md).
-# Empty by default - the SecretStore/ExternalSecret templates only render when non-empty.
+# into an ExternalSecret-synced app-secrets Kubernetes Secret (see
+# docs/admin/app-secrets.md). Empty by default - the SecretStore/ExternalSecret
+# templates only render when non-empty.
+#
+# - name: SLACK_WEBHOOK_URL   # key inside the synced Secret's data, and env var name
+#                              # steps typically mount it under
+#   key: slack-webhook-url    # optional - the key's actual name in the backend Secret,
+#                              # if different from `name` (defaults to `name`)
 secrets: []
 
 # Backend secret store location: a Kubernetes Secret in this Application's own dev
 # namespace (<type>-<app-name>-dev). The ClusterSecretStore pointed at that namespace is
 # rendered by the control-plane chart, not this one - this value only names the backend
-# Secret object this chart's ExternalSecret reads from. See docs/app-secrets.md.
+# Secret object this chart's ExternalSecret reads from. See docs/admin/app-secrets.md.
 appSecretStore:
   secretName: app-secrets    # the one backend Secret in <type>-<app-name>-dev, holding every key any cicd.yaml declares under secrets:
 
 # Platform-wide constants every Application install shares (not per-app identity, so
-# kept outside platformIdentity).
+# kept outside platformIdentity). Defaults to this repo's own published image (real,
+# public, working) - override if you've built and published your own copy.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
 # Must match charts/platform-cicd-control-plane/values.yaml's secretStore.name/kind -
 # ClusterSecretStore is cluster-scoped, so this is a cross-chart reference by name. See
-# docs/secrets-management.md.
+# docs/admin/secrets-management.md.
 secretStore:
   name: platform-secret-store
   kind: ClusterSecretStore
@@ -103,7 +106,7 @@ secretStore:
 # `-f platform-identity.yaml`. Left empty rather than a fake example so an accidental
 # install without that file fails loudly instead of deploying to a plausible-looking
 # wrong place. catalogNamespace may be overridden alone, e.g. for a canary Application
-# pointed at platform-catalog-canary (docs/catalog-versioning.md).
+# pointed at platform-catalog-canary (docs/admin/catalog-versioning.md).
 #
 # No `tenantNamespace` field - the Application's namespace is always computed from
 # type+appName via _helpers.tpl's namespace/envNamespace helpers, so it can't drift from

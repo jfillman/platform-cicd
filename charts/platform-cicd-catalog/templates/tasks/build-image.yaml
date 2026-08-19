@@ -73,7 +73,7 @@ spec:
             path: config.json
   steps:
     - name: resolve-build-config
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
         - name: dockerfile-path
@@ -174,7 +174,7 @@ spec:
     # succeeded (a failed build-and-push halts the TaskRun before this step runs) - same
     # honest, documented gap as build-source.yaml/run-tests.yaml's own emit-span steps.
     - name: emit-image-ref-and-span
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: IMAGE_REF

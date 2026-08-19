@@ -50,7 +50,7 @@ spec:
       description: When this release's PR was created - the real start-time for this span. See header for why, not flow-start-time.
   steps:
     - name: send-span
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT

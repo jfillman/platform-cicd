@@ -223,9 +223,9 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
 
 ## Access
 
-`kind-observe` has no ingress/DNS (an already-documented platform gap), so there's no
-clickable preview URL to post as a PR comment - access is `kubectl port-forward` into the
-PR's namespace, same as every other environment on this cluster. Note the Service name
+This platform's clusters have no ingress/DNS by default (an already-documented gap), so
+there's no clickable preview URL to post as a PR comment - access is
+`kubectl port-forward` into the PR's namespace, same as every other environment. Note the Service name
 also gets the `-{{.number}}` suffix (nameSuffix applies normally to it, unlike Namespace):
 ```
 kubectl port-forward -n platform-cicd-demo-pr-<number> svc/nodejs-demo-app-<number> 8080:80

@@ -7,8 +7,8 @@
 # - replicas: 1, trimmed resources (100Mi/50m) - matches Fulcio's own CI test's reduction
 #   from prod defaults; this is a single-org dev/test platform on a memory-constrained
 #   cluster, not an HA target.
-# - ClusterIP, not LoadBalancer - kind-observe has no LoadBalancer controller and nothing
-#   outside the cluster needs to reach Fulcio.
+# - ClusterIP, not LoadBalancer - this platform's clusters have no LoadBalancer
+#   controller by default, and nothing outside the cluster needs to reach Fulcio.
 # FULCIO_SERVE_GCP_PRIVATE_CA_PARENT/the "private-ca" ConfigMap from upstream's manifest
 # are googleca-specific and omitted - irrelevant to the fileca backend used here.
 apiVersion: apps/v1

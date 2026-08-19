@@ -35,6 +35,6 @@ data:
         client-id: "sigstore"
         type: "kubernetes"
         ca-cert: |
-          {{- .Values.fulcio.issuerCACert | trim | nindent 10 }}
+          {{- required "fulcio.issuerCACert must be set - see hack/generate-cluster-values.sh (docs/admin/installation.md)" .Values.fulcio.issuerCACert | trim | nindent 10 }}
         # kube-root-ca.crt content as of implementation time - needs refreshing if the
         # cluster's serving CA is ever rotated (accepted maintenance burden of inlining).

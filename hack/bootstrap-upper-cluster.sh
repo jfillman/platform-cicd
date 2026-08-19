@@ -50,8 +50,8 @@ fi
 
 log "Cross-cluster reachability (informational, verified once live)"
 echo "  podman's kind provider puts every kind cluster's node container on one shared"
-echo "  bridge network by default - kind-observe and kind-prod's nodes reach each other"
-echo "  directly by container IP, no 'podman network connect' needed. A NodePort Service"
+echo "  bridge network by default - the dev cluster and kind-prod's nodes reach each"
+echo "  other directly by container IP, no 'podman network connect' needed. A NodePort Service"
 echo "  on either cluster is reachable from the other's pods on the same basis. See"
 echo "  docs/admin/multi-cluster.md."
 

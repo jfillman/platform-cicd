@@ -21,7 +21,7 @@ metadata:
     {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
-  image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+  image: {{ .Values.toolboxImage }}
   params:
     - name: name
       type: string

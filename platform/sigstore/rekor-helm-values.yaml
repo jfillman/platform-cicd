@@ -6,9 +6,10 @@
 # via a createtree Job - confirmed live from the chart's own real values.yaml, not
 # assumed. No manual tree-ID creation, no separate MySQL setup needed.
 #
-# Only ingress is overridden here - kind-observe has no ingress controller/LoadBalancer
-# (confirmed, an already-documented gap elsewhere in this platform), and nothing outside
-# the cluster needs to reach Rekor anyway, matching Fulcio's own ClusterIP-only pattern.
+# Only ingress is overridden here - this platform's clusters have no ingress
+# controller/LoadBalancer by default (an already-documented gap elsewhere), and nothing
+# outside the cluster needs to reach Rekor anyway, matching Fulcio's own
+# ClusterIP-only pattern.
 #
 # Resource limits below were added after the first deploy attempt genuinely destabilized
 # the cluster twice - live-confirmed via `docker stats`, not guessed: MySQL + Trillian's

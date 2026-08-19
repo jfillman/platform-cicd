@@ -55,7 +55,6 @@ RBAC, supply chain signing, secrets, multi-cluster trust boundaries - see
 ```
 catalog/          shared Tekton catalog - Pipelines, Tasks, StepActions, bash lib, toolbox image
 platform/broker/   the internal CDEvents relay: EventListener + TokenReview interceptor (Go)
-observability/     kind-observe-specific patches (ServiceMonitor, OTel Collector values)
 schemas/           cicd.schema.json - the developer-facing config contract
 charts/            platform-cicd-control-plane, platform-cicd-catalog, platform-cicd-app
 hack/              cluster bootstrap - see docs/admin/installation.md

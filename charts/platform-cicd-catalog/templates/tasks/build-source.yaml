@@ -55,7 +55,7 @@ spec:
       description: Set only if run-build-script's real work succeeded - see emit-span's own header comment for the honest limit this implies.
   steps:
     - name: resolve-build-script-path
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
         - name: build-script-path
@@ -165,7 +165,7 @@ spec:
     # gap as clone-repo not being instrumented, see docs/tracing.md). Tekton's own
     # TaskRun timestamps still show that a failure happened, just not as a Tempo span.
     - name: emit-span
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: FLOW_TRACEPARENT

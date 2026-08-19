@@ -25,7 +25,7 @@ metadata:
     platform.io/catalog: "true"
     platform.io/stub: "true"
 spec:
-  image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+  image: {{ .Values.toolboxImage }}
   params:
     - name: gate-name
       type: string

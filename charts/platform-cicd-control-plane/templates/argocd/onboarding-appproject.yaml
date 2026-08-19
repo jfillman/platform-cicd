@@ -23,12 +23,14 @@ spec:
     tenant registered under tenants/*/identity.yaml in this repo. Broader than any
     single tenant's own AppProject by design - see this file's own header comment.
   sourceRepos:
-    - {{ .Values.platformCicdRepoUrl }}
+    - {{ required "platformCicdRepoUrl must be set" .Values.platformCicdRepoUrl }}
     # Any tenant app repo under this org - each generated Application reads cicd.yaml
     # live from platformIdentity.appRepoUrl, so a fixed list can't keep pace with new
     # tenants. See tenant-onboarding-applicationset.yaml for why merging a
     # developer-controlled values file into the same Application as platformIdentity is safe.
-    - https://github.com/jfillman/*
+    # Owner derived from platformCicdRepoUrl (see _helpers.tpl's githubOwner helper),
+    # not hardcoded - this org is whoever's actually running this chart.
+    - https://github.com/{{ include "platform-cicd-control-plane.githubOwner" . }}/*
   destinations:
     - namespace: argocd
       server: https://kubernetes.default.svc

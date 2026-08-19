@@ -38,7 +38,7 @@ spec:
       value: $(steps.check-and-start.results.chain-id)
   steps:
     - name: check-and-start
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent
       results:
         - name: traceparent

@@ -1,8 +1,7 @@
 # Multi-cluster releases + the ArgoCD feedback loop
 
-Phase 3 item 4. `build`/`test`/`deploy` stay on the dev cluster (`kind-observe`) always -
-this doc is only about where `release` promotions land and how their outcome gets back
-to the dev cluster's broker.
+`build`/`test`/`deploy` stay on the dev cluster always - this doc is only about where
+`release` promotions land and how their outcome gets back to the dev cluster's broker.
 
 **2026-08-16: the GitOps app-of-apps delivery mechanism this doc describes below (the
 Application manifest `open-release-pr.yaml` used to write into `gitopsApplicationsPath`,

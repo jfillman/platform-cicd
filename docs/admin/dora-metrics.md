@@ -193,10 +193,12 @@ Application's ArgoCD Application object, no other resource type.
 - Grafana: "CI/CD Platform - DORA Metrics" dashboard (`dora.json`), same
   `$app_namespace`/`$app` template-variable pattern as `pipelines-overview.json`.
 - A standalone `ServiceMonitor` (`charts/platform-cicd-control-plane/templates/dora-exporter/servicemonitor.yaml`)
-  registers the scrape target - no Helm-chart wiring needed, since kind-observe's
-  existing Prometheus CR has empty `serviceMonitorSelector`/`serviceMonitorNamespaceSelector`
-  (matches everything cluster-wide), the same precedent already established for Tekton's
-  own controller metrics. **A real bug caught live here**: `ServiceMonitor.spec.selector`
+  registers the scrape target - no Helm-chart wiring needed, since every real
+  Prometheus CR this platform has run against has empty
+  `serviceMonitorSelector`/`serviceMonitorNamespaceSelector` (matches everything
+  cluster-wide), the same precedent already established for Tekton's own controller
+  metrics (`gitops-cluster-dev/50-platform-cicd/tekton-operator/tekton-servicemonitor.yaml`).
+  **A real bug caught live here**: `ServiceMonitor.spec.selector`
   matches against the target `Service`'s own `metadata.labels`, not its
   `spec.selector` (which only selects the *pods* it fronts) - the first version of
   `deployment.yaml` set `spec.selector: {app: dora-exporter}` but never labeled the
@@ -208,7 +210,6 @@ Application's ArgoCD Application object, no other resource type.
   Fixed by adding `metadata.labels: {app: dora-exporter}` to the `Service` - confirmed
   live afterward via `up{job="dora-exporter"} == 1` and real `dora_*` values flowing
   through Grafana's own datasource proxy, not just raw Prometheus.
-  own controller metrics (`observability/kind-observe/tekton-servicemonitor.yaml`).
 
 ## Verification
 

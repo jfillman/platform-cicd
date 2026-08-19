@@ -62,7 +62,7 @@ spec:
               expirationSeconds: 600
   steps:
     - name: generate-and-attest
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: registry-credentials

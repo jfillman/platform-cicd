@@ -15,7 +15,7 @@ metadata:
     {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
 spec:
-  image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+  image: {{ .Values.toolboxImage }}
   results:
     - name: traceparent
       description: W3C traceparent of the flow-root span. Thread through every subsequent Task param and into the CDEvent payload - see docs/tracing.md.

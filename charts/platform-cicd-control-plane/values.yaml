@@ -3,119 +3,87 @@
 # The shared toolbox image every hook Job / bash-based Task in this platform uses -
 # kept as one value here (rather than hardcoded per-file) so a version bump is a single
 # values change, matching how catalog/toolbox/Dockerfile is already versioned separately
-# from the code that consumes it.
+# from the code that consumes it. Same value/default as charts/platform-cicd-catalog's
+# own toolboxImage - kept in sync deliberately, not duplicated by accident. Defaults to
+# this repo's own published image (real, public, working) - override if you've built
+# and published your own copy.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
 # Same field, same default, same reasoning as charts/platform-cicd-catalog/values.yaml's
-# own tektonChainsNamespace comment (2026-08-16) - kept in sync across both charts
-# deliberately, not duplicated by accident. Consumed by templates/hooks/
-# chains-config-patch-job.yaml here.
-tektonChainsNamespace: tekton-chains
+# own tektonChainsNamespace comment - kept in sync across both charts deliberately, not
+# duplicated by accident. Consumed by templates/hooks/chains-config-patch-job.yaml here.
+# Defaults to tektoncd/operator's single-targetNamespace convention (see
+# gitops-cluster-dev/50-platform-cicd/tekton-operator/) - the sole install path now.
+tektonChainsNamespace: tekton-pipelines
 
 # See templates/broker/interceptor.yaml's own header comment on its Namespace resource
-# for the full reasoning (2026-08-15) - true keeps kind-observe's existing, already-
-# working behavior unchanged.
-selfManageNamespace: true
+# for the full reasoning. Defaults false: every cluster installs via an ArgoCD
+# Application with CreateNamespace=true (see docs/admin/installation.md), which owns
+# namespace creation - this chart's own Namespace resource would conflict with that.
+selfManageNamespace: false
 
 # Real registry-published image, same reasoning as toolboxImage above - see
-# templates/dora-exporter/deployment.yaml's own comment for the gap this closes
-# (2026-08-15).
+# templates/dora-exporter/deployment.yaml's own comment for the gap this closes.
 doraExporterImage: ghcr.io/jfillman/platform-cicd-dora-exporter:latest
 
 # This platform's own repo - the tenant-onboarding ApplicationSet (templates/argocd/
 # tenant-onboarding-applicationset.yaml) reads tenants/*.yaml from here (its generator
-# source) AND renders the platform-cicd-app chart straight from here at main HEAD.
+# source) AND renders the platform-cicd-app chart straight from here at main HEAD. Also
+# the source `githubOwner` (see _helpers.tpl) derives from - required, no default, so
+# this chart never silently points at someone else's fork.
 #
 # .github/workflows/app-chart-ci.yaml's `publish` job also pushes that same chart to
-# ghcr.io/jfillman/charts/platform-cicd-app on every push - real, working, verified
-# live - but the ApplicationSet doesn't pull from there (yet): ArgoCD's semver-range
-# targetRevision resolution genuinely doesn't work against OCI Helm sources (confirmed
-# live, argoproj/argo-cd#9528 - not a config mistake). See that ApplicationSet's own
-# header for the full story and why this is folded into the already-flagged
-# proper-release-workflow follow-up instead of worked around here.
-platformCicdRepoUrl: https://github.com/jfillman/platform-cicd.git
+# ghcr.io/<owner>/charts/platform-cicd-app on every push - real, working, verified live
+# on this repo's own fork - but the ApplicationSet doesn't pull from there (yet):
+# ArgoCD's semver-range targetRevision resolution genuinely doesn't work against OCI
+# Helm sources (confirmed live, argoproj/argo-cd#9528 - not a config mistake). See that
+# ApplicationSet's own header for the full story and why this is folded into the
+# already-flagged proper-release-workflow follow-up instead of worked around here.
+platformCicdRepoUrl: ""
 
-# Cluster-agnostic derivation input (2026-08-16, feedback_cluster_agnostic_idp memory):
-# tenantsRepoUrl/tenantOnboardingApplicationSetName below are DERIVED from this by
-# convention for any cluster that doesn't explicitly override them - see
-# templates/argocd/tenant-onboarding-applicationset.yaml's own header for the exact
-# `default` expressions. Set this to the cluster's own name (e.g. "kind-dev") for any
-# NEW cluster instead of hand-typing both derived fields separately.
-#
-# kind-observe deliberately does NOT set this - it predates the convention and keeps
-# its own historical, explicitly-overridden values (hack/values-kind-observe.yaml) as
-# literal strings instead, so it's provably zero-behavior-change rather than relying on
-# derivation happening to produce the same output.
+# Cluster-agnostic derivation input: tenantsRepoUrl/tenantOnboardingApplicationSetName
+# below are DERIVED from this by convention for any cluster that doesn't explicitly
+# override them - see templates/argocd/tenant-onboarding-applicationset.yaml's own
+# header for the exact `default` expressions. Set this to the cluster's own name (e.g.
+# "kind-dev") for any new cluster instead of hand-typing both derived fields
+# separately.
 clusterName: ""
 
 # Which repo/path the tenant-onboarding ApplicationSet's generator scans for
 # tenants/*/identity.yaml (templates/argocd/tenant-onboarding-applicationset.yaml) and
 # which templates/argocd/onboarding-appproject.yaml allowlists as a sourceRepo.
-# Deliberately separate from platformCicdRepoUrl above (2026-08-15, installing a second
-# instance of this chart on kind-dev): that value also drives the SAME ApplicationSet's
-# chart-source repoURL, which legitimately should stay this platform's one shared repo
-# on every cluster this chart is installed on - but the tenant LIST must not, or a
-# second cluster's install would onboard the first cluster's real, live tenants too.
+# Deliberately separate from platformCicdRepoUrl above: that value also drives the SAME
+# ApplicationSet's chart-source repoURL, which legitimately should stay this
+# platform's one shared repo on every cluster this chart is installed on - but the
+# tenant LIST must not, or a second cluster's install would onboard the first
+# cluster's real, live tenants too.
 #
-# Empty by default (2026-08-16) - derived from clusterName above
+# Empty by default - derived from clusterName above
 # (https://github.com/jfillman/platform-cicd-<clusterName>-tenants.git) unless
-# explicitly set here, which is what every cluster except kind-observe should now rely
-# on rather than hand-typing this URL per cluster.
+# explicitly set here.
 tenantsRepoUrl: ""
 
 # See templates/argocd/tenant-onboarding-applicationset.yaml's own header comment for
 # the real name collision this guards against and why it's a value, not an in-place
-# rename (2026-08-15).
+# rename.
 #
-# Empty by default (2026-08-16) - derived as "platform-cicd-tenant-onboarding" unless
-# explicitly set here. kind-observe is the one deliberate exception, explicitly
-# overridden to the original bare "tenant-onboarding" so it needs zero cutover, ever,
-# for this fix (see hack/values-kind-observe.yaml) - every other cluster gets the
-# collision-safe name automatically now, not by remembering to type it.
+# Empty by default - derived as "platform-cicd-tenant-onboarding" unless explicitly
+# set here.
 tenantOnboardingApplicationSetName: ""
 
 # Genuinely cluster-specific Fulcio material - see templates/sigstore/fulcio-config.yaml
 # and templates/sigstore/fulcio-root-configmap.yaml for what consumes each key and why.
-# Both default to kind-observe's own current values (read/generated live against that
-# cluster), so a plain `helm upgrade` with no override is byte-identical to before these
-# became values instead of hardcoded template literals (2026-08-15, installing a second
-# instance of this chart on kind-dev).
+# No default: both are `required` in the templates that consume them, so a fresh
+# install with no override fails fast and loud instead of silently deploying a broken
+# (empty) trust root. Generate real values with hack/generate-cluster-values.sh - see
+# docs/admin/installation.md - never hand-typed, never copied from another cluster.
 fulcio:
-  # kind-observe's own kube-root-ca.crt "ca.crt" content - lets Fulcio trust a
+  # This cluster's own kube-root-ca.crt "ca.crt" content - lets Fulcio trust a
   # `type: kubernetes` OIDC token by trusting THIS cluster's own API server TLS cert.
-  issuerCACert: |
-    -----BEGIN CERTIFICATE-----
-    MIIDBTCCAe2gAwIBAgIISJN8q/q5nzcwDQYJKoZIhvcNAQELBQAwFTETMBEGA1UE
-    AxMKa3ViZXJuZXRlczAeFw0yNjA3MjYwNDU0NDlaFw0zNjA3MjMwNDU5NDlaMBUx
-    EzARBgNVBAMTCmt1YmVybmV0ZXMwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
-    AoIBAQDdm201tC8gV9yRwMuSNpMI1HHQcopQ3JxQOGVytveusGuah3PVzYoIL2PY
-    Jh2GaqHgXCIN40sKQ5hLscb0qIBNbY4JDZRjLnqMtS0iVO1yEGPleTmdYuM7Xln6
-    KMwBSqZ8HmgAOZfTxXq4wBbwqPqK5TLkultqpBnlawv4rHa+jxOr1FOLr4crlTyi
-    UumIjrtMLhogg1WPGcLgViqbADrqwkmjMEPNNTXoX25MVsr7GtAz/8YF97i5qOF4
-    lJbh1dRnuzlFTp0BK4Z0k5f8Hmq66Fb7tJtmus/+2AO0k3rRYSdNI19CV2oHbzD4
-    3MU2rE5tExil8Sc6AiPv3uW5L34NAgMBAAGjWTBXMA4GA1UdDwEB/wQEAwICpDAP
-    BgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBQyZd/TnuK5G8MQP0OleM3Wx1wpojAV
-    BgNVHREEDjAMggprdWJlcm5ldGVzMA0GCSqGSIb3DQEBCwUAA4IBAQCJRM+EwOOV
-    phG74EHuTSRrHYu79EXcOwMvcRmseY4HOvOuuMm1//H1Q14re4voL4etYjQga81I
-    /T8X/rc0NeFqV2eqRYeIVFZ4++9vtsGJogruRJtI6iVzagHzml8AO8deCFseScBn
-    wq+yXl5zPqkMLOXJE1s40uJDyeBE8CTw9Zdlmc18BUhzkJUCLdBJLdLe3W2ToFkN
-    8LXTXpVL8H0+xnJ/y8bYJi5NrqBmXz2WdOpk6oJXG8K0Mz9wYVMjrZ7NXCKCU8Hi
-    hYieRNWCXH75a+DradRdZb/8ImOfh/nd4FatuE+EqAMwInns9MiJx+AZ1zuYZGXO
-    ptRXZRv3U7Ip
-    -----END CERTIFICATE-----
+  issuerCACert: ""
   # Public half of whatever fulcio-secret's key.pem was generated with
-  # (docs/image-signing.md's one-time openssl bootstrap) - kind-observe's own root.
-  rootCert: |
-    -----BEGIN CERTIFICATE-----
-    MIIBXzCCARGgAwIBAgIULS2gqk6EzoP+WqAugl3RUrr2i4gwBQYDK2VwMCQxIjAg
-    BgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVsY2lvLXJvb3QwIBcNMjYwODA0MDY1ODQx
-    WhgPMjEyNjA3MTEwNjU4NDFaMCQxIjAgBgNVBAMMGXBsYXRmb3JtLWNpY2QtZnVs
-    Y2lvLXJvb3QwKjAFBgMrZXADIQAbzMlKYjHr/ds4pGno6IteM+L80JJAB6qcdZfv
-    cCOb2KNTMFEwHQYDVR0OBBYEFPs94gvZdJ0dtgeUbmtiF3GsnUIoMB8GA1UdIwQY
-    MBaAFPs94gvZdJ0dtgeUbmtiF3GsnUIoMA8GA1UdEwEB/wQFMAMBAf8wBQYDK2Vw
-    A0EA2qc3Z5SVC3pdT+WEEmg4lvArc3PkG79DR1Xq7zAuJGlEn8YZba2lglK+cnZX
-    VnT16fgLxASFZZatQBE7PoyzDg==
-    -----END CERTIFICATE-----
+  # (docs/admin/image-signing.md's one-time openssl bootstrap) - this cluster's own root.
+  rootCert: ""
 
 # Overlay onto Tekton Chains' own `chains-config` ConfigMap (installed empty by default -
 # confirmed live, nothing to clobber) - applied via `kubectl patch --type merge` by
@@ -148,7 +116,7 @@ fulcio:
 # transparency.enabled: "false" is load-bearing, not a placeholder - Chains' own default
 # transparency.url is the PUBLIC rekor.sigstore.dev; leaving this unset would mean this
 # Fulcio-only setup (Rekor/Trillian/MySQL deliberately deferred) silently attempts to
-# upload every signature to the public transparency log. See docs/image-signing.md.
+# upload every signature to the public transparency log. See docs/admin/image-signing.md.
 chains:
   configPatch:
     signers.x509.fulcio.enabled: "true"
@@ -178,7 +146,7 @@ secretStore:
   kind: ClusterSecretStore
   sourceNamespace: platform-secrets
 
-# Per-Application secret stores (docs/app-secrets.md) - a DIFFERENT mechanism from
+# Per-Application secret stores (docs/admin/app-secrets.md) - a DIFFERENT mechanism from
 # secretStore above, not another entry in it: an Application's own secrets (Slack
 # webhook, SAST creds, ...) come from that ONE Application's own backend, not the
 # platform-wide shared namespace registry-credentials uses, so each needs its own
@@ -197,50 +165,50 @@ secretStore:
 # needed - no name to keep in sync by hand beyond type+appName, which both charts
 # already require anyway.
 #
-# Empty by default - adding an Application here (and pushing to main, this chart's
-# own ArgoCD Application - platform-cicd-control-plane - has selfHeal automated sync,
-# not a manual `helm upgrade`) is a deliberate, one-time-per-Application step, matching
-# this platform's existing "manual by design" secrets philosophy above (populating
+# Empty by default - this is cluster state (which real Applications are onboarded),
+# not chart source, so real entries live in each cluster's own gitops-cluster-<name>
+# repo (e.g. values-kind-dev.yaml), not here. Adding an app there (and pushing to
+# main, this chart's own ArgoCD Application has selfHeal automated sync, not a manual
+# `helm upgrade`) is a deliberate, one-time-per-Application step, matching this
+# platform's existing "manual by design" secrets philosophy above (populating
 # platform-secrets is exactly as manual).
-appSecretStores:
-  - type: app
-    appName: checkout-api
+#
+# - type: app
+#   appName: checkout-api
+appSecretStores: []
 
-# Phase 3 item 4 (docs/multi-cluster.md): the cluster registry. An app's cicd.yaml never
-# names infrastructure directly - a release step's env: (e.g. "staging") is a
-# tenant-facing config concept, deploy.upperEnvironments maps that name to a cluster
-# NAME (e.g. "kind-prod"), and THIS list is what that cluster name actually resolves to.
-# Same "manual by design" convention as appSecretStores/platform-secrets above: adding a
-# cluster here is a deliberate, operator-driven step, not something tenant onboarding
-# does. Rendered into a ConfigMap (templates/clusters/cluster-registry.yaml) that
-# pipeline Tasks and the ArgoCD-outcome relay both resolve live against, rather than
-# being duplicated into every app's own Helm values - see that file's header for why.
+# The cluster registry: an app's cicd.yaml never names infrastructure directly - a
+# release step's env: (e.g. "staging") is a tenant-facing config concept,
+# deploy.upperEnvironments maps that name to a cluster NAME (e.g. "kind-prod"), and
+# THIS list is what that cluster name actually resolves to. Same "manual by design"
+# convention as appSecretStores/platform-secrets above: adding a cluster here is a
+# deliberate, operator-driven step, not something tenant onboarding does. Rendered
+# into a ConfigMap (templates/clusters/cluster-registry.yaml) that pipeline Tasks and
+# the ArgoCD-outcome relay both resolve live against, rather than being duplicated
+# into every app's own Helm values - see that file's header for why.
 #
 # relaySecretName: name of a Secret (hand-created, same convention as platform-secrets -
-# see docs/secrets-management.md) in THIS namespace holding the shared bearer token the
-# outcome-reporting hook Jobs on THAT cluster present to the outcome relay (a copy of
-# the SAME token also lives directly in each app's own namespace on that cluster - see
-# docs/multi-cluster.md, the hook runs there, not here). Not ESO-backed: unlike
-# appSecretStores (real per-app tenant secrets), this is a small number of
-# operator-provisioned, infra-level tokens - one per cluster, created once at that
-# cluster's onboarding time.
+# see docs/admin/secrets-management.md) in THIS namespace holding the shared bearer
+# token the outcome-reporting hook Jobs on THAT cluster present to the outcome relay (a
+# copy of the SAME token also lives directly in each app's own namespace on that
+# cluster - see docs/admin/multi-cluster.md, the hook runs there, not here). Not
+# ESO-backed: unlike appSecretStores (real per-app tenant secrets), this is a small
+# number of operator-provisioned, infra-level tokens - one per cluster, created once at
+# that cluster's onboarding time.
 #
 # outcomeRelayURL: where THAT cluster's own outcome-reporting hook Jobs reach this
 # (the dev) cluster's argocd-outcome-relay - baked into the hook Job manifests
 # open-release-pr.yaml generates, since a Job running on a different cluster obviously
-# can't resolve this cluster's in-cluster DNS name. Same-host podman reachability only
-# for now (docs/multi-cluster.md) - a genuinely remote cluster would need a real
-# ingress/DNS name here instead.
-# Real entry, not just documentation, as of 2026-08-17: kind-prod is checkout-api's
-# real upper-env cluster (idp-service-catalog's ApplicationEnvironment.spec.cluster).
-# outcomeRelayURL's IP is dev-control-plane's own address on the shared podman `kind`
-# bridge network (`podman inspect dev-control-plane` - re-check this if the dev
-# cluster is ever recreated, podman does not guarantee the same IP survives that;
-# see docs/multi-cluster.md's cross-cluster-reachability section). This value
-# rendering .Values.clusters non-empty is also what turns on argocd-outcome-relay
-# itself (templates/clusters/argocd-outcome-relay.yaml's own `if .Values.clusters`) -
-# it was NOT deployed at all before this entry existed, confirmed live 2026-08-17.
-clusters:
-  - name: kind-prod
-    relaySecretName: cluster-kind-prod-relay-token
-    outcomeRelayURL: http://10.89.0.2:30880/outcome/kind-prod
+# can't resolve this cluster's in-cluster DNS name. A same-host podman IP works for a
+# shared-host dev setup (see docs/admin/multi-cluster.md's cross-cluster-reachability
+# section); a genuinely remote cluster needs a real ingress/DNS name here instead.
+#
+# Empty by default - this is cluster state (which real upper clusters are registered),
+# not chart source, so real entries live in each cluster's own gitops-cluster-<name>
+# repo. Rendering .Values.clusters non-empty is also what turns on argocd-outcome-relay
+# itself (templates/clusters/argocd-outcome-relay.yaml's own `if .Values.clusters`).
+#
+# - name: kind-prod
+#   relaySecretName: cluster-kind-prod-relay-token
+#   outcomeRelayURL: http://<dev-cluster-node-ip>:30880/outcome/kind-prod
+clusters: []

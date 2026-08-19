@@ -72,8 +72,8 @@ production" framing `sigstore-scaffolding`'s own docs use to justify self-hostin
 ## Fulcio configuration - three things that had to be discovered live, not guessed
 
 1. **The issuer URL is cluster-specific.** Fulcio's own CI example uses
-   `https://kubernetes.default.svc` (no suffix). On `kind-observe`, Fulcio's own OIDC
-   discovery against the API server returns
+   `https://kubernetes.default.svc` (no suffix). On every real cluster this platform
+   has run on so far, Fulcio's own OIDC discovery against the API server returns
    `https://kubernetes.default.svc.cluster.local` - using the shorter form fails
    Fulcio's own startup validation (`issuer URL provided to client ... did not match the
    issuer URL returned by provider`). Re-verify this if ever repointing at a different

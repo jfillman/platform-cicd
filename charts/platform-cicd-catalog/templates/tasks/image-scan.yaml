@@ -86,7 +86,7 @@ spec:
     # its own, so something still has to.
     - name: scan
       onError: continue
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: registry-credentials
@@ -165,7 +165,7 @@ spec:
     # notify-slack step - see that file's header for the full reasoning on why this
     # lives inside the Task rather than as a separate pipeline-level notify step).
     - name: notify-slack
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: slack-webhook

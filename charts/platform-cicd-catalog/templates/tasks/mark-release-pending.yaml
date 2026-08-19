@@ -64,7 +64,7 @@ spec:
         2026-08-17 header note), not this Task reaching further than it safely can.
   steps:
     - name: mark-pending
-      image: ghcr.io/jfillman/platform-cicd-toolbox:latest
+      image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: APP_NAMESPACE

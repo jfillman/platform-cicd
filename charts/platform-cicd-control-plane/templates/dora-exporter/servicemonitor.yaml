@@ -1,9 +1,9 @@
 # platform/dora-exporter/manifests/servicemonitor.yaml
 #
-# Standalone ServiceMonitor - kind-observe's Prometheus CR has empty
+# Standalone ServiceMonitor - relies on the cluster's Prometheus CR having empty
 # serviceMonitorSelector/serviceMonitorNamespaceSelector (matches everything
-# cluster-wide, see observability/kind-observe/tekton-servicemonitor.yaml), so this is
-# picked up with no extra wiring. Revisit if that Prometheus install's selectors are
+# cluster-wide, confirmed on every real cluster this platform runs on so far), so this
+# is picked up with no extra wiring. Revisit if that Prometheus install's selectors are
 # ever tightened.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
