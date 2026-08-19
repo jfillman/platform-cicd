@@ -56,7 +56,7 @@
       "id": 3,
       "title": "Step logs for this trace",
       "type": "logs",
-      "description": "See observability/loki/values.yaml 'KNOWN GAP' note - trace-to-logs correlation is provisioned ahead of raw stdout log shipping actually landing. Until that lands, this panel will be empty for most steps.",
+      "description": "Trace-to-logs correlation is provisioned ahead of raw stdout log shipping actually landing - known gap, this panel will be empty for most steps until that lands.",
       "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
