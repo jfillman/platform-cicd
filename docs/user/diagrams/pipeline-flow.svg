@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 460" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1180" height="460" fill="#ffffff"/>
+
+  <!-- lane backgrounds -->
+  <rect x="20" y="20" width="140" height="380" rx="12" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="90" y="45" text-anchor="middle" font-size="14" font-weight="600" fill="#1c5a8a">you</text>
+
+  <rect x="180" y="20" width="700" height="380" rx="12" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+  <text x="530" y="45" text-anchor="middle" font-size="14" font-weight="600" fill="#8a5a1c">platform-cicd (owns everything in this box)</text>
+
+  <rect x="900" y="20" width="260" height="380" rx="12" fill="#e9f7ef" stroke="#4ab97e" stroke-width="1.5"/>
+  <text x="1030" y="45" text-anchor="middle" font-size="14" font-weight="600" fill="#1f7a4d">what changes</text>
+
+  <!-- you: git push -->
+  <rect x="45" y="200" width="90" height="60" rx="8" fill="#ffffff" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="90" y="225" text-anchor="middle" font-size="13" fill="#12324a">git push</text>
+  <text x="90" y="242" text-anchor="middle" font-size="11" fill="#5a7a95">cicd.yaml</text>
+
+  <!-- platform stages -->
+  <g font-size="12" fill="#3a2a10">
+    <rect x="205" y="90" width="130" height="60" rx="8" fill="#ffffff" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="270" y="113" text-anchor="middle" font-weight="600">Pipelines-as-Code</text>
+    <text x="270" y="130" text-anchor="middle" font-size="10" fill="#8a6a3a">reads .tekton/*.yaml</text>
+
+    <rect x="365" y="90" width="130" height="60" rx="8" fill="#ffffff" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="430" y="113" text-anchor="middle" font-weight="600">validate</text>
+    <text x="430" y="130" text-anchor="middle" font-size="10" fill="#8a6a3a">fails fast on bad config</text>
+
+    <rect x="525" y="90" width="130" height="60" rx="8" fill="#ffffff" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="590" y="113" text-anchor="middle" font-weight="600">build</text>
+    <text x="590" y="130" text-anchor="middle" font-size="10" fill="#8a6a3a">compile, test, image</text>
+
+    <rect x="685" y="90" width="130" height="60" rx="8" fill="#ffffff" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="750" y="113" text-anchor="middle" font-weight="600">test</text>
+    <text x="750" y="130" text-anchor="middle" font-size="10" fill="#8a6a3a">integration suite</text>
+
+    <rect x="365" y="270" width="130" height="60" rx="8" fill="#ffffff" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="430" y="293" text-anchor="middle" font-weight="600">deploy</text>
+    <text x="430" y="310" text-anchor="middle" font-size="10" fill="#8a6a3a">commit env manifest</text>
+
+    <rect x="525" y="270" width="130" height="60" rx="8" fill="#ffffff" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="590" y="293" text-anchor="middle" font-weight="600">release</text>
+    <text x="590" y="310" text-anchor="middle" font-size="10" fill="#8a6a3a">GitOps PR + gates</text>
+  </g>
+
+  <!-- outcomes -->
+  <g font-size="12" fill="#173d28">
+    <rect x="925" y="80" width="210" height="55" rx="8" fill="#ffffff" stroke="#4ab97e" stroke-width="1.5"/>
+    <text x="1030" y="112" text-anchor="middle">new image in ghcr.io</text>
+
+    <rect x="925" y="245" width="210" height="55" rx="8" fill="#ffffff" stroke="#4ab97e" stroke-width="1.5"/>
+    <text x="1030" y="277" text-anchor="middle">running pod in dev/staging</text>
+
+    <rect x="925" y="310" width="210" height="55" rx="8" fill="#ffffff" stroke="#4ab97e" stroke-width="1.5"/>
+    <text x="1030" y="342" text-anchor="middle">PR against gitops-&lt;app&gt;</text>
+  </g>
+
+  <!-- arrows -->
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#555"/>
+    </marker>
+    <marker id="arrowDashed" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#4ab97e"/>
+    </marker>
+  </defs>
+
+  <path d="M135,220 C165,220 175,120 205,120" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M335,120 L365,120" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M495,120 L525,120" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M655,120 L685,120" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <path d="M750,150 C750,210 500,210 495,270" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="620" y="205" font-size="10" fill="#666" text-anchor="middle">testcaserun.finished (CDEvent)</text>
+  <path d="M495,300 L525,300" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <text x="590" y="65" font-size="10" fill="#666" text-anchor="middle">artifact.published (CDEvent)</text>
+  <path d="M590,150 C590,180 430,180 430,270" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <path d="M815,120 C880,120 890,105 925,105" fill="none" stroke="#4ab97e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrowDashed)"/>
+  <path d="M495,300 C860,300 860,270 925,270" fill="none" stroke="#4ab97e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrowDashed)"/>
+  <path d="M655,300 C880,300 890,335 925,335" fill="none" stroke="#4ab97e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrowDashed)"/>
+
+  <text x="590" y="425" text-anchor="middle" font-size="12" fill="#555">Only the first stage is triggered by your git push. Every stage after that is triggered by the previous stage finishing.</text>
+</svg>

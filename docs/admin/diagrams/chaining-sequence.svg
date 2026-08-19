@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 460" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1000" height="460" fill="#ffffff"/>
+  <text x="500" y="30" text-anchor="middle" font-size="16" font-weight="600" fill="#222">Inter-stage chaining: how "test" gets triggered by "build" finishing</text>
+
+  <!-- lifelines -->
+  <g stroke="#bbb" stroke-width="1.5">
+    <line x1="120" y1="60" x2="120" y2="420"/>
+    <line x1="380" y1="60" x2="380" y2="420"/>
+    <line x1="640" y1="60" x2="640" y2="420"/>
+    <line x1="880" y1="60" x2="880" y2="420"/>
+  </g>
+  <g font-size="12" font-weight="600" fill="#222">
+    <text x="120" y="45" text-anchor="middle">build PipelineRun</text>
+    <text x="380" y="45" text-anchor="middle">shared broker</text>
+    <text x="640" y="45" text-anchor="middle">Kubernetes TokenReview API</text>
+    <text x="880" y="45" text-anchor="middle">tenant's own Trigger/SA</text>
+  </g>
+
+  <defs>
+    <marker id="am" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#444"/></marker>
+  </defs>
+
+  <!-- 1 -->
+  <line x1="120" y1="100" x2="380" y2="100" stroke="#444" stroke-width="1.5" marker-end="url(#am)"/>
+  <text x="250" y="90" text-anchor="middle" font-size="11">1. POST CDEvent + own projected SA token</text>
+
+  <!-- 2 -->
+  <line x1="380" y1="150" x2="640" y2="150" stroke="#444" stroke-width="1.5" marker-end="url(#am)"/>
+  <text x="510" y="140" text-anchor="middle" font-size="11">2. TokenReview: is this token valid?</text>
+
+  <!-- 3 -->
+  <line x1="640" y1="200" x2="380" y2="200" stroke="#444" stroke-width="1.5" marker-end="url(#am)"/>
+  <text x="510" y="190" text-anchor="middle" font-size="11">3. yes - identity: tenant's namespaced SA</text>
+
+  <!-- 4 -->
+  <line x1="380" y1="250" x2="880" y2="250" stroke="#444" stroke-width="1.5" marker-end="url(#am)"/>
+  <text x="630" y="240" text-anchor="middle" font-size="11">4. relay event to this tenant's own Trigger CR</text>
+
+  <!-- 5 -->
+  <rect x="800" y="280" width="160" height="55" rx="6" fill="#e9f7ef" stroke="#4ab97e"/>
+  <text x="880" y="302" text-anchor="middle" font-size="11" fill="#1f7a4d">creates test</text>
+  <text x="880" y="318" text-anchor="middle" font-size="11" fill="#1f7a4d">PipelineRun, using</text>
+  <text x="880" y="332" text-anchor="middle" font-size="10" fill="#2a6a45">its OWN least-priv SA</text>
+
+  <rect x="60" y="380" width="880" height="60" rx="8" fill="#fde8e8" stroke="#c1584a" stroke-width="1.5"/>
+  <text x="500" y="403" text-anchor="middle" font-size="12" font-weight="600" fill="#7a2418">No key material anywhere in this flow</text>
+  <text x="500" y="422" text-anchor="middle" font-size="11" fill="#8a4a3a">The broker never mints, stores, or trusts a credential of its own - it only asks Kubernetes "is this real?"</text>
+</svg>

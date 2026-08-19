@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1200" height="700" fill="#ffffff"/>
+  <text x="600" y="34" text-anchor="middle" font-size="17" font-weight="600" fill="#222">platform-cicd: system overview</text>
+
+  <!-- Git sources -->
+  <rect x="30" y="70" width="180" height="80" rx="8" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="120" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#12324a">App repo</text>
+  <text x="120" y="118" text-anchor="middle" font-size="11" fill="#3a5a75">push / PR / tag</text>
+  <text x="120" y="134" text-anchor="middle" font-size="11" fill="#3a5a75">cicd.yaml</text>
+
+  <!-- Pipelines-as-Code -->
+  <rect x="260" y="70" width="190" height="80" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+  <text x="355" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#8a5a1c">Pipelines-as-Code</text>
+  <text x="355" y="118" text-anchor="middle" font-size="11" fill="#8a6a3a">GitHub App + webhooks</text>
+  <text x="355" y="134" text-anchor="middle" font-size="11" fill="#8a6a3a">status checks, /retest</text>
+
+  <!-- Tekton catalog -->
+  <rect x="500" y="70" width="190" height="80" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+  <text x="595" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#8a5a1c">Tekton catalog</text>
+  <text x="595" y="118" text-anchor="middle" font-size="11" fill="#8a6a3a">shared Pipelines/Tasks</text>
+  <text x="595" y="134" text-anchor="middle" font-size="11" fill="#8a6a3a">cluster-resolver, read-only</text>
+
+  <!-- CDEvents broker -->
+  <rect x="500" y="210" width="190" height="90" rx="8" fill="#fde8e8" stroke="#c1584a" stroke-width="1.5"/>
+  <text x="595" y="240" text-anchor="middle" font-size="13" font-weight="600" fill="#7a2418">CDEvents broker</text>
+  <text x="595" y="258" text-anchor="middle" font-size="11" fill="#8a4a3a">EventListener + TokenReview</text>
+  <text x="595" y="274" text-anchor="middle" font-size="11" fill="#8a4a3a">interceptor (no minted creds)</text>
+  <text x="595" y="290" text-anchor="middle" font-size="11" fill="#8a4a3a">per-tenant Trigger CRs</text>
+
+  <!-- Per-stage boxes -->
+  <rect x="260" y="360" width="140" height="55" rx="8" fill="#ffffff" stroke="#c1584a" stroke-width="1.5"/>
+  <text x="330" y="392" text-anchor="middle" font-size="12" fill="#7a2418">build</text>
+  <rect x="420" y="360" width="140" height="55" rx="8" fill="#ffffff" stroke="#c1584a" stroke-width="1.5"/>
+  <text x="490" y="392" text-anchor="middle" font-size="12" fill="#7a2418">test</text>
+  <rect x="580" y="360" width="140" height="55" rx="8" fill="#ffffff" stroke="#c1584a" stroke-width="1.5"/>
+  <text x="650" y="392" text-anchor="middle" font-size="12" fill="#7a2418">deploy</text>
+  <rect x="740" y="360" width="140" height="55" rx="8" fill="#ffffff" stroke="#c1584a" stroke-width="1.5"/>
+  <text x="810" y="392" text-anchor="middle" font-size="12" fill="#7a2418">release</text>
+
+  <!-- Observability -->
+  <rect x="900" y="70" width="260" height="150" rx="8" fill="#f0eefc" stroke="#8a6ad9" stroke-width="1.5"/>
+  <text x="1030" y="98" text-anchor="middle" font-size="13" font-weight="600" fill="#3a2a75">Observability</text>
+  <text x="1030" y="120" text-anchor="middle" font-size="11" fill="#5a4a8a">otel-cli spans per step -&gt;</text>
+  <text x="1030" y="136" text-anchor="middle" font-size="11" fill="#5a4a8a">Tempo, one trace per flow</text>
+  <text x="1030" y="156" text-anchor="middle" font-size="11" fill="#5a4a8a">CDEvents -&gt; DORA exporter -&gt;</text>
+  <text x="1030" y="172" text-anchor="middle" font-size="11" fill="#5a4a8a">Prometheus</text>
+  <text x="1030" y="192" text-anchor="middle" font-size="11" fill="#5a4a8a">Grafana: pipeline + DORA</text>
+  <text x="1030" y="208" text-anchor="middle" font-size="11" fill="#5a4a8a">dashboards</text>
+
+  <!-- GitOps release -->
+  <rect x="900" y="350" width="260" height="150" rx="8" fill="#e9f7ef" stroke="#4ab97e" stroke-width="1.5"/>
+  <text x="1030" y="378" text-anchor="middle" font-size="13" font-weight="600" fill="#1f7a4d">GitOps release</text>
+  <text x="1030" y="400" text-anchor="middle" font-size="11" fill="#2a6a45">release opens a PR against</text>
+  <text x="1030" y="416" text-anchor="middle" font-size="11" fill="#2a6a45">gitops-&lt;app&gt;, never touches</text>
+  <text x="1030" y="432" text-anchor="middle" font-size="11" fill="#2a6a45">the cluster directly</text>
+  <text x="1030" y="452" text-anchor="middle" font-size="11" fill="#2a6a45">human/branch-protection merges,</text>
+  <text x="1030" y="468" text-anchor="middle" font-size="11" fill="#2a6a45">ArgoCD sync is the only mutation</text>
+
+  <!-- Governance -->
+  <rect x="30" y="500" width="1130" height="90" rx="8" fill="#fff7e6" stroke="#c99a2e" stroke-width="1.5"/>
+  <text x="595" y="528" text-anchor="middle" font-size="13" font-weight="600" fill="#7a5a10">Governance gates</text>
+  <text x="595" y="550" text-anchor="middle" font-size="11" fill="#8a6a2a">SAST, image scanning, policy checks, SBOM - explicit, structurally-loud stub extension points until a real backend lands</text>
+  <text x="595" y="568" text-anchor="middle" font-size="11" fill="#8a6a2a">(never a silent pass-through) - see ADR-0003</text>
+
+  <!-- arrows -->
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker>
+  </defs>
+  <path d="M210,110 L260,110" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M450,110 L500,110" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M595,150 L595,210" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M690,240 C780,240 900,180 900,150" fill="none" stroke="#8a6ad9" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M595,300 C450,320 400,340 380,360" fill="none" stroke="#c1584a" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M400,388 L420,388" fill="none" stroke="#c1584a" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M560,388 L580,388" fill="none" stroke="#c1584a" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M720,388 L740,388" fill="none" stroke="#c1584a" stroke-width="1.5" marker-end="url(#a1)"/>
+  <path d="M810,360 C900,340 900,400 900,420" fill="none" stroke="#4ab97e" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="740" y="330" font-size="10" fill="#777">each stage's own CDEvent re-enters the broker</text>
+</svg>

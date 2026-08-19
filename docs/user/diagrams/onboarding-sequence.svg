@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 520" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1000" height="520" fill="#ffffff"/>
+
+  <text x="500" y="35" text-anchor="middle" font-size="16" font-weight="600" fill="#222">Getting a new app onto the platform</text>
+
+  <!-- step boxes, vertical flow -->
+  <g font-size="13">
+    <!-- 1 -->
+    <circle cx="60" cy="90" r="18" fill="#4a90d9"/>
+    <text x="60" y="95" text-anchor="middle" fill="#fff" font-weight="600">1</text>
+    <rect x="100" y="65" width="820" height="55" rx="8" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.5"/>
+    <text x="120" y="88" fill="#12324a" font-weight="600">Install the platform's GitHub App on your repo</text>
+    <text x="120" y="106" fill="#3a5a75" font-size="11">One-time, GitHub-side. Enables Pipelines-as-Code to receive your pushes/PRs.</text>
+
+    <!-- 2 -->
+    <circle cx="60" cy="170" r="18" fill="#4a90d9"/>
+    <text x="60" y="175" text-anchor="middle" fill="#fff" font-weight="600">2</text>
+    <rect x="100" y="145" width="820" height="55" rx="8" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.5"/>
+    <text x="120" y="168" fill="#12324a" font-weight="600">Add cicd.yaml to your repo root</text>
+    <text x="120" y="186" fill="#3a5a75" font-size="11">The only file you maintain. Build agent, deploy targets, notifications - see the reference doc.</text>
+
+    <!-- 3 -->
+    <circle cx="60" cy="250" r="18" fill="#d9954a"/>
+    <text x="60" y="255" text-anchor="middle" fill="#fff" font-weight="600">3</text>
+    <rect x="100" y="225" width="820" height="55" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="120" y="248" fill="#8a5a1c" font-weight="600">Request platform identity (operator-reviewed PR)</text>
+    <text x="120" y="266" fill="#8a6a3a" font-size="11">A small, infra-only identity file - not something your own commits can change later.</text>
+
+    <!-- 4 -->
+    <circle cx="60" cy="330" r="18" fill="#d9954a"/>
+    <text x="60" y="335" text-anchor="middle" fill="#fff" font-weight="600">4</text>
+    <rect x="100" y="305" width="820" height="55" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="120" y="328" fill="#8a5a1c" font-weight="600">ArgoCD syncs automatically</text>
+    <text x="120" y="346" fill="#8a6a3a" font-size="11">Once your identity file merges, the platform provisions everything - no commands to run.</text>
+
+    <!-- 5 -->
+    <circle cx="60" cy="410" r="18" fill="#4ab97e"/>
+    <text x="60" y="415" text-anchor="middle" fill="#fff" font-weight="600">5</text>
+    <rect x="100" y="385" width="820" height="55" rx="8" fill="#e9f7ef" stroke="#4ab97e" stroke-width="1.5"/>
+    <text x="120" y="408" fill="#173d28" font-weight="600">Push to main</text>
+    <text x="120" y="426" fill="#1f7a4d" font-size="11">Your first real pipeline run. Watch it in the Grafana dashboard.</text>
+  </g>
+
+  <!-- connecting line -->
+  <line x1="60" y1="108" x2="60" y2="392" stroke="#bbb" stroke-width="2" stroke-dasharray="3 4"/>
+
+  <text x="500" y="480" text-anchor="middle" font-size="11" fill="#777">Steps 1-2 are yours. Steps 3-4 involve a platform operator once. Step 5 you'll repeat forever.</text>
+</svg>

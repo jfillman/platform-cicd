@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" font-family="Helvetica, Arial, sans-serif">
+  <rect width="1000" height="420" fill="#ffffff"/>
+  <text x="500" y="32" text-anchor="middle" font-size="16" font-weight="600" fill="#222">cicd.yaml fields -&gt; what actually runs</text>
+
+  <!-- left: yaml -->
+  <rect x="30" y="55" width="380" height="330" rx="8" fill="#1e1e2e" />
+  <text x="50" y="80" font-family="monospace" font-size="12" fill="#9cdcfe">build:</text>
+  <text x="65" y="98" font-family="monospace" font-size="12" fill="#ce9178">agent: nodejs-20</text>
+  <text x="65" y="116" font-family="monospace" font-size="12" fill="#ce9178">script: ./build.sh</text>
+  <text x="50" y="144" font-family="monospace" font-size="12" fill="#9cdcfe">deploy:</text>
+  <text x="65" y="162" font-family="monospace" font-size="12" fill="#ce9178">lowerEnvironments: [dev]</text>
+  <text x="50" y="190" font-family="monospace" font-size="12" fill="#9cdcfe">release:</text>
+  <text x="65" y="208" font-family="monospace" font-size="12" fill="#ce9178">gitopsRepoUrl: ...</text>
+  <text x="50" y="236" font-family="monospace" font-size="12" fill="#9cdcfe">pipelines:</text>
+  <text x="65" y="254" font-family="monospace" font-size="12" fill="#ce9178">ci:</text>
+  <text x="80" y="272" font-family="monospace" font-size="12" fill="#ce9178">steps:</text>
+  <text x="95" y="290" font-family="monospace" font-size="12" fill="#dcdcaa">- stage: build</text>
+  <text x="95" y="308" font-family="monospace" font-size="12" fill="#dcdcaa">- stage: test</text>
+  <text x="95" y="326" font-family="monospace" font-size="12" fill="#dcdcaa">- stage: deploy</text>
+  <text x="95" y="344" font-family="monospace" font-size="12" fill="#dcdcaa">- stage: release</text>
+
+  <!-- right: what happens -->
+  <g font-size="12">
+    <rect x="500" y="70" width="470" height="55" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="520" y="92" font-weight="600" fill="#8a5a1c">build stage runs</text>
+    <text x="520" y="110" fill="#8a6a3a" font-size="11">nodejs-20 agent image, runs ./build.sh, pushes to ghcr.io</text>
+
+    <rect x="500" y="140" width="470" height="55" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="520" y="162" font-weight="600" fill="#8a5a1c">deploy stage runs</text>
+    <text x="520" y="180" fill="#8a6a3a" font-size="11">commits platform/envs/dev.yaml, ArgoCD syncs the dev namespace</text>
+
+    <rect x="500" y="210" width="470" height="55" rx="8" fill="#fef3e2" stroke="#d9954a" stroke-width="1.5"/>
+    <text x="520" y="232" font-weight="600" fill="#8a5a1c">release stage runs</text>
+    <text x="520" y="250" fill="#8a6a3a" font-size="11">opens a PR against your gitops repo, gated by governance checks</text>
+
+    <rect x="500" y="280" width="470" height="55" rx="8" fill="#e9f7ef" stroke="#4ab97e" stroke-width="1.5"/>
+    <text x="520" y="302" font-weight="600" fill="#173d28">test stage - absent above</text>
+    <text x="520" y="320" fill="#1f7a4d" font-size="11">not declared, so it never runs - nothing to configure to skip it</text>
+  </g>
+
+  <path d="M410,120 L500,97" fill="none" stroke="#999" stroke-width="1.5"/>
+  <path d="M410,160 L500,167" fill="none" stroke="#999" stroke-width="1.5"/>
+  <path d="M410,210 L500,237" fill="none" stroke="#999" stroke-width="1.5"/>
+
+  <text x="500" y="400" text-anchor="middle" font-size="11" fill="#777">Only the stages you list under a flow's steps ever run - nothing implicit, nothing to explicitly disable.</text>
+</svg>
