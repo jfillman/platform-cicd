@@ -1,16 +1,11 @@
-# templates/hooks/chains-config-patch-job.yaml (replaces the old chains-config-patch.yaml
-# manual `kubectl patch` step - see hooks/chains-config-reference.yaml for the full
-# rationale behind each key, kept as documentation/values source, not applied directly)
+# templates/hooks/chains-config-patch-job.yaml - replaces the old manual `kubectl patch`
+# step for Tekton Chains' chains-config (see hooks/chains-config-reference.yaml, kept as
+# documentation/values source).
 #
-# Why a hook Job, not a plain ConfigMap template: Tekton Chains installs its own empty
-# `chains-config` ConfigMap in .Values.tektonChainsNamespace (a namespace this chart
-# doesn't own) as part of its own release. A plain Helm-templated ConfigMap with the same name would fail
-# on first `helm install` ("already exists", not adopted by this release) - Helm refuses
-# to silently take ownership of a resource it didn't create. `kubectl patch --type merge`
-# via a hook Job matches this platform's existing patch-not-replace convention for
-# third-party-owned config (see hooks/chains-config-reference.yaml's own header comment)
-# and sidesteps the ownership conflict entirely - a patch doesn't care who created the
-# object.
+# Uses a hook Job + `kubectl patch --type merge`, not a plain Helm ConfigMap template:
+# Chains installs its own empty chains-config ConfigMap in a namespace this chart
+# doesn't own, so a same-named Helm-templated ConfigMap would fail on first install
+# ("already exists", not adopted). A patch doesn't care who created the object.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

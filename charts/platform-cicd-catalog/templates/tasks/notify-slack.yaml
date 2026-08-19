@@ -1,35 +1,17 @@
 # catalog/tasks/notify-slack.yaml
 #
 # Best-effort pipeline-result notification. Reads notifications.slack from cicd.yaml;
-# no-ops cleanly if disabled or unconfigured. The webhook URL is resolved from a
-# per-Application Secret, never hardcoded in catalog YAML - the old platform's hardcoded
-# Testkube API keys in shared Pipeline templates are exactly the mistake this avoids.
+# no-ops cleanly if disabled/unconfigured. Webhook URL comes from a per-Application
+# Secret, never hardcoded (avoiding the old platform's hardcoded Testkube API keys).
 #
-# A real bug lived here until Phase 3 item 3: the script always read
-# /var/run/secrets/platform/slack-webhook-url, but this Task never actually declared a
-# volume/volumeMount for it - so even an Application that fully configured
-# notifications.slack.enabled: true and created the Secret exactly as this comment
-# describes would still never get a real notification, silently swallowed by the
-# script's own graceful "no secret mounted" skip path. Fixed at the time with a plain
-# per-Application `secret` volume, deliberately NOT a full ESO SecretStore pipeline "for
-# one demo webhook" (that decision's own words). That tradeoff was revisited once a
-# second real use case (SAST scan credentials) needed the identical
-# pull-a-key-from-my-own-backend-store mechanism - see docs/app-secrets.md. The volume
-# now mounts app-secrets (charts/platform-cicd-app/templates/secrets/
-# app-secrets-external-secret.yaml, ESO-synced from this Application's own backend
-# store) instead of a hand-created Secret. The mount mechanics are unchanged - a Secret
-# volume creates one file per data key either way, so the script below still just reads
-# a file literally named slack-webhook-url; only where that key's VALUE comes from
-# changed. The Secret volume is `optional: true` deliberately - most Applications won't
-# declare this key in secrets: at all, and the pod must still start cleanly for them
-# (matches the script's own existing graceful-skip behavior for that case, not a new
-# failure mode).
+# The Secret volume mounts app-secrets (ESO-synced from the Application's own backend
+# store, charts/platform-cicd-app/templates/secrets/app-secrets-external-secret.yaml),
+# not a hand-created Secret - same mechanism SAST scan credentials use, see
+# docs/app-secrets.md. `optional: true` because most Applications don't declare this key
+# at all and the pod must still start cleanly for them.
 #
-# Message format follows docs/design-language.md (Phase 3 item 3 follow-up) - one blue
-# accent, a muted red only on failure, icons used only as a single `⚠` on failure, a
-# consistent field vocabulary. Every field's value was already flowing through the
-# calling Pipeline as an existing param/result - this Task just has new params to
-# receive them, no new upstream plumbing was needed anywhere else.
+# Message format follows docs/design-language.md: one blue accent, muted red + a single
+# `⚠` only on failure, consistent field vocabulary.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -68,12 +50,11 @@ spec:
       type: string
       default: ""
       description: >-
-        Only meaningful on release-outcome, where the PR was opened (and merged) in a
-        DIFFERENT PipelineRun than this one, so the live open-release-pr TaskRun lookup
-        below can't find it - passed directly instead. Takes priority over that lookup
-        when non-empty; release itself still relies on the lookup (its own
-        open-release-pr TaskRun is a sibling in the SAME PipelineRun), so this stays
-        empty there and the existing behavior is unchanged.
+        Only meaningful on release-outcome, where the PR was opened in a DIFFERENT
+        PipelineRun than this one, so the open-release-pr TaskRun lookup below can't
+        find it - passed directly instead, taking priority over that lookup when
+        non-empty. release itself still uses the lookup (its open-release-pr TaskRun is
+        a sibling in the same PipelineRun), so this stays empty there.
   volumes:
     - name: slack-webhook
       secret:
@@ -124,9 +105,8 @@ spec:
           exit 0
         fi
 
-        # docs/design-language.md: one blue accent, muted red only on failure, a single
-        # ⚠ on the header only when the outcome isn't success - not a stoplight, not a
-        # per-stage icon.
+        # docs/design-language.md: blue accent, muted red + a single ⚠ only on failure -
+        # not a stoplight, not a per-stage icon.
         case "${STAGE_NAME}" in
           build) STAGE_DISPLAY="Build" ;;
           test) STAGE_DISPLAY="Test" ;;
@@ -142,62 +122,43 @@ spec:
           HEADER_TEXT="⚠ ${APP_NAME} · ${STAGE_DISPLAY} ${STATUS}"
         fi
 
-        # Repo short-name derived the same way open-release-pr.yaml already derives its
-        # owner segment - not reimplemented differently. This 12-char SHA is purely for
-        # the Commit field's own display convention (matches sast-scan.yaml/
-        # image-scan.yaml's identical GIT_REVISION:0:12 usage) - independent of, and
-        # deliberately not kept in sync with, build-image.yaml's own 7-char SHORT_SHA
-        # image-tag convention below.
+        # 12-char SHA for display only (matches sast-scan.yaml/image-scan.yaml) -
+        # intentionally independent of build-image.yaml's own 7-char image-tag SHA.
         REPO_SHORT="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
         SHORT_SHA="${GIT_REVISION:0:12}"
         COMMIT_URL="${GIT_URL}/commit/${GIT_REVISION}"
 
-        # Tekton Dashboard deep-link for the Run field - route confirmed live against the
-        # actual installed dashboard's own JS bundle (HashRouter, /namespaces/:namespace
-        # + /pipelineruns/:name), not guessed from docs (which don't document the route at
-        # all). Only resolves when someone has the dashboard's own port-forward running
-        # locally (docs/bootstrap.md) - this platform has no ingress/stable URL for it,
-        # same already-documented gap as everywhere else access needs port-forward. Still
-        # worth linking: a dead link when nobody's forwarding costs nothing, and it's a
-        # real, correct link the moment someone is.
+        # Tekton Dashboard deep-link (HashRouter route, undocumented but confirmed
+        # against the installed dashboard's JS bundle). Only resolves when someone has
+        # the dashboard port-forwarded locally (no ingress/stable URL exists yet) - a
+        # dead link otherwise costs nothing.
         DASHBOARD_URL="http://localhost:9097/#/namespaces/${APP_NAMESPACE}/pipelineruns/${PIPELINE_RUN_NAME}"
 
-        # build only - a live, best-effort lookup of build-image's own real result,
-        # same resilience pattern as pr_url/log_excerpt below rather than a Tekton-level
-        # $(tasks.build-image.results.image-ref) param reference: Tekton skips a finally
-        # task entirely if any of its params references a result from a task that
-        # failed or didn't run (confirmed against Tekton's own docs), which would
-        # silently break "notify always fires, even on build-image failure" for exactly
-        # the failure case a log excerpt matters most for. This used to hand-reconstruct
-        # a guessed ref instead (image-repo param + a bare SHA, no version) - a real bug,
-        # doubly wrong once build-image.yaml started tagging with a real <version>-<sha>
-        # instead of a fixed placeholder: querying build-image's own TaskRun result
-        # directly reports the EXACT tag that was actually pushed when it succeeded, and
-        # naturally comes back empty - no special-casing needed, same as pr_url - when
-        # build-image never ran or failed.
+        # build only - best-effort live lookup of build-image's own result, not a
+        # Tekton-level $(tasks.build-image.results.image-ref) param reference: Tekton
+        # skips a finally task entirely if any param references a result from a task
+        # that failed/didn't run, which would break notification on exactly the failure
+        # case that matters most. Previously hand-reconstructed a guessed ref (a real
+        # bug, wrong once build-image started tagging <version>-<sha>) - querying the
+        # TaskRun result directly reports the exact tag pushed, and comes back empty
+        # cleanly when build-image never ran or failed.
         if [[ -z "${IMAGE_REF}" && "${STAGE_NAME}" == "build" ]]; then
           IMAGE_REF="$(kubectl get taskrun -n "${APP_NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=build-image" \
             -o jsonpath='{.items[0].status.results[?(@.name=="image-ref")].value}' 2>/dev/null || true)"
         fi
 
-        # release only - a live, best-effort lookup (same resilience pattern as the
-        # failure log excerpt below), NOT a Tekton-level $(tasks.open-release-pr.results...)
-        # reference, for the identical reason image-repo above isn't a task-result
-        # reference: that would skip this whole notify task whenever open-release-pr
-        # fails, breaking the failure-notification path for release's most likely real
-        # failure point. Naturally comes back empty (and is simply omitted) when
-        # open-release-pr didn't succeed - no special-casing needed for that.
+        # release only - same reasoning as the build-image lookup above: a
+        # $(tasks.open-release-pr.results...) reference would skip this notify task
+        # whenever open-release-pr fails, which is release's most likely failure point.
         pr_url="${PR_URL_PARAM}"
         if [[ -z "${pr_url}" && "${STAGE_NAME}" == "release" ]]; then
           pr_url="$(kubectl get taskrun -n "${APP_NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME},tekton.dev/pipelineTask=open-release-pr" \
             -o jsonpath='{.items[0].status.results[?(@.name=="pr-url")].value}' 2>/dev/null || true)"
         fi
 
-        # Failure log excerpt - only attempted when this run didn't succeed. Not gated
-        # more narrowly than that (Cancelled/Timeout included too) since a short excerpt
-        # of whatever the last-running step logged is still useful context, not just for
-        # a clean "Failed" outcome. See docs/notifications.md for why this needed no new
-        # RBAC - pipeline-runner's existing Role already covers taskruns/pods/pods-log.
+        # Failure log excerpt - attempted for any non-success status (Cancelled/Timeout
+        # included), not just "Failed". Needs no new RBAC - pipeline-runner's existing
+        # Role already covers taskruns/pods/pods-log.
         failed_taskrun=""
         log_excerpt=""
         if [[ "${STATUS}" != "Succeeded" && "${STATUS}" != "Completed" ]]; then

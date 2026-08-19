@@ -1,30 +1,18 @@
-# .tekton/pull-request-policy-check.yaml
+# The real policy-check gate: points at the dedicated policy-check Pipeline, which
+# verifies the app-repo commit's gitsign signature against this Application's
+# allowed-signers list. See docs/commit-signing.md.
 #
-# Unlike pull-request-sast.yaml/-image-scan.yaml/-sbom.yaml (still stubs), this is the
-# real (Phase 3 item 2) policy-check gate - repointed from the shared governance-check
-# stub Pipeline to the dedicated policy-check Pipeline
-# (platform-cicd's catalog/pipelines/policy-check.yaml), which verifies the app-repo
-# commit's gitsign signature against this Application's allowed-signers list. See
-# platform-cicd's docs/commit-signing.md.
+# repo-url/revision are PaC's own template vars for this gitops repo's PR.
+# app-namespace/app-name are static, substituted once at onboarding.
 #
-# repo-url/revision are PaC's own {{ repo_url }}/{{ revision }} template variables for
-# THIS gitops repo's PR - already a proven, real pattern in this platform (used the same
-# way in nodejs-demo-app's own .tekton/*.yaml files). app-namespace/app-name are static,
-# plain values for this one app - generated once at onboarding (substitute
-# <APP_NAMESPACE>/<APP_NAME>
-# below), not something a developer hand-edits.
-#
-# pr-number - see pull-request-sast.yaml's own comment for why this is here (feeds the
-# finally-block PR comment, catalog/tasks/comment-pr-check-result.yaml).
+# pr-number - see pull-request-sast.yaml (feeds the finally-block PR comment).
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: policy-check
   annotations:
-    # See pull-request-sast.yaml's own annotation comment for why this is on-cel-expression
-    # (release-branch-only) rather than on-event/on-target-branch, and for why has()
-    # guards the pull_request field (a push webhook, e.g. from this same PR merging,
-    # has no pull_request key at all - real, live-found false-alarm bot comment).
+    # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
+    # and why has() guards the pull_request field.
     pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:

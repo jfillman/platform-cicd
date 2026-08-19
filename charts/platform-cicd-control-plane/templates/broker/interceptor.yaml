@@ -1,49 +1,30 @@
 # platform/broker/manifests/interceptor.yaml
 #
-# Deploys the TokenReview-based interceptor (../cmd/token-review-interceptor) and
-# registers it as a Tekton Triggers ClusterInterceptor named "cdevents-broker-auth".
-# RBAC here is deliberately narrow: this ServiceAccount can create TokenReviews
-# (cluster-scoped by necessity - that API has no namespaced form), and - since this
-# service also mints scoped GitHub App installation tokens for the release stage, see
-# docs/release.md - list/get PaC Repository CRs cluster-wide (read-only, used only to
-# check a caller's own Application namespace actually owns the gitops repo it's asking a
-# token for). It cannot read/write PipelineRuns, Secrets, or anything else in any
-# Application's namespace, and cannot write Repository CRs either.
+# Deploys the TokenReview-based interceptor, registered as ClusterInterceptor
+# "cdevents-broker-auth". RBAC is narrow: create TokenReviews (cluster-scoped by
+# necessity), and read-only list/get on PaC Repository CRs (to check a caller owns the
+# gitops repo it's requesting a GitHub token for, since this service also mints scoped
+# GitHub App installation tokens for release - see docs/release.md). No access to
+# PipelineRuns/Secrets/Repository writes in any Application namespace.
 #
-# github-app-creds (github-application-id/github-private-key) is a COPY of the same two
-# fields already in pipelines-as-code-secret (the `pipelines-as-code` namespace on a
-# raw-manifest install like kind-observe's; the operator's single targetNamespace, e.g.
-# `tekton-pipelines`, on a tektoncd/operator install like kind-dev's - see
-# gitops-cluster-dev/50-platform-cicd/tekton-operator/) - Kubernetes
-# Secrets are namespace-scoped, so this Pod (platform-system) can't mount that Secret
-# directly. Create the copy yourself (never pastes the actual key material through this
-# chat - see docs/release.md), substituting the real namespace for -n below:
+# github-app-creds is a copy of pipelines-as-code-secret's two fields, needed because
+# Secrets are namespace-scoped and this pod lives in platform-system. Create it by hand
+# (never paste key material through chat):
 #   kubectl get secret pipelines-as-code-secret -n pipelines-as-code -o json \
 #     | jq '{apiVersion, kind, type, data: {"github-application-id": .data["github-application-id"], "github-private-key": .data["github-private-key"]}, metadata: {name: "github-app-creds", namespace: "platform-system"}}' \
 #     | kubectl apply -f -
 #
-# Plain HTTP, not HTTPS - see the header comment in
-# ../cmd/token-review-interceptor/main.go for why this isn't an oversight: a
-# cert-manager-issued self-signed-CA certificate here (the standard pattern, matching
-# how Tekton's own built-in ClusterInterceptors are configured) was tried and
-# extensively debugged live against a real cluster - confirmed the CA genuinely issued
-# the serving cert, ruled out stale caching, ruled out creation-vs-patch timing, and hit
-# a hard wall trying to get the CA into the sink pod's own trust store (blocked by the
-# EventListener CRD's admission webhook, then silently reverted when patched directly
-# onto the generated Deployment). TokenReview-verified caller identity remains the real
-# trust boundary here regardless - see docs/chaining.md.
+# Plain HTTP, not HTTPS: a cert-manager self-signed-CA cert (Tekton's usual pattern) was
+# tried and hit a hard wall getting the CA into the sink pod's trust store (blocked by
+# the EventListener CRD's admission webhook). TokenReview-verified caller identity is the
+# real trust boundary regardless - see docs/admin/chaining.md.
 {{- if .Values.selfManageNamespace }}
-# Real conflict found live 2026-08-15 (first true from-scratch install of this chart, on
-# kind-dev): Helm's --create-namespace flag and a chart's own self-declared Namespace
-# resource for that SAME namespace are mutually exclusive in this Helm version (v3.21.3)
-# - --create-namespace produces a namespace with zero Helm release-tracking metadata,
-# which this resource then can't "import" ("exists and cannot be imported... missing key
-# app.kubernetes.io/managed-by"). kind-observe's platform-system is already cleanly
-# owned by THIS resource (confirmed live) from whenever it first bootstrapped
-# successfully - selfManageNamespace defaults true so that stays exactly as-is. kind-dev
-# (and any future from-scratch install) sets it false and relies on hack/bootstrap.sh's
-# --create-namespace flag instead (a safe no-op if the namespace already exists, per
-# Helm's own docs - unconditionally added there, not gated on this value).
+# Real conflict: Helm's --create-namespace and this chart's own Namespace resource for
+# the SAME namespace are mutually exclusive in Helm v3.21.3 - --create-namespace produces
+# a namespace with no Helm release-tracking metadata, which this resource then can't
+# import. selfManageNamespace defaults true (kind-observe's platform-system is already
+# cleanly Helm-owned); a from-scratch install sets it false and relies on
+# hack/bootstrap.sh's --create-namespace instead.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -112,22 +93,17 @@ spec:
       serviceAccountName: cdevents-broker-auth
       securityContext:
         runAsNonRoot: true
-        # Explicit numeric UID, matching distroless's documented UID for its "nonroot"
-        # user (see cmd/token-review-interceptor/Dockerfile's USER nonroot:nonroot).
-        # Without this, kubelet can't verify runAsNonRoot against a non-numeric USER
-        # name in the image and refuses to start the container at all
-        # (CreateContainerConfigError) - caught live, not in review.
+        # Explicit numeric UID matching distroless's "nonroot" user - kubelet can't
+        # verify runAsNonRoot against a non-numeric USER name and refuses to start the
+        # container otherwise.
         runAsUser: 65532
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: interceptor
           image: ghcr.io/jfillman/platform-cicd-token-review-interceptor:latest
-          # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh
-          # 4/6. Real fix 2026-08-16: this used to reference ghcr.io/platform-cicd/... -
-          # that org doesn't exist (confirmed live, `docker pull` -> "manifest unknown"),
-          # so it was never actually pushable; only ever ran via kind-loaded images.
-          # IfNotPresent kept regardless - same convention as every other
-          # registry-published image in this chart (toolboxImage, doraExporterImage).
+          # Pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh
+          # 4/6. Previously referenced a nonexistent ghcr.io/platform-cicd org and only
+          # ran via a stale kind-loaded image.
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: http }]
           securityContext:

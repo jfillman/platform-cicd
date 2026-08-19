@@ -1,44 +1,26 @@
 {{- if and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 {{- $prBaseNamespace := include "platform-cicd-app.envNamespace" (list . "pr") }}
-# templates/argocd/ephemeral-envs.yaml (from tenant-ephemeral-envs-argocd-template.yaml -
-# rendered only if ephemeralEnvironments.pullRequest.enabled)
+# Rendered only if ephemeralEnvironments.pullRequest.enabled.
 #
-# IMPORTANT for future editors: this file's `template:` block below uses ArgoCD
-# ApplicationSet's OWN Go-template syntax (goTemplate: true - `.number`, `.head_sha`,
-# etc, wrapped in double curly braces and resolved by ArgoCD at generate-time), which
-# collides with Helm's own Go-template engine (this file is rendered by Helm first, at
-# install/upgrade time). Every ArgoCD template expression below is deliberately escaped
-# (each literal curly-brace pair written as a quoted string inside its own Helm action)
-# so Helm emits it as literal double-curly-brace text for ArgoCD to evaluate later - do
-# not "simplify" these by removing the escaping, that would make Helm try to evaluate
-# `.number`/`.head_sha` as if they were its own values (which don't exist), not
-# ArgoCD's.
+# IMPORTANT: the `template:` block below uses ArgoCD ApplicationSet's own Go-template
+# syntax (goTemplate: true - `.number`, `.head_sha`, etc), which collides with Helm's
+# templating since Helm renders this file first. Every ArgoCD expression is escaped
+# (curly braces as quoted strings) so Helm emits literal double-curly-brace text for
+# ArgoCD to evaluate later - do not remove the escaping, or Helm will try to resolve
+# those as its own (nonexistent) values.
 #
-# Ported from a real prior production pattern - the ApplicationSet pullRequest generator
-# itself is sound and worth keeping, but two supporting pieces in that old system were
-# confirmed broken, not just theoretically risky: cleanup was explicitly disabled (a
-# commented-out finalizer, never fixed) and RBAC used cluster-admin for the controlling
-# identity. Both fixed here: a real finalizer below, and no new elevated identity
-# anywhere (ArgoCD's own already-trusted applicationset-controller does all namespace/
-# Application creation).
+# Ported from a prior production pattern, fixing two real issues in it: cleanup was
+# disabled (finalizer commented out - fixed below with a real one) and RBAC used
+# cluster-admin (fixed - no elevated identity needed; ArgoCD's own trusted
+# applicationset-controller creates the namespace/Application).
 #
-# The GitHub App installation token this generator reads is minted by a periodic CronJob
-# (see pr-token-refresher-cronjob.yaml below), not a long-lived PAT.
-#
-# Lives in this app's own -cicd namespace, not argocd - ArgoCD's ApplicationSet-in-any-
-# namespace feature (argocd-platform's applicationsetcontroller.namespaces/
-# application.namespaces, both set to the *-cicd glob - see
-# gitops-cluster-dev/01-argocd-platform), which lets the tokenRef Secret below live here
-# too instead of needing a cross-namespace RBAC grant into argocd just to write it (the
-# old shape - a Role/RoleBinding scoped to one named Secret in argocd - is gone below).
-# tokenRef strict mode is enabled cluster-wide alongside this
-# (applicationsetcontroller.enable.tokenref.strict.mode), so the Secret this generator
-# reads must carry the argocd.argoproj.io/secret-type: scm-creds label - set by the
-# refresher CronJob at creation time below, not a static field here since the Secret
-# itself is never part of this chart's rendered manifest (minted live, never persisted,
-# matching this platform's existing preference for never-persisted over cached
-# credentials).
+# Lives in this app's -cicd namespace, not argocd, via ArgoCD's ApplicationSet-in-any-
+# namespace feature - lets the tokenRef Secret live here too, without a cross-namespace
+# RBAC grant into argocd. tokenRef strict mode requires that Secret carry the
+# argocd.argoproj.io/secret-type: scm-creds label (set by the refresher CronJob below;
+# the Secret itself is minted live, never persisted, and isn't part of this chart's
+# rendered manifest).
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -58,18 +40,16 @@ spec:
           tokenRef:
             secretName: {{ .Values.platformIdentity.appName }}-pr-generator-token
             key: token
-          # Opt-in only - avoids spinning up a full namespace+Deployment for every
-          # WIP/typo-fix PR. A developer adds this label when they actually want a live
-          # preview.
+          # Opt-in via label - avoids a full namespace+Deployment for every WIP PR.
           labels:
             - preview
         requeueAfterSeconds: 180
   template:
     metadata:
       name: "{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
-      # Only cascade-deletes correctly if the Namespace is a tracked resource
-      # (k8s/ephemeral/namespace.yaml in the app repo), not just a CreateNamespace=true
-      # side effect - CreateNamespace=true is deliberately NOT set below for that reason.
+      # Cascade-delete only works if the Namespace is a tracked resource
+      # (k8s/ephemeral/namespace.yaml), not a CreateNamespace=true side effect - hence
+      # CreateNamespace=true is deliberately not set below.
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
@@ -80,16 +60,12 @@ spec:
         path: k8s/ephemeral
         kustomize:
           nameSuffix: "-{{ "{{" }}.number{{ "}}" }}"
-          # build-image.yaml (the shared catalog Task) already tags every build
-          # ghcr.io/.../<app>-pr:<12-char-sha> - trunc 12 here matches that exactly so
-          # this points at a real, already-pushed image, not a guess.
+          # trunc 12 matches build-image.yaml's own <app>-pr:<12-char-sha> tag.
           images:
             - "ghcr.io/{{ .Values.platformIdentity.githubOwner }}/{{ .Values.platformIdentity.appName }}-pr:{{ "{{" }} trunc 12 .head_sha {{ "}}" }}"
-          # Kustomize's nameSuffix transformer deliberately excludes Namespace objects, so
-          # without this patch the Namespace stays "<type>-<app>-pr" while Deployment/
-          # Service deploy into "<type>-<app>-pr-{{.number}}" via destination.namespace
-          # below - a namespace that never matches, so the sync fails with "namespace ...
-          # not found". This JSON6902 patch renames the Namespace object directly.
+          # Kustomize's nameSuffix skips Namespace objects, so without this patch the
+          # Namespace would stay "<type>-<app>-pr" while destination.namespace below
+          # expects a per-PR-numbered suffix, failing sync with "namespace not found".
           patches:
             - target:
                 kind: Namespace
@@ -106,20 +82,15 @@ spec:
           prune: true
           selfHeal: true
 ---
-# templates/argocd/pr-token-refresher (from pr-token-refresher-cronjob.yaml) - ArgoCD's
-# ApplicationSet pullRequest generator needs a static Secret to read a GitHub token from
-# (its own controller polls independently). Rather than a new long-lived PAT, this
-# CronJob periodically mints a fresh, single-repo-scoped GitHub App installation token
-# via the shared broker's /github-installation-token endpoint - same infrastructure and
-# trust model already built for the release stage, not a new credential class. 20
-# minutes comfortably inside a GitHub App installation token's 1-hour lifetime.
+# The ApplicationSet pullRequest generator needs a static Secret to read a GitHub token
+# from. Rather than a long-lived PAT, this CronJob periodically mints a fresh,
+# single-repo-scoped GitHub App installation token via the shared broker's
+# /github-installation-token endpoint (same trust model as the release stage). 20-minute
+# schedule stays well inside the token's 1-hour lifetime.
 #
-# Runs as a dedicated ServiceAccount in the APPLICATION's own namespace - authorization
-# for minting the token depends on the caller's own namespace owning a Repository CR for
-# this app, which only exists in the Application's own namespace. The Secret it writes
-# lives in this same namespace now too (the ApplicationSet above reads it from here), so
-# unlike before this no longer needs a cross-namespace grant into argocd - the Role/
-# RoleBinding below is scoped to this one namespace only.
+# Runs as a dedicated SA in the Application's own namespace - minting authorization
+# depends on the caller's namespace owning a Repository CR for this app. The Secret is
+# written to this same namespace, so no cross-namespace grant into argocd is needed.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -129,11 +100,9 @@ metadata:
     platform.io/subcomponent: "argocd"
   namespace: {{ $appNamespace }}
 ---
-# Lets this SA write (but not read arbitrary/list) exactly one named Secret in this
-# namespace. `create` can't be resourceName-scoped (the object doesn't exist yet at
-# authorization time), so it's granted unscoped but still restricted to the `secrets`
-# resource type in this one namespace; get/update/patch are scoped to the one Secret
-# name by name.
+# Lets this SA write (not read/list arbitrary) exactly one named Secret. `create` can't
+# be resourceName-scoped (object doesn't exist yet), so only get/update/patch are
+# restricted by name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -221,10 +190,8 @@ spec:
                     -H "Content-Type: application/json" \
                     -d '{"owner":"{{ .Values.platformIdentity.githubOwner }}","repo":"{{ .Values.platformIdentity.appName }}"}')"
                   token="$(jq -er '.token' <<<"${resp}")"
-                  # argocd.argoproj.io/secret-type: scm-creds - required by ArgoCD's
-                  # tokenRef strict mode (applicationsetcontroller.enable.tokenref.
-                  # strict.mode, enabled cluster-wide) once this Secret's read by an
-                  # ApplicationSet living outside the argocd namespace.
+                  # scm-creds label required by ArgoCD's tokenRef strict mode for a
+                  # Secret read by an ApplicationSet outside the argocd namespace.
                   kubectl create secret generic {{ .Values.platformIdentity.appName }}-pr-generator-token \
                     -n {{ $appNamespace }} --from-literal=token="${token}" \
                     --dry-run=client -o yaml \

@@ -1,33 +1,17 @@
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
-# templates/governance/policy-config.yaml (from tenant-policy-config-template.yaml -
-# rendered unconditionally, regardless of governance.policyCheck)
+# Rendered unconditionally, regardless of governance.policyCheck: the release-gate Task
+# that reads this (verify-commit-signature.yaml) is a required GitHub Check the tenant
+# can't turn off, so gating this ConfigMap on the flag used to leave apps with
+# policyCheck:false with no ConfigMap at all, crashing the check with a bare NotFound
+# instead of the graceful "empty allowlist -> fail closed" path the Task already handles.
+# governance.policyCheck no longer gates anything real; kept in the schema to avoid a
+# breaking removal.
 #
-# Deliberately NOT gated on governance.policyCheck: the release-gate Task that reads
-# this (catalog/tasks/verify-commit-signature.yaml) runs unconditionally on every
-# release PR - it's a required GitHub Check wired into the gitops repo's own
-# .tekton/pull-request-policy-check.yaml, not something a tenant's cicd.yaml can turn
-# off (see docs/release.md - release gates are enforced, not app-configurable). Gating
-# this ConfigMap on the flag used to mean an app with policyCheck:false (the schema's
-# own default) never got the ConfigMap at all, so `kubectl get configmap` hit a bare
-# NotFound and crashed the whole check via `set -euo pipefail` on every single
-# release - not the graceful "empty allowlist" failure verify-commit-signature.yaml's
-# own code already handles deliberately. Rendering unconditionally means an app that
-# never populated allowedCommitSigners still fails closed (real: no signers configured
-# means no one can pass verification), but through that same deliberate, documented
-# error path instead of a raw missing-resource crash. governance.policyCheck itself no
-# longer gates anything real (the one thing it used to gate, deploy.yaml's policy-check
-# step, was a placeholder stub removed for the same reason) - kept in the schema for
-# now rather than as a breaking removal from every onboarded tenant's cicd.yaml.
+# allowed-commit-signers is a plain list of emails, not a regex - the Task builds
+# gitsign's --certificate-identity-regexp from it at runtime.
 #
-# allowed-commit-signers is a plain, human-editable list of emails - not a pre-built
-# regex - so onboarding/updating an Application's allowed signers never means
-# hand-writing regex syntax. catalog/tasks/verify-commit-signature.yaml builds the
-# --certificate-identity-regexp gitsign needs from this list at runtime.
-#
-# Lives in the Application's own namespace, not argocd or platform-system, so the PaC-
-# triggered policy-check Task (already running under this Application's own Repository
-# CR context, same namespace) can read it same-namespace - no cross-namespace RBAC
-# needed.
+# Lives in the Application's own namespace so the same-namespace policy-check Task can
+# read it without cross-namespace RBAC.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -37,10 +21,7 @@ metadata:
     platform.io/subcomponent: "governance"
   namespace: {{ $appNamespace }}
 data:
-  # One email per line. Comments (#) and blank lines are ignored by the Task that reads
-  # this - see verify-commit-signature.yaml. Real signer emails are managed by editing
-  # this chart's values (platformIdentity is platform-controlled, but this list is
-  # ordinary app config), not by hand-editing regex.
+  # One email per line; # comments and blank lines are ignored by verify-commit-signature.yaml.
   allowed-commit-signers: |
     {{- range .Values.governance.allowedCommitSigners | default list }}
     {{ . }}
@@ -49,8 +30,7 @@ data:
     # dev@example.com
     {{- end }}
 ---
-# Lets this Application's own pipeline-runner SA read exactly this one named ConfigMap.
-# resourceNames-scoped, same shape as every other narrowly-scoped grant in this chart.
+# Lets pipeline-runner read exactly this one named ConfigMap.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

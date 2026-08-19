@@ -1,12 +1,7 @@
 {{/*
-platform-cicd-app.hasStage - checks whether any flow in `.Values.pipelines` contains
-an explicit stage entry for the requested stage name. This keeps the chart fully aligned
-with the new flow-based model instead of relying on the old top-level `pipeline:` array.
-
+platform-cicd-app.hasStage - true/"" if any pipelines flow has a step for the given stage name.
 Usage: {{ include "platform-cicd-app.hasStage" (dict "ctx" . "name" "test") }}
-Returns the string "true" or "" (empty) - compare with `eq ... "true"`, matching Helm's
-usual idiom for boolean-shaped named templates (a named template can only return a
-string, not a real bool).
+Returns "true" or "" (named templates can only return strings) - compare with `eq ... "true"`.
 */}}
 {{- define "platform-cicd-app.hasStage" -}}
 {{- $targetName := .name | default "" -}}
@@ -30,12 +25,9 @@ string, not a real bool).
 {{- end -}}
 
 {{/*
-platform-cicd-app.cacheSize - t-shirt size lookup for build.cache.size, replacing the
-manual pre-substitution the pre-Helm onboarding process needed (there was no templating
-engine in the app-resource path to do this lookup live - see
-charts/platform-cicd-app/templates/env/build-cache-pvc.yaml). Same dictionary as the
-user's own prior cd-pipelines-user Helm chart's buildSpec.cacheSize, reused as-is.
-Defaults to "small" if unset, matching docs/cicd-yaml-reference.md.
+platform-cicd-app.cacheSize - t-shirt size lookup for build.cache.size (see
+templates/env/build-cache-pvc.yaml). Same sizing as the legacy cd-pipelines-user chart.
+Defaults to "small".
 */}}
 {{- define "platform-cicd-app.cacheSize" -}}
 {{- $size := .size | default "small" -}}
@@ -48,15 +40,11 @@ Defaults to "small" if unset, matching docs/cicd-yaml-reference.md.
 {{- end -}}
 
 {{/*
-platform-cicd-app.sourceVolumeSize - t-shirt size lookup for build.sourceVolume.size,
-same shape as cacheSize above but a separate, larger dictionary: this backs the
-ephemeral per-PipelineRun `source` workspace (checked-out repo + build output + kaniko
-context), not the persistent per-app dependency cache. Used by
-charts/platform-cicd-app/templates/triggers/flow-triggers.yaml (event-chained stages,
-rendered here at Helm time) - the git-rooted-stage equivalent in
-charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml can't use this
-helper (that file emits YAML at Tekton *runtime* into a tenant's own repo, not at Helm
-render time), so it necessarily duplicates this same dictionary as bash.
+platform-cicd-app.sourceVolumeSize - t-shirt size lookup for build.sourceVolume.size, the
+ephemeral per-PipelineRun source workspace (checkout + build + kaniko context) - a
+separate, larger table than cacheSize above. Duplicated as bash in
+platform-cicd-catalog's deliver-onboarding-files.yaml, which renders at Tekton runtime
+rather than Helm time and so can't call this helper.
 */}}
 {{- define "platform-cicd-app.sourceVolumeSize" -}}
 {{- $size := .size | default "small" -}}
@@ -69,17 +57,12 @@ render time), so it necessarily duplicates this same dictionary as bash.
 {{- end -}}
 
 {{/*
-platform-cicd-app.envNamespace - the one general namespace pattern this whole platform
-uses: `<type>-<app-name>-<env>`, where every namespace an Application ever gets (its own
-CI/CD execution namespace, a deploy target, release staging, a PR ephemeral env) is a
-PEER under this same flat pattern, not a hierarchy - a deploy namespace is never
-`<type>-<app-name>-cicd-<env>`, since it has nothing to do with "cicd" conceptually (it's
-where the Application *runs*, not where its pipeline runs). See docs/concepts.md and
-docs/naming-conventions.md for the full rationale.
+platform-cicd-app.envNamespace - builds `<type>-<app-name>-<env>`, the one namespace
+pattern this platform uses. Every namespace an app gets (cicd, a deploy target, release
+staging, a PR env) is a flat peer under this pattern, not a hierarchy - see
+docs/naming-conventions.md.
 
-Takes a two-element list, [<root context>, <env value>], since Helm named templates only
-accept one positional argument - `list` is the idiom for passing more than one.
-
+Takes [<root context>, <env>] as a list (Helm named templates take one arg).
 Usage: {{ include "platform-cicd-app.envNamespace" (list $ "staging") }}
 */}}
 {{- define "platform-cicd-app.envNamespace" -}}
@@ -89,12 +72,10 @@ Usage: {{ include "platform-cicd-app.envNamespace" (list $ "staging") }}
 {{- end -}}
 
 {{/*
-platform-cicd-app.localDeployEnvs - deploy.lowerEnvironments plus any
-deploy.upperEnvironments entry that stays on THIS cluster (a plain string, or a
-{name, cluster} object with no cluster set) - i.e. every env that actually needs
-pipeline-runner RBAC into a local namespace. Cluster-mapped upper envs (see
-docs/multi-cluster.md) are deliberately excluded: there's no local namespace for them,
-and granting RBAC into one would be meaningless dead config, not just unnecessary.
+platform-cicd-app.localDeployEnvs - lowerEnvironments plus same-cluster
+upperEnvironments entries: every env that needs pipeline-runner RBAC into a local
+namespace. Cluster-mapped upper envs (docs/multi-cluster.md) are excluded - they have no
+local namespace to grant RBAC into.
 
 Usage: {{ include "platform-cicd-app.localDeployEnvs" . | fromYamlArray }}
 */}}
@@ -113,13 +94,11 @@ Usage: {{ include "platform-cicd-app.localDeployEnvs" . | fromYamlArray }}
 {{- end -}}
 
 {{/*
-platform-cicd-app.localUpperEnvs - just the same-cluster entries out of
-deploy.upperEnvironments (a plain string, or a {name, cluster} object with no cluster
-set), as plain names. Same normalization as localDeployEnvs but WITHOUT
-lowerEnvironments mixed in - what release-application.yaml/appproject.yaml need (one
-ArgoCD Application/destination per local upper env; "dev" is a deploy-stage concept,
-never an ArgoCD one). A cluster-mapped entry gets no Application rendered here at all -
-its Application manifest is delivered via GitOps instead (see docs/multi-cluster.md).
+platform-cicd-app.localUpperEnvs - same-cluster upperEnvironments entries only, no
+lowerEnvironments mixed in. Used by release-application.yaml/appproject.yaml: one ArgoCD
+Application/destination per local upper env ("dev" is a deploy-stage concept, never an
+ArgoCD one). Cluster-mapped entries get no local Application; theirs is delivered via
+GitOps instead (docs/multi-cluster.md).
 
 Usage: {{ include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
 */}}
@@ -138,17 +117,12 @@ Usage: {{ include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
 {{- end -}}
 
 {{/*
-platform-cicd-app.upperEnvClusters - env name -> cluster lookup ("" for a same-cluster
-entry) built from deploy.upperEnvironments, normalizing the plain-string vs
-{name, cluster} object shape once. Shared by validateFlows (the env->cluster consistency
-check on a release step's own optional cluster:) and flow-triggers.yaml/
-deliver-onboarding-files.yaml (resolving cluster for a release step that OMITS cluster:,
-the exact thing validateFlows's own error message tells users to do - see its "Prefer
-omitting the step's own cluster:" message. Before this helper existed, that advice was
-silently wrong: both renderers read only $step.cluster with no registry fallback, so
-following it produced an empty cluster param and a silently-same-cluster release instead
-of the cluster-mapped one the tenant actually declared under upperEnvironments -
-confirmed live 2026-08-11).
+platform-cicd-app.upperEnvClusters - env name -> cluster map ("" = same-cluster) built
+from deploy.upperEnvironments, normalizing the plain-string vs {name, cluster} shape
+once. Shared by validateFlows's consistency check and by the renderers that resolve a
+release step's cluster when the step omits cluster: - without this shared fallback, an
+omitted cluster: silently produced a same-cluster release instead of the tenant's
+declared cluster-mapped one.
 
 Usage: {{ $clusters := include "platform-cicd-app.upperEnvClusters" . | fromYaml }}
 */}}
@@ -166,14 +140,10 @@ Usage: {{ $clusters := include "platform-cicd-app.upperEnvClusters" . | fromYaml
 
 {{/*
 platform-cicd-app.resolveStepCluster - a release step's effective cluster: its own
-cluster: if set, else whatever deploy.upperEnvironments registers for its env (see
-upperEnvClusters above), else "". This is what actually implements validateFlows's
-"prefer omitting cluster: and letting it resolve from upperEnvironments" advice - that
-helper only checked consistency when a step redundantly repeated cluster:, it never
-resolved the omitted case for a renderer to use.
+cluster: if set, else whatever upperEnvClusters registers for its env, else "". This is
+what actually implements the "omit cluster: and let it resolve" advice from validateFlows.
 
-Takes a two-element list, [<root context>, <step>], same idiom as envNamespace.
-
+Takes [<root context>, <step>] as a list.
 Usage: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) }}
 */}}
 {{- define "platform-cicd-app.resolveStepCluster" -}}
@@ -188,11 +158,9 @@ Usage: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) }}
 {{- end -}}
 
 {{/*
-platform-cicd-app.hasClusterMappedUpperEnv - "true"/"false": does this app have at
-least one deploy.upperEnvironments entry mapped to a different physical cluster? Gates
-whether open-release-pr's cluster-registry-reading RBAC
-(templates/clusters/read-registry-rbac.yaml) needs to be rendered at all - most apps
-have none and shouldn't get otherwise-unused RBAC.
+platform-cicd-app.hasClusterMappedUpperEnv - "true"/"false": does any
+deploy.upperEnvironments entry map to a different physical cluster? Gates whether
+templates/clusters/read-registry-rbac.yaml renders at all - most apps don't need it.
 
 Usage: {{ include "platform-cicd-app.hasClusterMappedUpperEnv" . }}
 */}}
@@ -207,12 +175,9 @@ Usage: {{ include "platform-cicd-app.hasClusterMappedUpperEnv" . }}
 {{- end -}}
 
 {{/*
-platform-cicd-app.namespace - the Application's own CI/CD execution namespace, i.e.
-platform-cicd-app.envNamespace with env="cicd" - just the specific env value this
-Application's pipelines themselves run under, a sibling of "dev"/"staging"/"pr-42", not a
-special base other namespaces are built on top of. This is the by-far most common case
-(every resource that isn't itself env-scoped lives here), so it gets its own shorthand
-taking the context directly rather than needing `(list $ "cicd")` at every call site.
+platform-cicd-app.namespace - shorthand for envNamespace with env="cicd": this
+Application's own CI/CD execution namespace, a sibling of "dev"/"staging"/"pr-42", not a
+special base others build on. The common case, so it takes the context directly.
 
 Usage: {{ include "platform-cicd-app.namespace" . }} (or `$` from inside a range/with block)
 */}}
@@ -355,13 +320,9 @@ renderer can treat both forms uniformly.
 {{- end -}}
 {{- if eq ($rootTrigger.source | default "") "" -}}
   {{- $defaultEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
-  {{- /* No release.created - see flow-triggers.yaml's own header for why it was removed
-  entirely (PaC has no support for GitHub "release" webhooks at all). Includes
-  pull_request/tag, unlike an earlier version of this check - validateFlows below has its
-  own, separate re-derivation of the same "is this git-rooted" inference that already had
-  both, so a flow using the legacy `type: tag`/`type: pull_request` shorthand without an
-  explicit `source: git` was inferred as event-chained HERE but git-rooted THERE,
-  depending on which of the two independent checks happened to run. */ -}}
+  {{- /* No release.created - PaC has no GitHub "release" webhook support (see
+  flow-triggers.yaml). validateFlows below re-derives this same git-rooted inference;
+  keep both lists in sync. */ -}}
   {{- if or (eq $defaultEvent "push") (eq $defaultEvent "pull_request") (eq $defaultEvent "branch.created") (eq $defaultEvent "tag") (eq $defaultEvent "deploy") -}}
     {{- $_ := set $rootTrigger "source" "git" -}}
   {{- else if ne $defaultEvent "" -}}
@@ -372,56 +333,34 @@ renderer can treat both forms uniformly.
 {{- end -}}
 
 {{/*
-platform-cicd-app.labels - see charts/platform-cicd-catalog/templates/_helpers.tpl's
-identical-in-spirit helper for the full rationale. Includes platform.io/app
-unconditionally (not just on the argocd-namespace resources that strictly need it for
-selection) - most valuable there, where many Applications' Applications/AppProjects/Roles
-coexist in one shared namespace, but applied everywhere for consistency per
-docs/naming-conventions.md.
+platform-cicd-app.labels - see platform-cicd-catalog's identical helper for the full
+rationale. Includes platform.io/app unconditionally, not just where selection strictly
+needs it - many Applications' resources share one namespace (docs/naming-conventions.md).
 */}}
 {{/*
-platform-cicd-app.validateFlows - validates pipeline flow definitions against
-architectural constraints. Rules:
-- Any stage (build/test/deploy/release) may be git-rooted (source: git) - all four
-  Pipelines' start-flow task is idempotent (generates a new trace root when fired
-  directly, passes through when event-chained), so none of them are special-cased here
-  anymore. See start-flow-root-span.yaml.
-- build, if present in a flow at all, must be its first step - nothing else emits an
-  event build could sensibly be chained from, and nothing chains FROM build via this
-  rule either (build must be root when present).
-- Release as git-root must still be first (only) step in flow - it's architecturally
-  terminal for the GIT-ROOTED case specifically (a git-rooted release creates a new
-  trace root with nothing before it to chain from); this does NOT restrict where an
-  EVENT-CHAINED release can appear - test/deploy/release/repeats of any of them may
-  precede or follow each other in any combination once past a required leading build.
-  Deliberately no "release must follow deploy" or "release must be last" rule -
-  flow-triggers.yaml's event-type lookup is keyed by whatever the PREVIOUS step's
-  stage actually is, not a fixed position, so any ordering already works structurally.
-- Cluster param only valid for release stage
-- Env param required for deploy, release, and test stages - test needs it too now
-  (which environment's build the test is actually exercising), even though nothing
-  downstream deploys anywhere on test's behalf.
-- A deploy step's env must appear in deploy.lowerEnvironments/upperEnvironments -
-  deploy-rbac.yaml only grants pipeline-runner rights into namespaces from that same
-  list, so a step targeting an env missing from it would otherwise fail late, deep
-  inside deploy-manifests, with a bare Forbidden RBAC error instead of a fast, readable
-  validate-cicd-config-style rejection.
-- A test step needs a resolvable suite name: either its own `suite` or the top-level
-  test.suite. Required specifically so two test steps in one flow (legal - see the
-  "any stage may repeat" rule above) can be told apart; falls back to the top-level
-  value so the common single-suite case doesn't need to repeat it per step.
+platform-cicd-app.validateFlows - validates pipeline flow definitions. Rules:
+- Any stage may be git-rooted; start-flow-root-span.yaml's task is idempotent either way.
+- build, if present, must be the first (and only) step - nothing chains into or from it.
+- A git-rooted release must be the flow's sole step (it starts a new trace root).
+  Event-chained release has no position restriction - deploy/test/release may repeat or
+  reorder freely once past a required leading build; flow-triggers.yaml keys off each
+  step's actual predecessor, not a fixed slot.
+- cluster: is only valid on a release step.
+- env: is required for deploy, release, and test steps.
+- A deploy step's env must be listed under deploy.lowerEnvironments/upperEnvironments -
+  deploy-rbac.yaml only grants pipeline-runner access to envs from that list, so this
+  catches what would otherwise be a late, bare Forbidden RBAC error.
+- A test step needs a resolvable suite name (its own `suite` or top-level `test.suite`),
+  so repeated test steps in one flow can be told apart.
 
-Fails fast with descriptive message if violated, preventing broken renders.
+Fails fast with a descriptive message if violated.
 */}}
 {{- define "platform-cicd-app.validateFlows" -}}
 {{- $flows := .Values.pipelines | default (dict) -}}
 {{- $defaultSuite := .Values.test.suite | default "" -}}
 {{- $lowerEnvs := .Values.deploy.lowerEnvironments | default (list) -}}
-{{- /* upperEnvironments entries are either a plain string (same-cluster, today's only
-shape) or a {name, cluster} object (env lives on a different physical cluster - see
-docs/multi-cluster.md). $upperEnvClusters (name->cluster, "" for same-cluster) is the
-single normalization of that shape, shared with the renderers that actually resolve a
-release step's cluster - see upperEnvClusters's own header for why that sharing matters. */ -}}
+{{- /* upperEnvironments entries are a plain string (same-cluster) or a {name, cluster}
+object (docs/multi-cluster.md); upperEnvClusters normalizes both shapes. */ -}}
 {{- $upperEnvClusters := fromYaml (include "platform-cicd-app.upperEnvClusters" .) -}}
 {{- $upperEnvs := keys $upperEnvClusters -}}
 {{- $deployEnvs := concat $lowerEnvs $upperEnvs -}}
@@ -432,7 +371,6 @@ release step's cluster - see upperEnvClusters's own header for why that sharing 
   {{- $stepCount := len $steps -}}
 
   {{- if gt $stepCount 0 -}}
-    {{- /* Determine trigger source */ -}}
     {{- $triggerSource := $trigger.source | default "" -}}
     {{- if eq $triggerSource "" -}}
       {{- $triggerEvent := $trigger.event | default ($trigger.type | default "") -}}
@@ -445,7 +383,6 @@ release step's cluster - see upperEnvClusters's own header for why that sharing 
 
     {{- $firstStage := (index $steps 0).stage | default "build" -}}
 
-    {{- /* Validate git-rooted stages */ -}}
     {{- if eq $triggerSource "git" -}}
       {{- if eq $firstStage "release" -}}
         {{- if gt $stepCount 1 -}}
@@ -454,40 +391,33 @@ release step's cluster - see upperEnvClusters's own header for why that sharing 
       {{- end -}}
     {{- end -}}
 
-    {{- /* Validate each step */ -}}
     {{- range $index, $step := $steps -}}
       {{- $stageName := $step.stage | default "" -}}
 
-      {{- /* Validate env requirement */ -}}
       {{- if or (eq $stageName "deploy") (eq $stageName "release") (eq $stageName "test") -}}
         {{- if not $step.env -}}
           {{- fail (printf "Flow '%s' step %d (%s): env is required for %s stage" $flowName (add $index 1) $stageName $stageName) -}}
         {{- end -}}
       {{- end -}}
 
-      {{- /* Validate deploy step's env is actually provisioned (deploy-rbac.yaml only
-      grants access to envs listed under deploy.lowerEnvironments/upperEnvironments) */ -}}
+      {{- /* deploy-rbac.yaml only grants access to envs listed under
+      deploy.lowerEnvironments/upperEnvironments */ -}}
       {{- if and (eq $stageName "deploy") $step.env (not (has $step.env $deployEnvs)) -}}
         {{- fail (printf "Flow '%s' step %d: deploy env '%s' is not listed under deploy.lowerEnvironments or deploy.upperEnvironments - pipeline-runner has no RBAC into that namespace, this would fail at deploy time with a Forbidden error instead. Add it to one of those lists." $flowName (add $index 1) $step.env) -}}
       {{- end -}}
 
-      {{- /* Validate test step has a resolvable suite name */ -}}
       {{- if eq $stageName "test" -}}
         {{- if and (not $step.suite) (not $defaultSuite) -}}
           {{- fail (printf "Flow '%s' step %d: test stage needs a suite name - set this step's own `suite`, or a top-level `test.suite` shared by all test steps." $flowName (add $index 1)) -}}
         {{- end -}}
       {{- end -}}
 
-      {{- /* Validate cluster only for release */ -}}
       {{- if and $step.cluster (ne $stageName "release") -}}
         {{- fail (printf "Flow '%s' step %d: cluster is only valid for release stage, not %s" $flowName (add $index 1) $stageName) -}}
       {{- end -}}
 
-      {{- /* Validate a release step's env is a declared upper environment, and that its
-      own optional cluster: (if set) agrees with what upperEnvironments says for that
-      env - the registry entry is the single source of truth for env->cluster, a step
-      repeating it is only a consistency check, not a second input. See
-      docs/multi-cluster.md. */ -}}
+      {{- /* upperEnvironments is the single source of truth for env->cluster; a step's
+      own cluster: (if set) is only checked for consistency, not a second input. */ -}}
       {{- if and (eq $stageName "release") $step.env -}}
         {{- if not (has $step.env $upperEnvs) -}}
           {{- fail (printf "Flow '%s' step %d: release env '%s' is not listed under deploy.upperEnvironments. Add it there (as a plain name for a same-cluster env, or {name, cluster} for one hosted on a different cluster - see docs/multi-cluster.md)." $flowName (add $index 1) $step.env) -}}
@@ -498,18 +428,15 @@ release step's cluster - see upperEnvClusters's own header for why that sharing 
         {{- end -}}
       {{- end -}}
 
-      {{- /* Validate trigger only on first step */ -}}
       {{- if and (gt $index 0) $step.trigger -}}
         {{- fail (printf "Flow '%s' step %d: trigger can only be defined on first step, not step %d (%s)" $flowName 1 (add $index 1) $stageName) -}}
       {{- end -}}
 
-      {{- /* Validate build can only ever be the first step */ -}}
       {{- if and (eq $stageName "build") (gt $index 0) -}}
         {{- fail (printf "Flow '%s' step %d: build can only be the first step of a flow, not step %d - nothing chains into build. Give it its own flow, or move it to step 1." $flowName (add $index 1) (add $index 1)) -}}
       {{- end -}}
     {{- end -}}
 
-    {{- /* Validate tag patterns for tag-triggered flows */ -}}
     {{- $triggerEvent := $trigger.event | default ($trigger.type | default "") -}}
     {{- if eq $triggerEvent "tag" -}}
       {{- $tagPattern := $trigger.tagPattern | default "" -}}

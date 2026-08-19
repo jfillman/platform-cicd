@@ -1,29 +1,15 @@
-# templates/env/build-cache-pvc.yaml (from app-build-cache-pvc-template.yaml)
+# Backs build-source.yaml's build-cache volume - a persistent PVC, not the ephemeral
+# per-run `source` workspace. One PVC per app since build.cache.size is a per-app choice.
 #
-# Backs build-source.yaml's build-cache volume - a real, persistent PVC, not the
-# ephemeral per-run `source` workspace every Pipeline already has. One PVC per APP, not
-# one shared PVC across multiple apps: build.cache.size is a per-app t-shirt-size choice,
-# and a single shared PVC can't honor two apps wanting two different sizes.
+# Rendered unconditionally regardless of build.cache.enabled: build-source.yaml always
+# mounts this volume and only checks enabled at the script level (not as a Tekton
+# workspace, to avoid colliding with the Affinity Assistant). Making it conditional here
+# once broke scheduling for every app with caching disabled (the default) -
+# "persistentvolumeclaim ... not found".
 #
-# Rendered UNCONDITIONALLY, regardless of build.cache.enabled - matches build-source.yaml's
-# own documented design (a raw volume, always mounted; whether it's actually USED is a
-# pure script-level check on build.cache.enabled, deliberately not a Tekton *workspace*
-# to avoid colliding with the Affinity Assistant used by build-source/unit-test's
-# concurrent PVC-workspace sharing - see that Task's header comment). This used to be
-# conditional here, which left every app with cache.enabled=false (the default) unable to
-# ever schedule build-source at all: "persistentvolumeclaim ... not found" - confirmed
-# live the very first time a real app onboarded without opting into caching.
-#
-# Size resolved live via the platform-cicd-app.cacheSize helper - this used to be a
-# manual pre-substitution step (no templating engine existed in the app-resource path
-# to do the small/medium/large/xlarge -> Gi lookup live); cicd.yaml becoming this chart's
-# values.yaml is what makes a real lookup possible now.
-#
-# ReadWriteOnce is sufficient (and simpler than RWX, which the default kind storage class
-# doesn't support anyway) since this platform's whole cluster is single-node. No live
-# resize support: kind-observe's default `standard` StorageClass has
-# allowVolumeExpansion: false - changing build.cache.size later means deleting and
-# recreating this PVC (losing its cached content, not a big deal for a cache).
+# ReadWriteOnce is sufficient on this single-node cluster. No live resize: the default
+# StorageClass has allowVolumeExpansion: false, so changing build.cache.size later means
+# deleting and recreating this PVC.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

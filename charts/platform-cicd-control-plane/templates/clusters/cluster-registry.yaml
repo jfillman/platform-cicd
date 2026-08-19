@@ -1,17 +1,10 @@
-# templates/clusters/cluster-registry.yaml - see this chart's own values.yaml
-# (clusters:) and docs/multi-cluster.md for the full rationale.
+# templates/clusters/cluster-registry.yaml - see values.yaml (clusters:) and
+# docs/admin/multi-cluster.md for the full rationale.
 #
-# One ConfigMap, one key per registered cluster, each value a small JSON blob - resolved
-# LIVE (a `kubectl get configmap ... -o jsonpath=...` at pipeline-run time or from the
-# outcome relay's own code), not baked into any per-Application Helm release. This
-# platform already prefers live lookups over duplicating platform-level facts into every
-# tenant's own values wherever a real object can be the single source of truth instead -
-# see e.g. verify-image-provenance.yaml deriving its required-tasks list from the real
-# `build` Pipeline object rather than a hand-maintained copy. A cluster registry is the
-# same shape of problem: every app that ever releases onto a given cluster needs the
-# same relaySecretName/outcomeRelayURL, and a Helm-value copy per app is exactly
-# the kind of two-independent-copies drift this project's own bug list has hit before
-# (see docs/multi-cluster.md's Phase B note).
+# One ConfigMap, one key per registered cluster (JSON blob each) - resolved LIVE at
+# pipeline-run time / by the outcome relay, not baked into any per-Application Helm
+# release, so every app that releases onto a cluster shares one source of truth for
+# relaySecretName/outcomeRelayURL instead of a per-app copy that can drift.
 apiVersion: v1
 kind: ConfigMap
 metadata:

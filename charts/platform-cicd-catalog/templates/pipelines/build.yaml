@@ -1,10 +1,9 @@
 # catalog/pipelines/build.yaml
 #
-# First stage of every flow. Always a fresh flow root - build is the only stage
-# triggered directly by a git event (via Pipelines-as-Code); every later stage is
-# triggered by a CDEvent this stage's `finally` block emits. See docs/tracing.md and
-# docs/chaining.md. Referenced from each app's onboarding-generated .tekton/*.yaml via
-# Tekton's cluster resolver - app repos never contain a copy of this Pipeline.
+# First stage of every flow, always the flow root - the only stage triggered directly
+# by a git event (via PaC); every later stage is triggered by a CDEvent this stage's
+# `finally` block emits. See docs/tracing.md and docs/chaining.md. Referenced via
+# Tekton's cluster resolver from each app's onboarding-generated .tekton/*.yaml.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -38,26 +37,14 @@ spec:
       type: string
   workspaces:
     - name: source
-  # Pipeline-level IMAGE_URL/IMAGE_DIGEST results - Tekton Chains' own "type hinting"
-  # convention for identifying which image a PipelineRun's provenance/signature belongs
-  # to (confirmed live: without these, Chains logs "No image subject to attest ...
-  # Skipping upload to registry" and silently produces no OCI signature at all, despite
-  # otherwise reporting chains.tekton.dev/signed: "true" - a real, non-obvious gap this
-  # surfaced, not a hypothetical). IMAGE_URL is the bare repo name (no tag - confirmed
-  # against Tekton's own docs example); must be $(tasks.*.results.*), not $(params.*) -
-  # Tekton's admission webhook rejects a Pipeline result whose value is a plain param
-  # reference, so build-image.yaml grew a trivial new `image-repo` result just to give
-  # this a task-result expression to point at. IMAGE_DIGEST is build-image's own
-  # already-`sha256:`-prefixed result - see docs/image-signing.md.
-  # CHAINS-GIT_URL/CHAINS-GIT_COMMIT - Tekton Chains' own real, documented type-hint
-  # convention (confirmed via tekton.dev/docs/chains/slsa-provenance) for promoting a
-  # task's own source-checkout results into the provenance's materials field (predicate
-  # .materials for SLSA v0.2). Exact names, case-sensitive. Sourced from clone-repo's own
-  # url/commit results (git-clone's proven, already-correct output - see
-  # docs/commit-signing.md) - same Pipeline-level-result pattern as IMAGE_URL/IMAGE_DIGEST
-  # above, not the separate artifacts.pipelinerun.enable-deep-inspection auto-discovery
-  # mechanism (not needed since these are explicit Pipeline-level results, not buried in
-  # an un-pointed-to child Task result). See docs/provenance-policy.md.
+  # IMAGE_URL/IMAGE_DIGEST and CHAINS-GIT_URL/CHAINS-GIT_COMMIT are Tekton Chains' own
+  # documented "type hinting" result names (exact names, case-sensitive) that tell
+  # Chains which image/commit a PipelineRun's provenance and signature belong to.
+  # Without them Chains silently skips signing (no image subject to attest) despite
+  # reporting chains.tekton.dev/signed: "true". IMAGE_URL/IMAGE_DIGEST must reference a
+  # $(tasks.*.results.*) - a plain $(params.*) is rejected by Tekton's admission webhook,
+  # which is why build-image.yaml carries a dedicated `image-repo` result just for this.
+  # See docs/image-signing.md and docs/provenance-policy.md.
   results:
     - name: IMAGE_URL
       value: $(tasks.build-image.results.image-repo)
@@ -101,9 +88,8 @@ spec:
           - { name: kind, value: task }
           - { name: name, value: start-flow-root-span }
           - { name: namespace, value: {{ .Release.Namespace }} }
-      # build is always the first (and only git-rooted) stage of any flow containing it
-      # (per platform-cicd-app validateFlows), so it always creates root span data.
-      # is-flow-root param present for consistency but always true in practice.
+      # build is always the first, git-rooted stage of any flow, so is-flow-root is
+      # always true in practice; the param exists only for consistency with other stages.
 
     - name: start-build-stage-span
       runAfter: [start-flow]
@@ -116,13 +102,11 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
 
-    # Deeper CDEvents coverage (see docs/chaining.md): a generic
-    # pipelinerun.started signal, independent of build's own domain-specific
-    # artifact.published event below. Fires here, not earlier, because build is the flow
-    # root - chain-id/traceparent don't exist until start-flow generates them, unlike
-    # test/deploy/release where they already arrive as incoming params. This means
-    # build's pipelinerun.started fires a few tasks later than the other three stages' -
-    # a documented, accepted asymmetry, not an oversight.
+    # Generic pipelinerun.started CDEvent (docs/chaining.md), independent of build's own
+    # artifact.published event below. Fires after start-flow (not earlier) because
+    # chain-id/traceparent don't exist until start-flow generates them - unlike
+    # test/deploy/release, which receive them as incoming params. So build's
+    # pipelinerun.started fires later than the other stages' - accepted asymmetry.
     - name: pipelinerun-started
       runAfter: [start-flow]
       taskRef:
@@ -157,15 +141,12 @@ spec:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
-    # Optional, runs concurrently with unit-test (Phase 3 item 8.1) - confirmed live
-    # they're independent: run-tests.yaml runs test.sh directly against checked-out
-    # source, sharing no build output with this Task. Skipped entirely for teams doing
-    # the whole build inside a multi-stage Dockerfile instead - see
-    # validate-cicd-config.yaml's has-build-script result and build-source.yaml's own
-    # header. build-image still waits for BOTH this and unit-test below (real or
-    # skipped) before kaniko builds+pushes - nothing gets published to the registry
-    # unless tests pass, same fail-fast guarantee as before this split, just with the
-    # independent compile step no longer serialized behind tests.
+    # Optional, runs concurrently with unit-test - the two are independent (run-tests.yaml
+    # runs test.sh directly against checked-out source, sharing no output with this Task).
+    # Skipped entirely for teams building inside a multi-stage Dockerfile instead (see
+    # validate-cicd-config.yaml's has-build-script result). build-image still waits for
+    # both (real or skipped) before kaniko builds+pushes, so nothing publishes unless
+    # tests pass - the compile step is just no longer serialized behind tests.
     - name: build-source
       runAfter: [validate-config, start-build-stage-span]
       when:
@@ -185,14 +166,10 @@ spec:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
-    # sast-scan is included here too (Phase 3 item 8.4), same fail-fast principle as
-    # unit-test above: sast-scan starts early/concurrently for speed (runAfter clone-repo,
-    # not build-image), but build-image still waits for it to finish before publishing -
-    # a real, live-confirmed gap otherwise (a deliberately-failing sast-scan still let a
-    # prior test push the image, since nothing downstream depended on it). When sast is
-    # disabled in cicd.yaml, sast-scan's when: clause skips it, which Tekton treats as
-    # satisfied for this runAfter - build-image proceeds exactly as before, no behavior
-    # change for Applications that haven't enabled it.
+    # sast-scan starts concurrently for speed (runAfter clone-repo, not build-image), but
+    # build-image still waits for it before publishing - without this a failing sast-scan
+    # wouldn't block the image push, since nothing downstream depended on it. When sast is
+    # disabled, sast-scan's when: clause skips it, which Tekton treats as satisfied.
     - name: build-image
       runAfter: [build-source, unit-test, sast-scan, start-build-stage-span]
       taskRef:
@@ -211,16 +188,11 @@ spec:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
-    # Real (not stub) SAST as of Phase 3 item 8.4 - runAfter deliberately does NOT
-    # include build-image: sast-scan reads source, not the built image, so it doesn't
-    # need to wait for build-source/unit-test/build-image at all - only clone-repo.
-    # Runs concurrently with unit-test/build-source instead of serialized behind the
-    # whole compile+test+publish sequence, a real speed win now that this is a real scan
-    # (previously irrelevant for the stub, which did no work). Reads the SAME shared
-    # `source` workspace those concurrent tasks also touch or write to - accepted as
-    # safe, not just assumed: Semgrep's default rulesets already exclude node_modules/
-    # vendor-style dependency directories, so a build.script that's mid-`npm ci` on this
-    # same tree doesn't change what actually gets scanned.
+    # runAfter deliberately doesn't include build-image: sast-scan reads source, not the
+    # built image, so it only needs clone-repo and runs concurrently with unit-test/
+    # build-source. Shares the same `source` workspace those tasks touch - safe because
+    # Semgrep's default rulesets already exclude node_modules/vendor dependency dirs, so
+    # a concurrent `npm ci` doesn't change what gets scanned.
     - name: sast-scan
       runAfter: [clone-repo, start-build-stage-span]
       when:
@@ -241,12 +213,9 @@ spec:
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
 
-    # Real (not stub) as of Phase 3 item 8.5. runAfter stays build-image, unlike
-    # sast-scan - there's no image to scan until kaniko has actually pushed one, so
-    # this can't start any earlier. A failing scan can't retroactively "unpublish" the
-    # dev-tagged image build-image already pushed, but it still fails this Task, which
-    # (Tekton's normal semantics, no extra wiring needed) fails the whole PipelineRun -
-    # a red build the developer sees immediately, same as sast-scan's own failure mode.
+    # Unlike sast-scan, runAfter stays build-image - there's no image to scan until
+    # kaniko has pushed one. A failing scan can't unpublish the already-pushed dev image,
+    # but it still fails this Task, which fails the whole PipelineRun (red build).
     - name: image-scan
       runAfter: [build-image]
       when:

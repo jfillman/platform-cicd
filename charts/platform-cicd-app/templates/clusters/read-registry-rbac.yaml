@@ -1,37 +1,17 @@
-# templates/clusters/read-registry-rbac.yaml - only rendered when this app has at
-# least one cluster-mapped deploy.upperEnvironments entry (see docs/multi-cluster.md).
-# Lets this Application's own pipeline-runner SA read the control-plane chart's
-# cluster-registry ConfigMap (charts/platform-cicd-control-plane/templates/clusters/
-# cluster-registry.yaml, in platform-system) - open-release-pr.yaml needs this to
-# resolve a cluster name into its outcomeRelayURL live, at release time, rather than
-# duplicating that infra fact into every app's own values (see that ConfigMap's own
-# header for why). get-only, resourceNames-scoped to exactly this one ConfigMap - same
-# "narrow, per-app, no cluster-wide grants" posture as every other cross-namespace RBAC
-# grant in this platform (compare charts/platform-cicd-app/templates/argocd/
-# release-application.yaml's allow-dora-tracking-* Role). The registry holds no secret
-# material itself (just a URL and a Secret NAME to look up separately, not
-# gitopsApplicationsPath any more - that field was dropped once open-release-pr.yaml
-# stopped writing its own Application manifest, see this chart's own 2026-08-16/17
-# history), so a read grant here is not a credential exposure.
-#
-# Re-added 2026-08-17 - a near-identical file existed before 2026-08-16, deleted
-# alongside open-release-pr.yaml's own GitOps app-of-apps writing on the (correct, at
-# the time) assumption nothing in this Task would need a live registry read any more.
-# That assumption didn't survive rebuilding DORA/Slack outcome-reporting for
-# cluster-mapped releases against idp-application's own releaseTracking hooks
-# (idp-service-catalog/charts/idp-application/values.yaml) - open-release-pr.yaml
-# still needs outcomeRelayURL to bake into that values.yaml block, just not
-# gitopsApplicationsPath any more.
+# Only rendered when this app has a cluster-mapped deploy.upperEnvironments entry
+# (docs/multi-cluster.md). Lets pipeline-runner read the control-plane chart's
+# cluster-registry ConfigMap (platform-system) so open-release-pr.yaml can resolve a
+# cluster name to its outcomeRelayURL at release time, instead of duplicating that fact
+# into every app's values. get-only, scoped to this one ConfigMap; it holds no secret
+# material (a URL and a Secret name to look up separately), so a read grant isn't a
+# credential exposure.
 {{- if eq (include "platform-cicd-app.hasClusterMappedUpperEnv" .) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  # Per-app name, not a shared "allow-read-cluster-registry" - each app is its own Helm
-  # release, and two releases both owning one identically-named object in the same
-  # namespace is a real Helm ownership conflict (confirmed by this platform's own
-  # established per-app-suffix convention elsewhere, e.g. release-application.yaml's
-  # allow-dora-tracking-<app>-<env> Role), not just a style preference.
+  # Per-app name, not shared - two Helm releases owning one identically-named object in
+  # the same namespace is a real ownership conflict, not just style.
   name: allow-read-cluster-registry-{{ .Values.platformIdentity.appName }}
   namespace: platform-system
   labels:

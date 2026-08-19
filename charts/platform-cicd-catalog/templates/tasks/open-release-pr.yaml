@@ -1,64 +1,28 @@
 # catalog/tasks/open-release-pr.yaml
 #
-# Opens a PR against the Application's GitOps repo, promoting the already-built (never
-# rebuilt) image to whichever upper env the release step declared (env:, validated
-# against deploy.upperEnvironments - see docs/multi-cluster.md) - the actual
-# GitOps-repo->cluster deploy happens later,
-# driven entirely by ArgoCD once the PR merges. This Task never touches the cluster
-# directly.
+# Opens a PR against the app's GitOps repo, promoting an already-built image to the
+# declared upper env (validated against deploy.upperEnvironments - see
+# docs/multi-cluster.md). A surgical `yq` patch of the manifest's image field, not a full
+# re-render, then a plain GitHub REST PR creation call. ArgoCD does the actual deploy once
+# the PR merges - this Task never touches the cluster directly. Uses a fresh,
+# single-repo-scoped GitHub App installation token minted per-run (catalog/lib/
+# github-app.sh), not a standing credential.
 #
-# Ported from a real prior production pattern (analyzed live from
-# gitops-main/charts/cd-pipelines' task-gitops-deploy-yq.yaml/task-create-pr.yaml - see
-# docs/release.md): a surgical `yq` patch of the image field, not a full manifest
-# re-render, then a plain GitHub REST API PR creation call. The credential is different
-# though - the old system used a long-lived, separately-minted static-ish token; this
-# uses a fresh, single-repo-scoped GitHub App installation token minted per-run via the
-# shared broker (see catalog/lib/github-app.sh), so nothing this Task holds could reach
-# any repo beyond the one gitops repo it was authorized for.
+# GitOps repo is resolved by convention (gitops-<app-name>, same GitHub org as the app
+# repo) - deliberately not assumed to equal app-namespace.
 #
-# GitOps repo is resolved by convention - gitops-<app-name>, same GitHub org as the
-# app's own git-url - rather than a new cicd.yaml field, deliberately not assuming
-# app-namespace == org (see charts/platform-cicd-app/templates/triggers/fire-test.yaml's
-# git-url comment for why that assumption already broke once in this platform).
+# The manifest path is <cluster>/<env>/values.yaml (idp-application's Helm values,
+# scaffolded by idp-service-catalog's ApplicationEnvironment + tenant-onboarding
+# ApplicationSet, which also owns that path's ArgoCD Application) - so `cluster` is a
+# required param, not optional; this Task's own scope is just patch-the-image/open-the-PR.
 #
-# 2026-08-16: this Task's own GitOps-delivered Application/RBAC/outcome-hook-Job
-# writing (docs/multi-cluster.md's "app-of-apps delivery" mechanism, live-verified
-# 2026-08-10/11 against a since-decommissioned kind-prod registration) was removed -
-# the gitops-<app-name> repo is now scaffolded by idp-service-catalog's
-# ApplicationEnvironment composition, whose own tenant-onboarding ApplicationSet
-# already creates and owns the ArgoCD Application for every <cluster>/<env>/values.yaml
-# generically (confirmed live against the real gitops-checkout-api repo -
-# kind-prod/prod/values.yaml). Having this Task write a SECOND, competing Application
-# for the same path would just race idp's own, not add anything. This Task's own scope
-# is back down to what its header above always described: patch the image, open the
-# PR - nothing else. `cluster` is consequently now load-bearing for every release (the
-# manifest path itself is <cluster>/<env>/values.yaml, not just an app-of-apps
-# side-mechanism), not just the "different physical cluster" case docs/multi-cluster.md
-# originally scoped it for.
-#
-# 2026-08-17: the DORA/Slack outcome-reporting gap disclosed above is rebuilt, not
-# left open any more - but relocated, not simply restored. The old design had THIS
-# Task write its own PostSync/SyncFail hook Jobs into a SECOND, competing Application
-# manifest (exactly the mechanism this file's 2026-08-16 note above describes
-# retiring). Rebuilding it the same way would just reintroduce that race. Instead:
-# idp-application's own Helm chart (idp-service-catalog/charts/idp-application) now
-# owns those two hook Jobs itself, rendered conditionally off a `releaseTracking:`
-# block in ITS values.yaml (see that chart's own header comment on the field) - so
-# they render as part of the SAME Application idp's ApplicationSet already owns, not
-# a second writer. This Task's only new responsibility is patching that block into
-# the SAME <cluster>/<env>/values.yaml commit it already writes rollout.image.* into
-# (well, a second commit on the same PR branch - prUrl/prCreatedAt don't exist until
-# the PR does, see below) - never a manifest of its own again. outcomeRelayURL is
-# resolved live from platform-cicd's OWN cluster-registry ConfigMap (a live lookup,
-# not duplicated into this app's values - see charts/platform-cicd-control-plane/
-# templates/clusters/cluster-registry.yaml's own header) via a narrowly-scoped,
-# get-only Role re-added for exactly this (charts/platform-cicd-app/templates/
-# clusters/read-registry-rbac.yaml) - the "only a reviewed git commit crosses from
-# dev to an upper cluster" boundary docs/multi-cluster.md's design discussion settled
-# on is unchanged; this Task still never calls the upper cluster's API directly, and
-# neither does anything on the dev cluster now read the upper cluster's live state -
-# the hook Jobs still push, over HTTP, with a per-app shared secret, exactly as
-# before.
+# A second commit on the same PR branch carries releaseTracking data (relay URL,
+# chain-id, PR url/created-at, etc.) that idp-application's own PostSync/SyncFail hook
+# Jobs read to report DORA/Slack outcomes - those Jobs render as part of the same
+# Application idp's ApplicationSet owns, not a second writer. outcomeRelayURL is looked
+# up live from platform-cicd's own cluster-registry ConfigMap via a narrow get-only Role;
+# this Task still never calls the upper cluster's API directly, preserving the "only a
+# reviewed git commit crosses from dev to an upper cluster" boundary.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -80,39 +44,33 @@ spec:
       type: string
       default: ""
       description: >-
-        This app's own platform-cicd namespace (the dev cluster) - rides into
-        idp-application's releaseTracking.appNamespace so release-outcome-trigger.yaml
-        can match the outcome CDEvent back to the right app's Trigger. NOT the same
-        thing as the release's own upper-env namespace (that's read live by the hook
-        Job itself, via the downward API - see idp-application's hooks.yaml).
+        This app's dev-cluster platform-cicd namespace - rides into idp-application's
+        releaseTracking.appNamespace so release-outcome-trigger.yaml can match the
+        outcome CDEvent back to the right app's Trigger. Not the upper-env namespace
+        (the hook Job reads that itself via the downward API).
     - name: git-revision
       type: string
     - name: env
       type: string
       default: "staging"
       description: >-
-        The upper environment being promoted to (from the release step's own cicd.yaml
-        env: field, validated against deploy.upperEnvironments - see
-        docs/multi-cluster.md). Default "staging" only for direct invocation outside
-        the normal flow (e.g. manual testing) - a real release always passes this
-        explicitly via release.yaml's own env param.
+        The upper environment being promoted to (from cicd.yaml's env: field). Default
+        "staging" only for manual/direct invocation - a real release always passes this
+        explicitly.
     - name: cluster
       type: string
       description: >-
         Name of the physical cluster this env is provisioned on (idp-service-catalog's
-        ApplicationEnvironment.spec.cluster - see that XRD's own cluster-gate).
-        Required, not optional any more: the gitops-<app-name> repo's own layout is
-        <cluster>/<env>/values.yaml, so there's no manifest path to compute without it.
-        Threaded through from cicd.yaml's deploy.upperEnvironments object form
-        ({ name: <env>, cluster: <cluster> }), not derived - this Task doesn't read
-        idp's own cluster registry (a deliberately separate source of truth, see this
-        file's own 2026-08-16 header note). Platform-cicd's OWN cluster registry
-        (charts/platform-cicd-control-plane's clusters:) IS read live by this Task,
-        though - just for outcomeRelayURL, see the 2026-08-17 header note.
+        ApplicationEnvironment.spec.cluster). Required: the gitops-<app-name> repo's
+        layout is <cluster>/<env>/values.yaml, so there's no manifest path without it.
+        Threaded through from cicd.yaml's deploy.upperEnvironments object form, not
+        derived - this Task doesn't read idp's own cluster registry (a deliberately
+        separate source of truth). It does read platform-cicd's own cluster registry
+        live, but only for outcomeRelayURL.
     - name: chain-id
       type: string
       default: ""
-      description: This flow's own chain-id (start-flow's result) - rides into releaseTracking.chainId for release-outcome-span.yaml's Tempo correlation. See this file's 2026-08-17 header note.
+      description: This flow's chain-id (start-flow's result) - rides into releaseTracking.chainId for release-outcome-span.yaml's Tempo correlation.
     - name: flow-start-time
       type: string
       default: ""
@@ -120,16 +78,14 @@ spec:
     - name: config-json
       type: string
       default: "{}"
-      description: cicd.yaml's resolved content (resolve-notify-config's result) - rides into releaseTracking.configJsonB64 (base64, see this Task's own step below) so notify-slack can render the outcome message once the hook Job reports back.
+      description: cicd.yaml's resolved content (resolve-notify-config's result) - rides into releaseTracking.configJsonB64 (base64) so notify-slack can render the outcome message once the hook Job reports back.
   results:
     - name: pr-url
       description: URL of the opened (or already-open, on retry) release PR.
     - name: pr-created-at
       description: >-
-        Wall-clock time this Task's PR-creation API call actually returned. Rides
-        into releaseTracking.prCreatedAt - the real start anchor for
-        release-outcome-span.yaml's own span, see that file's header. Was unconsumed
-        before 2026-08-17 - see this file's own 2026-08-16 header note.
+        Wall-clock time this Task's PR-creation API call returned. Rides into
+        releaseTracking.prCreatedAt - the start anchor for release-outcome-span.yaml's span.
   # Audience-bound projected ServiceAccount token for the shared broker's GitHub
   # token-minting endpoint - see catalog/lib/github-app.sh. Same pattern as
   # send-cdevent.yaml's broker-token volume, different audience/endpoint.
@@ -144,7 +100,7 @@ spec:
   steps:
     - name: open-pr
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: github-token-broker-token
           mountPath: /var/run/secrets/platform
@@ -197,15 +153,10 @@ spec:
         branch="release-${GIT_REVISION:0:8}-$(date +%s)"
         git checkout -b "${branch}"
 
-        # <cluster>/<env>/values.yaml, not <app-name>/<env>/deployment.yaml - the
-        # gitops-<app-name> repo is now scaffolded by idp-service-catalog's
-        # ApplicationEnvironment composition (idp-application's own Helm values file,
-        # confirmed live against the real gitops-checkout-api repo), not a raw
-        # Deployment manifest this Task used to own the shape of. repository/tag are
-        # split fields in that schema (idp-application's rollout.yaml renders
-        # "%s:%s" .Values.rollout.image.{repository,tag}), not a single image: string -
-        # same split deploy-manifests.yaml's own dev/self-service path already does for
-        # platform/envs/<env>.yaml, reused here rather than re-derived.
+        # <cluster>/<env>/values.yaml - idp-application's Helm values (scaffolded by
+        # idp-service-catalog), not a raw Deployment manifest. repository/tag are split
+        # fields in that schema, not a single image: string - same split
+        # deploy-manifests.yaml uses for platform/envs/<env>.yaml.
         manifest="${CLUSTER}/${ENV}/values.yaml"
         image_repo="${IMAGE_REF%:*}"
         image_tag="${IMAGE_REF##*:}"
@@ -217,43 +168,29 @@ spec:
         git config user.name "platform-cicd release automation"
         git config user.email "release@platform-cicd.invalid"
 
-        # X-App-Repo/X-App-Commit trailers (Phase 3 item 2, docs/commit-signing.md) are
-        # how catalog/tasks/verify-commit-signature.yaml, running as a check on THIS
-        # gitops repo's own PR, finds its way back to the app-repo commit that actually
-        # needs a verified human signature - the gitops commit itself is machine-
-        # generated right here, never hand-signed, so there's nothing meaningful to
-        # verify on it directly. Full 40-char SHA, not the 12-char truncation used
-        # elsewhere for the image tag - 12 hex chars isn't reliably enough to
-        # unambiguously `git fetch` one specific commit. Built with printf + \n escapes,
-        # not a raw multi-line string - the exact same reason the PR body below already
-        # needed this (a raw embedded-newline heredoc broke YAML parsing once this
-        # session, see docs/release.md's git history for that fix).
+        # X-App-Repo/X-App-Commit trailers let verify-commit-signature.yaml, running as a
+        # check on THIS gitops PR, find its way back to the app-repo commit that actually
+        # needs a verified human signature - this gitops commit is machine-generated and
+        # never signed itself. Full 40-char SHA, not the 12-char truncation used elsewhere,
+        # since that's not reliably enough to unambiguously `git fetch` one commit. Built
+        # with printf + \n escapes, not a raw multi-line string, which breaks YAML parsing.
         commit_message="$(printf 'Release: promote %s to %s @ %s\n\nX-App-Repo: %s\nX-App-Commit: %s' \
           "${APP_NAME}" "${ENV}" "${IMAGE_REF}" "${GIT_URL}" "${GIT_REVISION}")"
         git commit --quiet -am "${commit_message}"
         git push --quiet "${clone_url}" "${branch}"
 
-        # Field vocabulary/ordering matches docs/design-language.md (App/Repo/Commit/
-        # Image) - the same shared language as the Slack notifications
-        # (catalog/tasks/notify-slack.yaml), applied here in GitHub-flavored markdown.
-        # No color here (unlike Slack) - GitHub PR bodies can't carry inline color
-        # without an embedded badge image, which would itself be the kind of flashy the
-        # design language explicitly isn't going for. Tenant/Run are Slack-only fields -
-        # not meaningful to an external PR reviewer. Repo-short derived with the exact
-        # same sed pattern notify-slack.yaml uses, not a second, differently-behaved
-        # technique - the two should never diverge for the same input.
+        # Field vocabulary/ordering matches the shared design language used in Slack
+        # notifications (notify-slack.yaml), in GitHub-flavored markdown here. No color
+        # (GitHub PR bodies can't carry it without a badge image). Tenant/Run are
+        # Slack-only fields, not meaningful to a PR reviewer. repo_short uses the same
+        # sed pattern as notify-slack.yaml so the two never diverge.
         repo_short="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
         commit_short="${GIT_REVISION:0:12}"
-        # Governance section (Phase 3 item 8.6): explains what each of the four
-        # independent, required GitHub Checks on this PR actually does and how to
-        # re-trigger one that fails - PaC's own `/retest <name>` comment mechanism
-        # already exists natively (see docs/release.md), this just writes it down where
-        # a developer will actually see it. sast/image-scan/policy-check are real as of
-        # Phase 3 items 8.4/8.5/item 2; sbom is still a stub pending 8.7 - stated plainly,
-        # not glossed over, same "make stub-ness structurally loud" principle this
-        # platform has held since Phase 1. Built with the same printf+\n-escape technique
-        # already used for commit_message above, not a raw heredoc - a raw multi-line
-        # string broke this file's own YAML parsing once already, see docs/release.md.
+        # Explains what each of the four required GitHub Checks on this PR does and how
+        # to re-trigger a failing one via PaC's native `/retest <name>` comment. sbom is
+        # still a stub, stated plainly rather than glossed over (this platform's
+        # "stub-ness should be structurally loud" principle). Same printf+\n-escape
+        # technique as commit_message above, not a raw heredoc, for the same reason.
         governance_text="$(printf '\n\n## Governance checks\n\n| Check | What it verifies | Status |\n|---|---|---|\n| `sast` | Static analysis (Semgrep) of the promoted commit'"'"'s source | real |\n| `image-scan` | Vulnerability scan (Trivy) of the promoted image | real |\n| `policy-check` | Commit signature (gitsign) + SLSA provenance (Conforma) | real |\n| `sbom` | Software bill of materials | not yet real - see docs/governance-stubs.md |\n\n**If a check fails**: comment `/retest <check-name>` on this PR to re-run just that one (e.g. `/retest sast`), or `/retest` alone to re-run all of them. Fix the underlying issue first if the failure is real - re-running does not bypass a check, it only re-evaluates it.')"
         pr_body_text="$(printf '**App**: %s\n**Env**: %s\n**Repo**: [%s](%s)\n**Commit**: [`%s`](%s/commit/%s)\n**Image**: `%s`\n\nMerging this PR triggers ArgoCD to sync it to %s. See docs/release.md.%s' \
           "${APP_NAME}" "${ENV}" "${repo_short}" "${GIT_URL}" "${commit_short}" "${GIT_URL}" "${GIT_REVISION}" "${IMAGE_REF}" "${ENV}" "${governance_text}")"
@@ -270,21 +207,17 @@ spec:
           "https://api.github.com/repos/${owner}/${gitops_repo}/pulls" \
           -d "${pr_body}")"
         pr_url="$(jq -r '.html_url' <<<"${pr_response}")"
-        # otel_now's own format (catalog/lib/otel.sh) - not otel_now itself, this
-        # script doesn't source otel.sh and doesn't need the rest of it for one
-        # timestamp.
+        # Matches otel_now's format (catalog/lib/otel.sh) without sourcing that whole lib
+        # for one timestamp.
         pr_created_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")"
 
         # Second commit, same branch: release-tracking data for idp-application's own
-        # PostSync/SyncFail hook Jobs (idp-service-catalog/charts/idp-application/
-        # templates/release-tracking/) - deliberately AFTER the PR above, since
-        # pr_url/pr_created_at don't exist until it does. GitHub just shows this as
-        # one more commit already part of the same open PR, nothing to re-open - see
-        # this file's own 2026-08-17 header note.
+        # PostSync/SyncFail hook Jobs. Deliberately after the PR above, since
+        # pr_url/pr_created_at don't exist until it does - GitHub just adds it to the
+        # already-open PR.
         #
-        # outcomeRelayURL is resolved live from platform-cicd's OWN cluster-registry
-        # ConfigMap (platform-system) - RBAC: charts/platform-cicd-app/templates/
-        # clusters/read-registry-rbac.yaml, get-only, this ConfigMap only.
+        # outcomeRelayURL is resolved live from platform-cicd's own cluster-registry
+        # ConfigMap (platform-system) via a get-only Role scoped to this ConfigMap only.
         registry_entry="$(kubectl get configmap cluster-registry -n platform-system -o jsonpath="{.data.${CLUSTER}}")"
         if [[ -z "${registry_entry}" ]]; then
           echo "error: cluster '${CLUSTER}' has no entry in the platform-cicd cluster-registry ConfigMap (platform-system, charts/platform-cicd-control-plane's clusters:) - can't resolve outcomeRelayURL, so release-tracking can't be wired up for this release. The PR above was still opened successfully." >&2
@@ -293,9 +226,8 @@ spec:
         registry_relay_url="$(jq -r '.outcomeRelayURL' <<<"${registry_entry}")"
 
         # Base64, not raw JSON - the one field here that can contain quotes/braces;
-        # base64 sidesteps any risk of yq mis-escaping it into the surrounding YAML.
-        # Only decoded at the very end, by catalog/lib/argocd-outcome-hook.sh, right
-        # before sending.
+        # sidesteps yq mis-escaping it into the surrounding YAML. Decoded only at the
+        # end, by catalog/lib/argocd-outcome-hook.sh.
         config_json_b64="$(printf '%s' "${CONFIG_JSON}" | base64 | tr -d '\n')"
 
         yq -i -e "

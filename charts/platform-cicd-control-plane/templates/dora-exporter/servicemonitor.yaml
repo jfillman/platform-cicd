@@ -1,11 +1,10 @@
 # platform/dora-exporter/manifests/servicemonitor.yaml
 #
-# Matches observability/kind-observe/tekton-servicemonitor.yaml's exact pattern - a
-# standalone ServiceMonitor, no Helm-chart wiring needed. The existing Prometheus CR on
-# kind-observe has empty serviceMonitorSelector/serviceMonitorNamespaceSelector (matches
-# everything cluster-wide), confirmed live precedent via that same file's own comment -
-# so this is picked up automatically. Verify this still holds if that Prometheus
-# install's selectors are ever tightened.
+# Standalone ServiceMonitor - kind-observe's Prometheus CR has empty
+# serviceMonitorSelector/serviceMonitorNamespaceSelector (matches everything
+# cluster-wide, see observability/kind-observe/tekton-servicemonitor.yaml), so this is
+# picked up with no extra wiring. Revisit if that Prometheus install's selectors are
+# ever tightened.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

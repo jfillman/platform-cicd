@@ -1,16 +1,10 @@
 {{- if eq (include "platform-cicd-app.hasStage" (dict "ctx" . "name" "release")) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 {{- $localUpperEnvs := include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
-# templates/argocd/release-application.yaml (from tenant-release-argocd-template.yaml -
-# rendered only if cicd.yaml's pipeline: declares a "release" stage)
-#
-# One Namespace/Application/RBAC set per SAME-CLUSTER upper env
-# (deploy.upperEnvironments entries with no cluster: set - see docs/multi-cluster.md).
-# A cluster-mapped entry gets nothing rendered here at all: its Application manifest is
-# delivered via GitOps instead (open-release-pr.yaml, once Phase D lands) so this
-# cluster's ArgoCD never needs to know about it, and the remote cluster's OWN ArgoCD
-# picks it up from the gitops repo on its own app-of-apps root - never a direct apply
-# from here.
+# Rendered only if cicd.yaml declares a "release" stage. One Namespace/Application/RBAC
+# set per same-cluster upper env (docs/multi-cluster.md). A cluster-mapped entry gets
+# nothing rendered here - its Application is delivered via GitOps instead, picked up by
+# the remote cluster's own ArgoCD.
 {{- range $env := $localUpperEnvs }}
 {{- $envNamespace := include "platform-cicd-app.envNamespace" (list $ $env) }}
 ---
@@ -22,14 +16,11 @@ metadata:
     {{- include "platform-cicd-app.labels" $ | nindent 4 }}
     platform.io/subcomponent: "argocd"
 ---
-# No pipeline-runner RBAC needed in this namespace, unlike <type>-<app>-<env> for dev -
-# the release Pipeline never touches the cluster directly for this tier, only ArgoCD's
-# own (already cluster-capable) identity does, once a human has approved the GitOps PR.
+# No pipeline-runner RBAC needed here (unlike dev) - only ArgoCD's own identity touches
+# the cluster for this tier, after a human approves the GitOps PR.
 #
-# platform.io/dora-track: "true" - a stable, explicit marker the DORA exporter's
-# informer filters on, so it only ever processes Applications that are actually part of
-# this platform's app model - the argocd namespace also holds unrelated Applications
-# this exporter has no business reading.
+# platform.io/dora-track: "true" marks this Application for the DORA exporter's
+# informer filter, since argocd also holds unrelated Applications it has no business reading.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -53,10 +44,8 @@ spec:
       prune: true
       selfHeal: true
 ---
-# Lets this Application's own pipeline-runner SA (mark-release-pending.yaml) stamp/clear
-# DORA tracking annotations on exactly its own <app-name>-<env> Application -
-# resourceNames-scoped. No access to any other Application's ArgoCD Application object,
-# and no access to anything else Application-shaped in argocd at all.
+# Lets this Application's pipeline-runner SA stamp/clear DORA tracking annotations on
+# exactly its own <app-name>-<env> Application - resourceNames-scoped, no other access.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

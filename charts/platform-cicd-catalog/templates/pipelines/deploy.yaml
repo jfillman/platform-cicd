@@ -1,29 +1,20 @@
 # catalog/pipelines/deploy.yaml
 #
-# Third stage of the flow (of four - see release.yaml), normally event-chained - fired
-# by the shared broker on the test Pipeline's dev.cdevents.testcaserun.finished
-# (outcome=success) event. Deploys to a single lower environment (dev) via a direct
-# commit to the app's own repo (platform/envs/<env>.yaml), picked up by argocd-apps'
-# automated selfHeal - deliberately not PR-gated the way release.yaml's promotion to
-# staging is (a real gitops-<app-name> repo + PR there): dev is optimized for fast
-# inner-loop feedback, not governance. See catalog/tasks/deploy-manifests.yaml and
-# docs/release.md.
+# Third stage of the flow (of four - see release.yaml). Normally event-chained, fired by
+# test's testcaserun.finished event; deploys to dev via a direct commit to the app's own
+# repo (platform/envs/<env>.yaml), picked up by argocd-apps' selfHeal. Deliberately not
+# PR-gated like release.yaml's staging promotion - dev favors fast inner-loop feedback
+# over governance. See catalog/tasks/deploy-manifests.yaml and docs/release.md.
 #
-# Can also be git-rooted directly (e.g. a tag push deploying straight to prod with no
-# build/test in this run) - start-flow's idempotent generate-or-pass-through behavior
-# (see start-flow-root-span.yaml) and resolve-image-ref's analogous behavior (see that
-# Task's own header, shared with release.yaml) make both cases uniform.
+# Can also be git-rooted (e.g. a tag push deploying straight to prod with no build/test
+# in this run) - start-flow and resolve-image-ref's generate-or-pass-through behavior
+# makes both cases uniform.
 #
-# Performance note (see docs/release.md): the source workspace is only actually needed
-# for the git-rooted case (nothing else in this Pipeline touches the app repo via this
-# workspace - deploy-manifests.yaml does its own internal clone via the GitHub App
-# token broker, same as resolve-notify-config.yaml, rather than reading from it). It's
-# `optional: true` and left unbound by flow-triggers.yaml for the
-# common event-chained case, skipping PVC provisioning entirely - there's no dedicated
-# clone-repo task here any more, only resolve-notify-config.yaml's own internal clone
-# (only when its workspace is actually bound); see that Task's own header for why a
-# separate clone-repo task alongside an optional Pipeline workspace doesn't work
-# (a real, admission-time-checked Tekton constraint, confirmed live).
+# The source workspace is only needed for the git-rooted case (deploy-manifests.yaml
+# does its own clone via the GitHub App token broker rather than reading this
+# workspace). It's `optional: true` and left unbound for the event-chained case,
+# skipping PVC provisioning - see resolve-notify-config.yaml's header for why a separate
+# clone-repo task alongside an optional Pipeline workspace isn't viable in Tekton.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -67,10 +58,9 @@ spec:
     - name: app-type
       type: string
       description: >-
-        platformIdentity.type ("app"/"infra"/...) - needed (alongside app-name) to
-        construct the deploy-target namespace directly as <app-type>-<app-name>-<env>,
-        a PEER of app-namespace (<app-type>-<app-name>-cicd) under the same flat
-        pattern, not a suffix built on top of it. See docs/concepts.md.
+        platformIdentity.type ("app"/"infra"/...) - used with app-name to construct the
+        deploy-target namespace <app-type>-<app-name>-<env>, a peer of app-namespace
+        under the same flat pattern. See docs/concepts.md.
     - name: flow-traceparent
       type: string
       default: ""
@@ -95,14 +85,9 @@ spec:
     - name: source
       optional: true
       description: >-
-        Only bound for a git-rooted deploy (see flow-triggers.yaml), left unbound for
-        the common event-chained case. No dedicated clone-repo task here any more - a
-        Pipeline-level optional workspace is only valid Tekton when every task that
-        references it also declares that workspace optional (a real, admission-time-
-        checked constraint, confirmed live - see resolve-notify-config.yaml's own
-        header), which the shared hub-resolved git-clone Task's required workspace
-        can't satisfy. resolve-notify-config does its own clone instead, only when
-        this workspace is actually bound.
+        Only bound for a git-rooted deploy, left unbound for the common event-chained
+        case. resolve-notify-config.yaml does its own clone when this is bound - see
+        that Task's header for why a dedicated clone-repo task can't be used here.
   tasks:
     - name: start-flow
       taskRef:

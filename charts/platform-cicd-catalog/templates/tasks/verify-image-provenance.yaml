@@ -1,36 +1,19 @@
 # catalog/tasks/verify-image-provenance.yaml
 #
-# Second half of the real (not stub) policy-check gate, Phase 3 item 2 sub-item 3 - see
-# docs/provenance-policy.md. Runs alongside verify-commit-signature.yaml (sub-item 1,
-# which checks the human's gitsign commit signature) as a second, independent gate in the
-# same policy-check Pipeline: this one checks the promoted *image*'s own signature and
-# SLSA provenance attestation (both produced by Tekton Chains, sub-item 2), evaluated
-# against Conforma's pre-configured base policy concatenated with this Application's own
-# policy data.
+# Image-provenance half of the real policy-check gate (see verify-commit-signature.yaml for
+# the commit-signature half). Verifies the promoted image's cosign signature/SLSA provenance
+# attestation (both produced by Tekton Chains), then evaluates it with Conforma against the
+# base policy plus this app's own policy data.
 #
-# Deliberately split into two tools doing what each is actually good at, not one
-# `ec validate image` call - see docs/provenance-policy.md for the full story, in short:
-# `ec validate image`'s own built-in signature verification needs a TUF-distributed trust
-# root, and constructing a valid self-hosted TUF repository by hand for just our own
-# Fulcio (no public trust, no live TUF mirror) turned out to be genuinely heavy
-# infrastructure for what should be a simple local trust anchor. `cosign verify`/
-# `verify-attestation --trusted-root <json>` (a local doc built via `cosign trusted-root
-# create`, not a live TUF fetch - see the --trusted-root construction below for why this
-# replaced the simpler --ca-roots <pem> this file used until Phase 3 item 8.7) does the
-# same cryptographic job without needing TUF at all. `ec validate
-# input` then runs Conforma's real Rego policy engine against the already-verified,
-# decoded provenance JSON - also no TUF involved, since it's pure policy evaluation, not
-# signature verification. Same 3-stage design `ec validate image` itself documents
-# (signature, then attestation signature, then policy) - just stages 1-2 via cosign,
-# stage 3 via ec.
+# Uses cosign + `ec validate input` rather than one `ec validate image` call: `ec`'s built-in
+# signature verification needs a TUF trust root, and a self-hosted TUF repo for our own Fulcio
+# (no public trust, no live mirror) is heavy for what should be a simple local trust anchor.
+# cosign verifies against a local --trusted-root instead; ec then runs pure policy evaluation
+# on the already-verified payload - same 3-stage design `ec validate image` itself documents,
+# just split across tools. See docs/provenance-policy.md for more.
 #
-# --insecure-ignore-tlog on both cosign calls (no --rekor-url / --ignore-rekor split like
-# `ec` has, cosign is either checking a transparency log or explicitly told not to) -
-# Rekor is deliberately deferred, not a self-hosted instance here (see
-# docs/provenance-policy.md for the live-incident-driven reasoning: two separate
-# cluster-destabilizing storms during real deploy attempts of Rekor+Trillian+MySQL on
-# this environment). --insecure-ignore-sct likewise - no CT log either (sub-item 2's own
-# scope decision, unchanged).
+# --insecure-ignore-tlog/--insecure-ignore-sct on cosign calls: no Rekor/CT log is deployed
+# (self-hosting Rekor destabilized the cluster during earlier attempts; deliberately deferred).
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -54,7 +37,7 @@ spec:
   steps:
     - name: verify
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: REPO_URL
           value: $(params.repo-url)
@@ -73,16 +56,11 @@ spec:
         cd "${workdir}/gitops"
         git checkout --quiet "${REVISION}"
 
-        # The promoted image ref, straight from the same manifest open-release-pr.yaml
-        # itself patches - no new trailer needed, this is already the authoritative
-        # record of what's actually being promoted by this PR. Found via `git diff`
-        # rather than a hardcoded <app-name>/staging/deployment.yaml path - this Task,
-        # like extract-promoted-image.yaml (see that file's own header for the full
-        # reasoning), is invoked directly by PaC off the gitops repo's own PR webhook
-        # with no env/cluster param to hardcode a path from, and the gitops-<app-name>
-        # repo is now idp-service-catalog's ApplicationEnvironment-scaffolded
-        # <cluster>/<env>/values.yaml (idp-application's own Helm values file), not a
-        # raw Deployment manifest with a fixed "staging" path.
+        # Promoted image ref comes straight from the manifest open-release-pr.yaml patches -
+        # already the authoritative record of what's being promoted. Found via `git diff`
+        # rather than a hardcoded path since this Task runs off the gitops repo's own PR
+        # webhook with no env/cluster param, and the target is a scaffolded
+        # <cluster>/<env>/values.yaml (idp-application Helm values), not a fixed Deployment path.
         manifest="$(git diff --name-only HEAD~1 HEAD -- '*/values.yaml' | head -1)"
         if [[ -z "${manifest}" ]]; then
           echo "FAIL: no */values.yaml changed between HEAD~1 and ${REVISION} - expected open-release-pr.yaml's single surgical image-tag commit" >&2
@@ -96,23 +74,17 @@ spec:
         fi
         image_ref="${image_repo}:${image_tag}"
 
-        # Resolve the tag to its digest - cosign's signature/attestation lookup is
-        # digest-keyed (the .sig/.att OCI tags are derived from the digest), so a plain
-        # tag reference genuinely fails with "no signatures found" even when real
-        # signatures exist (confirmed live, not assumed) - it's not resolving the tag
-        # to a digest internally the way a plain image pull would. Registry API used
-        # directly (GHCR's own token-endpoint convention, matching how this platform
-        # already talks to GHCR elsewhere - not a generic OCI discovery flow, a
-        # deliberate, explicit scope decision for this GHCR-specific platform).
+        # cosign's signature/attestation lookup is digest-keyed, so a plain tag reference
+        # fails with "no signatures found" even when signatures exist - resolve to a digest
+        # first. Registry API called directly per GHCR's token convention (this platform is
+        # GHCR-specific, not a generic OCI discovery flow).
         registry="${image_ref%%/*}"
         rest="${image_ref#*/}"
         repo="${rest%:*}"
         tag="${rest##*:}"
         token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
-        # Accept both Docker v2 and OCI manifest media types - kaniko (build-image.yaml)
-        # pushes OCI-format manifests, and requesting only the older Docker v2 type gets
-        # a real, confirmed-live 404 ("OCI manifest found, but Accept header does not
-        # support OCI manifests") even though the manifest genuinely exists.
+        # Accept both Docker v2 and OCI manifest media types - kaniko pushes OCI-format
+        # manifests, and requesting only the Docker v2 type 404s even though the manifest exists.
         digest="$(curl -fsSL -D - -o /dev/null \
           -H "Authorization: Bearer ${token}" \
           -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
@@ -125,21 +97,14 @@ spec:
         image_ref="${registry}/${repo}@${digest}"
         echo "Verifying provenance for ${image_ref}"
 
-        # Public half of Fulcio's root CA - see fulcio-root-configmap.yaml's own comment
-        # on why this is a separate ConfigMap from fulcio-secret, not the same object.
+        # Public half of Fulcio's root CA - kept in a separate ConfigMap from fulcio-secret.
         kubectl get configmap fulcio-root-ca -n platform-catalog \
           -o jsonpath='{.data.cert\.pem}' > "${workdir}/fulcio-root.pem"
 
-        # --trusted-root (a local JSON doc), not the older --ca-roots (a bare PEM) this
-        # call used until Phase 3 item 8.7 - real bug hit live once generate-sbom.yaml
-        # started attaching a real attestation signed via cosign 3.x's newer bundle
-        # format (same tool, --signing-config/--trusted-root based signing - see that
-        # file's own header): cosign's verification then requires --trusted-root
-        # unconditionally ("CA roots/intermediates must be provided using --trusted-root
-        # when using --new-bundle-format"), even for verifying the unrelated SLSA
-        # provenance attestation below - confirmed live, not assumed from cosign's own
-        # deprecation warning alone. Same `cosign trusted-root create` mechanism
-        # generate-sbom.yaml already uses, same fulcio-root-ca source.
+        # --trusted-root (a local JSON doc) replaces the older --ca-roots (bare PEM): once
+        # generate-sbom.yaml started signing via cosign 3.x's newer bundle format, cosign
+        # requires --trusted-root unconditionally, even to verify this unrelated attestation.
+        # Built the same way generate-sbom.yaml builds it, from the same fulcio-root-ca source.
         cosign trusted-root create \
           --fulcio="url=http://fulcio-server.fulcio-system.svc,certificate-chain=${workdir}/fulcio-root.pem" \
           --no-default-ctfe --no-default-rekor --no-default-tsa \
@@ -148,50 +113,28 @@ spec:
         identity_regexp="^https://kubernetes\.io/namespaces/{{ .Values.tektonChainsNamespace }}/serviceaccounts/.*$"
         issuer="https://kubernetes.default.svc.cluster.local"
 
-        # No separate bare-image `cosign verify` step, deliberately - confirmed live
-        # this platform's Chains config produces attestations (.att, via
-        # artifacts.taskrun.storage/artifacts.pipelinerun.storage) but not a standalone
-        # image signature (.sig, a distinct Chains feature keyed off a *TaskRun-level*
-        # IMAGE_URL/IMAGE_DIGEST type hint we never added, only a Pipeline-level one).
-        # Not a gap worth closing: the attestation's own signed statement already
-        # records the exact subject digest inside the cryptographically-signed payload
-        # (confirmed by inspecting a real one), so `verify-attestation`'s signature
-        # check alone already proves "this identity vouches for exactly this image
-        # digest" - a separate bare-image signature would rely on the same trust
-        # anchor and wouldn't meaningfully extend what's already verified here.
+        # No separate bare-image `cosign verify` - Chains here only produces attestations
+        # (.att), not a standalone image signature (.sig, which needs a TaskRun-level type
+        # hint we don't set). Not a gap: the attestation's signed payload already records
+        # the exact image digest, so verifying it proves the same thing a signature would.
 
         # Attestation signature + extract the verified provenance payload.
         #
-        # Deliberately NOT a single `cosign verify-attestation --type slsaprovenance
-        # <image_ref>` call any more (what this used until 2026-08-12) - confirmed live
-        # that cosign's own registry-side --type filter does not reliably exclude a
-        # non-matching-type attestation before attempting identity verification against
-        # it, when attestations on the same image are in DIFFERENT DSSE-envelope
-        # formats. This image carries two: Tekton Chains' own SLSA provenance
-        # attestation (the older plain envelope - top-level `payload`/`payloadType`/
-        # `signatures`) and generate-sbom.yaml's own CycloneDX SBOM attestation
-        # (cosign 3.x's newer "bundle" format - `dsseEnvelope.payload`, signed by
-        # THIS Application's own `pipeline-runner`, not tekton-chains-controller).
-        # `--type slsaprovenance` should skip the SBOM one outright, but instead its
-        # (correctly non-matching) identity leaked into cosign's own error as the
-        # "last error", causing this whole verification to fail even though a real,
-        # correctly-signed provenance attestation was right there too - this is the
-        # root cause of the previously-only-"narrowed"-not-closed sbom+policyCheck
-        # conflict (see docs/provenance-policy.md's original incident writeup).
+        # Not a single `cosign verify-attestation --type slsaprovenance` call: this image
+        # carries two attestations in different DSSE envelope formats (Chains' SLSA
+        # provenance, older plain envelope; generate-sbom's CycloneDX SBOM, cosign 3.x bundle
+        # format). cosign's --type filter doesn't reliably exclude the non-matching one before
+        # verifying identity, so a bad SBOM-attestation identity check fails the whole
+        # verification even when a valid provenance attestation is also present - this was
+        # the root cause of the old sbom+policyCheck conflict (now fixed; both can be enabled
+        # together).
         #
-        # Fixed by doing the type-filtering ourselves, in jq, BEFORE any verification
-        # (so a non-matching attestation is never even handed to cosign), then
-        # verifying each survivor in isolation via `cosign verify-blob-attestation`
-        # (which verifies a single, already-selected attestation - no registry-side
-        # multi-candidate discovery to get confused) instead of `verify-attestation`.
-        # That command needs a proper new-bundle-format sigstore bundle as input
-        # regardless of which format the attestation actually came in as - a real,
-        # confirmed constraint (`--trusted-root only supported with --new-bundle-
-        # format`), so one is constructed by hand from whichever format's own fields:
-        # the newer bundle format already has everything in `verificationMaterial`/
-        # `dsseEnvelope`; the older plain envelope's certificate isn't in the envelope
-        # JSON at all (confirmed live: `signatures[0].cert` is null) - it lives in the
-        # `.att` OCI tag's own manifest layer annotations instead, fetched directly.
+        # Fix: filter by type ourselves in jq first, then verify each survivor individually
+        # via `cosign verify-blob-attestation` (single-candidate, no registry-side type
+        # discovery). That command requires a new-bundle-format sigstore bundle regardless of
+        # the attestation's original format, so one is built by hand: the newer format already
+        # has everything needed; the older plain envelope's cert isn't in the envelope JSON at
+        # all - it lives in the `.att` OCI tag's manifest annotations instead.
         att_dir="${workdir}/attestations"
         mkdir -p "${att_dir}"
         cosign download attestation "${image_ref}" > "${att_dir}/all-attestations.jsonl" 2>/dev/null || true
@@ -231,9 +174,8 @@ spec:
           fi
           payload_type="$(jq -r 'if has("dsseEnvelope") then .dsseEnvelope.payloadType else .payloadType end' <<<"${line}")"
 
-          # Values written to files, not passed via jq --arg - the base64 payload is a
-          # full in-toto statement and can genuinely exceed the OS argv size limit
-          # ("Argument list too long", confirmed live), --rawfile has no such ceiling.
+          # Written to files, not passed via jq --arg - the base64 payload can exceed the
+          # OS argv size limit ("Argument list too long"); --rawfile has no such ceiling.
           printf '%s' "${cert_der_b64}" > "${att_dir}/cert-${i}.txt"
           printf '%s' "${payload_b64}" > "${att_dir}/payload-${i}.txt"
           printf '%s' "${sig_b64}" > "${att_dir}/sig-${i}.txt"
@@ -271,35 +213,19 @@ spec:
           exit 1
         fi
 
-        # Wrap the decoded, already-signature-verified payload(s) as
-        # {"attestations": [{"statement": <payload>}, ...]} before handing to `ec` -
-        # NOT a cosmetic choice. Conforma's `lib.pipelinerun_attestations` (which nearly
-        # every slsa3-collection rule, including tasks.*, depends on) reads
-        # `input.attestations[].statement`, not a bare in-toto Statement as `input`
-        # itself - confirmed live the hard way: without this wrapping, `input.attestations`
-        # doesn't exist at all, so `lib.pipelinerun_attestations` silently resolves to an
-        # EMPTY list and every rule built on it (tasks.pipeline_has_tasks,
-        # tasks.successful_pipeline_tasks, tasks.required_tasks_found,
-        # slsa_build_scripted_build.*, slsa_build_build_service.*, etc.) reports a vacuous
-        # "Pass" - not because the check ran and succeeded, but because it had nothing to
-        # iterate. This wrapping is `ec validate image`'s own internal job normally (it
-        # assembles this shape from a real image's attestations before handing off to
-        # policy) - `ec validate input` is a raw file validator and does no such wrapping,
-        # so it's done by hand here. See docs/provenance-policy.md for the full
-        # live-debugging story (this was found while chasing an unrelated, seemingly
-        # working required-tasks check that turned out to be vacuously passing too).
+        # Wrap as {"attestations": [{"statement": <payload>}]} before handing to `ec` -
+        # required, not cosmetic. Conforma's lib.pipelinerun_attestations (used by nearly
+        # every slsa3-collection rule) reads input.attestations[].statement, not a bare
+        # Statement; without this wrapping it silently resolves to an empty list and every
+        # rule built on it reports a vacuous "Pass". `ec validate image` does this wrapping
+        # internally; `ec validate input` doesn't, so it's done here.
         wrapped_provenance_file="${workdir}/wrapped-provenance.json"
         jq -s '{attestations: map({statement: .})}' "${provenance_files[@]}" > "${wrapped_provenance_file}"
 
-        # input.image.source - a genuinely separate thing from predicate.materials, read
-        # by a DIFFERENT part of slsa_source_correlated.rego (`_expected_sources`, off
-        # plain `input`, not off the attestation at all) to know what source reference to
-        # actually check the attestation against. Extracted straight from git-clone's own
-        # task results in buildConfig.tasks (the same values now also promoted into
-        # materials via build.yaml's CHAINS-GIT_URL/CHAINS-GIT_COMMIT results, but read
-        # independently here rather than round-tripped back out of materials, since this
-        # is the one true source and materials is a derived copy). Revision must be the
-        # full commit SHA, not a symbolic ref - git-clone's own `commit` result already is.
+        # input.image.source is read by a separate policy rule (_expected_sources) to check
+        # the attestation against the real source ref. Pulled directly from git-clone's task
+        # results rather than round-tripped through materials, since this is the source of
+        # truth. Revision must be the full commit SHA, not a symbolic ref.
         source_git_url="$(jq -r '[.attestations[].statement.predicate.buildConfig.tasks[]
           | select(.invocation.environment.labels["tekton.dev/task"] == "git-clone")
           | .results[] | select(.name == "url") | .value][0] // empty' "${wrapped_provenance_file}")"
@@ -313,55 +239,35 @@ spec:
           mv "${wrapped_provenance_file}.tmp" "${wrapped_provenance_file}"
         fi
 
-        # Tenant's own policy data - the same ConfigMap verify-commit-signature.yaml
-        # already reads, no new template. Exposed to Conforma as ruleData so it's
-        # structurally available for a future rule to consume, even though no current
-        # base-policy rule checks it - see docs/provenance-policy.md for why this
-        # platform deliberately isn't duplicating gitsign's own email check here.
-        # Same live bug found and fixed in verify-commit-signature.yaml's identical
-        # extraction: grep -v legitimately matches nothing when no signers are
-        # configured, and under pipefail that becomes the pipeline's exit status,
-        # which set -e treats as a silent hard abort of this whole script - `|| true`
-        # neutralizes grep's own exit code without masking a real kubectl failure.
+        # Same tenant policy-config ConfigMap verify-commit-signature.yaml reads; exposed
+        # to Conforma as ruleData for future rules (no current base-policy rule checks it).
+        # Same grep -v/pipefail/set -e gotcha as that file: grep -v matching nothing when no
+        # signers are configured aborts the script under set -e without `|| true`.
         allowed_emails_json="$(kubectl get configmap "${APP_NAME}-policy-config" -n "${APP_NAMESPACE}" \
           -o jsonpath='{.data.allowed-commit-signers}' 2>/dev/null \
           | { grep -vE '^\s*(#.*)?$' || true; } | sed -E 's/^\s+|\s+$//g' \
           | jq -R -s -c 'split("\n") | map(select(length > 0))')"
 
-        # Platform-wide required-tasks list - NOT per-Application (unlike allowed-commit-
-        # signers): this describes an invariant of catalog/pipelines/build.yaml itself,
-        # the same for every Application, not an Application preference. Names are the underlying
-        # Task CRD names (Tekton's own "tekton.dev/task" label - confirmed live this is
-        # what Conforma's tasks.required_tasks_found actually matches against, NOT the
-        # per-step pipelineTask name like "clone-repo").
+        # Platform-wide required-tasks list (same for every app, unlike allowed-commit-signers
+        # - this describes build.yaml itself). Names must be the underlying Task CRD name
+        # ("tekton.dev/task" label), not the per-step pipelineTask name - that's what
+        # Conforma's tasks.required_tasks_found actually matches against.
         #
-        # Derived LIVE from the real `build` Pipeline object in platform-catalog, not
-        # hardcoded - matching this platform's existing "read fresh from the source of
-        # truth" precedent (cicd.yaml is read fresh from the triggering commit every run,
-        # never synced to a side copy - see the architecture doc's explicit rejection of a
-        # sync-to-ConfigMap mechanism). A hardcoded list was tried first and already proved
-        # the risk live: a hand-written first pass silently missed the two tasks living in
-        # `spec.finally` (a separate array from `spec.tasks`) - exactly the kind of drift
-        # a static copy invites every time build.yaml changes. `pipeline-runner` already
-        # has cluster-wide get/list/watch on `pipelines.tekton.dev` in platform-catalog
-        # (catalog/rbac/catalog-read-only.yaml, needed for the cluster resolver anyway) -
-        # no new RBAC required.
+        # Derived live from the real `build` Pipeline object rather than hardcoded, matching
+        # this platform's "read fresh from source of truth" pattern elsewhere. A hand-written
+        # list already proved the risk: it missed tasks living in spec.finally (separate from
+        # spec.tasks). pipeline-runner already has the RBAC needed for this.
         #
-        # `select(.when == null)` excludes the three `when:`-gated governance-stub tasks
-        # (sast-scan/image-scan/generate-sbom) - they're legitimately skipped when an
-        # Application's cicd.yaml disables that gate, so requiring them would fail
-        # policy-check for any Application that's turned SAST/image-scan/SBOM off.
+        # `select(.when == null)` excludes the when:-gated governance-stub tasks (sast-scan/
+        # image-scan/generate-sbom), which are legitimately skipped when an app's cicd.yaml
+        # disables that gate.
         #
-        # `git-clone[sslVerify=true]` demonstrates Conforma's task-parameter-matching
-        # syntax (confirmed live: `name[PARAM=val]` requires that specific invocation
-        # parameter, not just that the task ran) - pins the clone to have run with TLS
-        # verification enabled, not just that a task named git-clone appeared somewhere.
+        # `git-clone[sslVerify=true]` uses Conforma's task-parameter-matching syntax to pin
+        # the clone to have run with TLS verification, not just that git-clone ran at all.
         #
-        # Known limitation, not currently hit: this only recognizes resolver types that
-        # put the target name in a `name` param (`cluster` and `hub`, everything
-        # build.yaml currently uses) - a task added via the `git` resolver (params
-        # url/revision/pathInRepo, no `name`) would be silently dropped from the derived
-        # list rather than erroring. Revisit if build.yaml ever adopts the git resolver.
+        # Known limitation: only resolver types that put the target name in a `name` param
+        # (cluster/hub) are recognized - a task added via the `git` resolver would be
+        # silently dropped. Revisit if build.yaml adopts it.
         data_dir="${workdir}/data"
         mkdir -p "${data_dir}"
         required_tasks_json="$(kubectl get pipeline build -n {{ .Release.Namespace }} -o json | jq -c '
@@ -373,44 +279,23 @@ spec:
           "required-tasks": [{ "effective_on": "2020-01-01T00:00:00Z", "tasks": $tasks }]
         }' > "${data_dir}/data.json"
 
-        # Concatenation: Conforma's own pre-configured base policy (policy/lib for the
-        # shared helper functions the release rules import, policy/release for the
-        # rules themselves - confirmed live these are two separate required sources,
-        # not one) plus this Application's own data, in one EnterpriseContractPolicy spec.
-        # @slsa3 matches this item's original ambition ("try and achieve a high SLSA
-        # level") - a deliberate, not-the-safest choice, see docs/provenance-policy.md
-        # for what that surfaces against this platform's current real provenance shape.
-        # allowed_builder_ids pins provenance to exactly this platform's own Chains
-        # controller identity - confirmed live this rule's default already matches
-        # (https://tekton.dev/chains/v2), so this makes an already-correct implicit
-        # default explicit rather than closing a live gap.
-        # tasks.required_tasks_found (+ its two supporting "was data provided" rules)
-        # aren't in the @slsa3 collection - confirmed live via the real rule source
-        # (they're tagged redhat/redhat_security, not slsa3) - included individually by
-        # rule code rather than pulling in the whole @redhat collection, which would also
-        # drag in trusted_task's OCI-bundle-resolver trust model (a real architectural
-        # mismatch for this platform's cluster/hub-resolved catalog Tasks - see
-        # docs/provenance-policy.md for why that's deliberately excluded, not an
-        # oversight).
-        # sbom.found/sbom_cyclonedx.cdx_supported_version still deliberately NOT
-        # included below (Phase 3 item 8.7) - that's an independent design choice
-        # (whether Conforma's OWN policy should assert on SBOM presence/format), not
-        # related to the identity-verification bug below.
+        # Concatenates Conforma's base policy (policy/lib + policy/release, two separate
+        # required sources) with this app's own data, in one EnterpriseContractPolicy spec.
+        # @slsa3 matches this item's original "high SLSA level" ambition - a deliberate,
+        # not-the-safest choice (see docs/provenance-policy.md for tradeoffs).
+        # allowed_builder_ids pins provenance to this platform's own Chains controller
+        # identity (matches the rule's existing default; makes it explicit).
+        # tasks.required_tasks_found isn't in the @slsa3 collection (tagged
+        # redhat/redhat_security), so it's included individually rather than pulling in the
+        # whole @redhat collection, which would also drag in trusted_task's OCI-bundle-
+        # resolver trust model - a mismatch for this platform's cluster/hub-resolved
+        # catalog Tasks.
+        # sbom.found/sbom_cyclonedx.cdx_supported_version deliberately not included - whether
+        # Conforma's own policy should assert on SBOM presence/format is a separate decision.
         #
-        # RESOLVED 2026-08-12 (was: "a real, disclosed, unresolved conflict... root
-        # cause not fully diagnosed... until resolved, do not enable both
-        # governance.sbom and governance.policyCheck for the same app"): root cause WAS
-        # cosign's own --type filter, confirmed live - see the attestation-fetching
-        # block above (now `cosign download attestation` + manual jq type-filtering +
-        # `verify-blob-attestation`, not a single `verify-attestation --type
-        # slsaprovenance` call) for the full incident writeup. governance.sbom and
-        # governance.policyCheck can both be enabled for the same app now.
-        #
-        # NOTE for future editors: this explanation lives here, not inside the jq
-        # program string below, on purpose - a real bug hit live once already, an
-        # apostrophe inside an inline jq comment (a contraction like "attestation's")
-        # prematurely closed the surrounding bash single-quoted string, corrupting the
-        # whole command. Keep prose like this outside single-quoted jq/script bodies.
+        # NOTE: keep explanatory prose here, not inside the jq program string below - an
+        # apostrophe in an inline jq comment previously broke out of the surrounding bash
+        # single-quoted string and corrupted the whole command.
         policy_file="${workdir}/policy.yaml"
         jq -n --argjson emails "${allowed_emails_json:-[]}" --arg data_dir "${data_dir}/" '{
           sources: [{

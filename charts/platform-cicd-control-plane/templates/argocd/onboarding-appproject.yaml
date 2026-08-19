@@ -1,28 +1,14 @@
 # templates/argocd/onboarding-appproject.yaml
 #
 # Scopes the tenant-onboarding ApplicationSet's generated Applications (see
-# tenant-onboarding-applicationset.yaml in this same directory). Deliberately a
-# SEPARATE, broader AppProject from charts/platform-cicd-app/templates/argocd/
-# appproject.yaml's per-tenant one (named after that tenant's own computed namespace,
-# scoped tightly to Deployment/Service in that one tenant's own env namespaces) - that
-# project governs
-# what a tenant's RELEASE deploys, this one governs what installing/upgrading the
-# onboarding chart itself creates, which is structurally more privileged: RBAC,
-# ServiceAccounts, Tekton Trigger objects, ExternalSecrets, and the chart's own nested
-# AppProject/Application/ApplicationSet objects (confirmed live via `helm template`
-# against two real config shapes - a cluster-mapped-release tenant and a local-release+
-# ephemeral-envs tenant - rather than guessed, so this whitelist wouldn't silently drop
-# half a sync).
+# tenant-onboarding-applicationset.yaml). Deliberately broader than platform-cicd-app's
+# per-tenant AppProject: this one governs what installing/upgrading the onboarding chart
+# itself creates (RBAC, ServiceAccounts, Triggers, ExternalSecrets), which is more
+# privileged than what a tenant's own release deploys - it mirrors what an operator's
+# kubeconfig could already do via `helm upgrade`, not a new privilege.
 #
-# This is intentionally broader than the per-tenant project, not a mistake: it mirrors
-# what a human operator's own kubeconfig could already do running `helm upgrade` by hand
-# (the thing this ApplicationSet replaces) - ArgoCD is executing the same privileged
-# action declaratively, not gaining new privilege. destinations below use
-# `app-*`/`infra-*` namespace globs (covering every env a tenant of either type might
-# have - cicd/dev/staging/pr-*) rather than a precise per-env enumeration, since this
-# chart's RBAC templates provision across multiple declared-environment namespaces, not
-# just the tenant's own `-cicd` one, and a too-narrow guess here risks silently breaking
-# some tenant's valid onboarding rather than failing loudly.
+# destinations use app-*/infra-* namespace globs, not per-env enumeration, since this
+# chart's RBAC spans multiple env namespaces per tenant, not just <app>-cicd.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -38,13 +24,10 @@ spec:
     single tenant's own AppProject by design - see this file's own header comment.
   sourceRepos:
     - {{ .Values.platformCicdRepoUrl }}
-    # Any tenant app repo under this GitHub org - source 1 of the ApplicationSet's
-    # generated Application reads cicd.yaml live from platformIdentity.appRepoUrl,
-    # per-tenant, which a fixed list here can't keep pace with as new tenants are added.
-    # A deliberate, revisited decision - see tenant-onboarding-applicationset.yaml's own
-    # header for the full history and the live precedence test that verified it's safe
-    # for cicd.yaml (developer-controlled) to be merged into the same Application that
-    # also carries platformIdentity (operator-controlled).
+    # Any tenant app repo under this org - each generated Application reads cicd.yaml
+    # live from platformIdentity.appRepoUrl, so a fixed list can't keep pace with new
+    # tenants. See tenant-onboarding-applicationset.yaml for why merging a
+    # developer-controlled values file into the same Application as platformIdentity is safe.
     - https://github.com/jfillman/*
   destinations:
     - namespace: argocd
@@ -53,13 +36,8 @@ spec:
       server: https://kubernetes.default.svc
     - namespace: "infra-*"
       server: https://kubernetes.default.svc
-    # charts/platform-cicd-app/templates/clusters/read-registry-rbac.yaml creates a
-    # get-only Role/RoleBinding here (a cluster-mapped-release tenant reading the shared
-    # cluster-registry ConfigMap) - confirmed live via a real sync failure ("namespace
-    # platform-system is not permitted in project"), not guessed ahead of time. Removed
-    # 2026-08-16 alongside that RBAC file, re-added 2026-08-17 alongside it - see
-    # docs/multi-cluster.md's "Outcome reporting, rebuilt" section for why the RBAC
-    # file itself came back.
+    # Needed for read-registry-rbac.yaml's get-only Role/RoleBinding (a cluster-mapped
+    # tenant reading the shared cluster-registry ConfigMap) - see docs/admin/multi-cluster.md.
     - namespace: platform-system
       server: https://kubernetes.default.svc
   clusterResourceWhitelist:
@@ -75,9 +53,7 @@ spec:
     - { group: "triggers.tekton.dev", kind: Trigger }
     - { group: "triggers.tekton.dev", kind: TriggerBinding }
     - { group: "triggers.tekton.dev", kind: TriggerTemplate }
-    # charts/platform-cicd-app/templates/pipelines-as-code/repository.yaml - confirmed
-    # live via a real sync failure ("one or more synchronization tasks are not valid"),
-    # same discovery pattern as platform-system above.
+    # Needed for platform-cicd-app's pipelines-as-code/repository.yaml.
     - { group: "pipelinesascode.tekton.dev", kind: Repository }
     - { group: "", kind: ConfigMap }
     - { group: "", kind: PersistentVolumeClaim }

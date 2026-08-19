@@ -1,38 +1,15 @@
-# charts/platform-cicd-app/files/onboarding-templates/app-repo/onboarding-resync.yaml
+# BOILERPLATE - see push.yaml for the general pattern. Unlike push.yaml/pull-request.yaml,
+# this re-invokes the onboarding-delivery mechanism itself
+# (deliver-onboarding-files.yaml) whenever cicd.yaml changes on a push to main, via PaC's
+# `"cicd.yaml".pathChanged()` CEL extension. This is what keeps this Application's own
+# onboarding boilerplate in sync when the platform's templates change too - one re-sync
+# path handles both cases. Templates live at
+# charts/platform-cicd-app/files/onboarding-templates/, delivered via a ConfigMap (not
+# baked into the toolbox image), so an edit takes effect on this app's next `helm upgrade`.
 #
-# BOILERPLATE - see push.yaml for the general explanation. This one is different in
-# kind from push.yaml/pull-request.yaml: instead of running this app's own build, it
-# re-invokes the onboarding-delivery mechanism itself (catalog/tasks/
-# deliver-onboarding-files.yaml) whenever cicd.yaml changes on a push to main -
-# `"cicd.yaml".pathChanged()` is a real, documented Pipelines-as-Code CEL extension
-# function, not a custom filter. This is Phase 3 item 7's replacement for both the fully
-# manual "hand-copy .tekton files" onboarding process and an earlier design considered
-# (an ArgoCD-multi-source Application reading cicd.yaml live) that was, AT THE TIME,
-# rejected because it would need standing ArgoCD read access to every Application's
-# source repo as a base requirement of onboarding itself. That specific tradeoff was
-# later revisited for a genuinely different purpose (charts/platform-cicd-control-plane/
-# templates/argocd/tenant-onboarding-applicationset.yaml DOES now read cicd.yaml live,
-# as the app chart's own Helm values input, once broad ArgoCD app-repo read access
-# became a given anyway for the platform's broader IDP direction - see that
-# ApplicationSet's own header for the current reasoning and the live safety test behind
-# it). This file's own job - DELIVERING .tekton boilerplate FILES INTO the app/gitops
-# repos - is a different concern from reading a values file FROM one, and stays
-# PaC-triggered either way: reusing PaC's own already-trusted webhook auth for a
-# repo-write still means no new credential class for THIS mechanism specifically.
-#
-# Also fires (same mechanism, same file) if the PLATFORM's own onboarding templates
-# change and this Application's copy goes stale - see docs/onboarding.md's "Keeping
-# onboarding boilerplate in sync" section, closed by this same re-sync path rather than
-# left as a separate, still-unsolved problem. Templates now live at
-# charts/platform-cicd-app/files/onboarding-templates/ and are delivered to
-# deliver-onboarding-files.yaml via a ConfigMap (one copy per Application, rendered by
-# the app chart), not baked into the toolbox image - a template edit takes effect on
-# THIS Application's own next `helm upgrade`, no image rebuild needed.
-#
-# <APP_NAMESPACE>, <APP_NAME>, <APP_TYPE>, <GITHUB_OWNER>, and (if this Application
-# declared a release stage) <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml
-# itself when it delivers this file - see that Task's own substitution loop, which
-# includes this file alongside push.yaml/pull-request.yaml.
+# <APP_NAMESPACE>, <APP_NAME>, <APP_TYPE>, <GITHUB_OWNER>, and (if a release stage is
+# declared) <GITOPS_REPO_URL> are filled in by deliver-onboarding-files.yaml's own
+# substitution loop when it delivers this file.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:

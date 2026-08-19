@@ -1,21 +1,17 @@
 # charts/platform-cicd-app/values.yaml
 #
-# Real installs merge THREE sources, in this order (later wins on any key collision):
+# Real installs merge three sources, later wins on key collision:
 #   helm install <app-name> charts/platform-cicd-app \
-#     -f <this file, the chart's own defaults - always loaded first> \
-#     -f <app-repo>/cicd.yaml \
-#     -f platform-identity.yaml
+#     -f <this file> -f <app-repo>/cicd.yaml -f platform-identity.yaml
 #
-# platform-identity.yaml goes LAST and supplies the platformIdentity: key below -
-# putting it last isn't what makes it authoritative (see docs/onboarding.md's security
-# note: the real guarantee is that `platformIdentity` is not a key schemas/cicd.schema.json
-# permits, so validate-cicd-config's existing additionalProperties:false check already
-# rejects any cicd.yaml that tries to define it, independent of -f ordering).
+# platform-identity.yaml supplies platformIdentity: below. It's not authoritative because
+# it's loaded last - it's authoritative because `platformIdentity` isn't a key
+# schemas/cicd.schema.json permits, so validate-cicd-config's additionalProperties:false
+# check rejects any cicd.yaml that tries to define it.
 #
-# The values below (except the platformIdentity stub) mirror schemas/cicd.schema.json's
-# own defaults - kept here too, not just in the schema, so `helm template`/`helm lint`
-# work standalone against this chart without requiring a real cicd.yaml, matching the
-# fixture-matrix testing approach in docs/catalog-versioning.md.
+# Non-platformIdentity defaults below mirror schemas/cicd.schema.json's own defaults, so
+# `helm template`/`helm lint` work standalone without a real cicd.yaml (see
+# docs/catalog-versioning.md's fixture-matrix testing).
 
 build:
   agent: nodejs-20
@@ -58,9 +54,8 @@ onboarding:
   sync:
     enabled: true
 
-# Optional named pipeline flows. Each entry can define a root trigger plus an ordered
-# list of stages. This is a draft rendering model for app-owned sequential flows such as
-# build -> deploy -> test -> release without hand-writing Tekton YAML.
+# Optional named pipeline flows. Each entry defines a root trigger plus an ordered list
+# of stages (build -> deploy -> test -> release) without hand-writing Tekton YAML.
 #
 # Example explicit trigger shape:
 # pipelines:
@@ -78,51 +73,41 @@ onboarding:
 #
 pipelines: {}
 
-# Stage presence is derived from `.Values.pipelines` flow definitions. The older
-# top-level `pipeline:` array is no longer used by the chart.
+# Stage presence is derived from `.Values.pipelines`; the older top-level `pipeline:`
+# array is no longer used.
 
 # Optional. Each entry pulls one key out of this Application's own backend secret store
-# into an ExternalSecret-synced app-secrets Kubernetes Secret. See
-# docs/app-secrets.md and appSecretStore below (which says WHERE that backend store is
-# assumed to live). Empty by default - the SecretStore/ExternalSecret templates only
-# render at all when this is non-empty.
+# into an ExternalSecret-synced app-secrets Kubernetes Secret (see docs/app-secrets.md).
+# Empty by default - the SecretStore/ExternalSecret templates only render when non-empty.
 secrets: []
 
-# WHERE this Application's own backend secret store is: a real Kubernetes Secret living
-# in this Application's own EXISTING dev environment namespace (<type>-<app-name>-dev,
-# no new namespace convention needed) - see docs/app-secrets.md. The ClusterSecretStore
-# pointed at that namespace is rendered by the control-plane chart's own
-# appSecretStores list, not this chart - this value only names the backend Secret
-# OBJECT within that namespace, which this chart's own ExternalSecret needs to know.
+# Backend secret store location: a Kubernetes Secret in this Application's own dev
+# namespace (<type>-<app-name>-dev). The ClusterSecretStore pointed at that namespace is
+# rendered by the control-plane chart, not this one - this value only names the backend
+# Secret object this chart's ExternalSecret reads from. See docs/app-secrets.md.
 appSecretStore:
-  secretName: app-secrets    # the ONE backend Secret object in <type>-<app-name>-dev, holding every key this Application's cicd.yaml might ever declare under secrets:
+  secretName: app-secrets    # the one backend Secret in <type>-<app-name>-dev, holding every key any cicd.yaml declares under secrets:
 
-# Shared platform infrastructure this chart's templates need to reach - not really
-# per-app config, kept here (rather than under platformIdentity) since these are
-# platform-wide constants every Application install shares, not this-one-Application's
-# own identity.
+# Platform-wide constants every Application install shares (not per-app identity, so
+# kept outside platformIdentity).
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
-# Must match charts/platform-cicd-control-plane/values.yaml's own secretStore.name/kind
-# exactly - ClusterSecretStore is cluster-scoped (not namespaced), so this is a real
-# cross-chart reference by name, not a value either chart owns independently. See
+# Must match charts/platform-cicd-control-plane/values.yaml's secretStore.name/kind -
+# ClusterSecretStore is cluster-scoped, so this is a cross-chart reference by name. See
 # docs/secrets-management.md.
 secretStore:
   name: platform-secret-store
   kind: ClusterSecretStore
 
 # Placeholder only - a real install MUST override every field here via
-# `-f platform-identity.yaml` (see Chart.yaml). Left empty rather than a fake example
-# value so an accidental `helm install` without that file fails loudly (empty app name,
-# empty repo URLs) instead of silently deploying to a plausible-looking wrong place.
-# catalogNamespace defaults to the real production catalog release's namespace - override
-# this one specific field (only) for a canary Application pointed at
-# platform-catalog-canary, see docs/catalog-versioning.md.
+# `-f platform-identity.yaml`. Left empty rather than a fake example so an accidental
+# install without that file fails loudly instead of deploying to a plausible-looking
+# wrong place. catalogNamespace may be overridden alone, e.g. for a canary Application
+# pointed at platform-catalog-canary (docs/catalog-versioning.md).
 #
-# No `tenantNamespace` field - the Application's namespace (and every env-scoped
-# namespace it gets) is COMPUTED from type+appName via templates/_helpers.tpl's
-# platform-cicd-app.namespace/.envNamespace, not set here, so it structurally cannot
-# drift from the <type>-<app-name>-<env> convention. See docs/concepts.md.
+# No `tenantNamespace` field - the Application's namespace is always computed from
+# type+appName via _helpers.tpl's namespace/envNamespace helpers, so it can't drift from
+# the <type>-<app-name>-<env> convention.
 platformIdentity:
   appName: ""
   type: app
@@ -130,8 +115,6 @@ platformIdentity:
   appRepoUrl: ""
   githubOwner: ""
   catalogNamespace: platform-catalog
-  # Renders templates/pipelines-as-code/repository.yaml's Repository CR(s) - see that
-  # file's header. Real default (not a placeholder like the fields above): false only
-  # makes sense as a deliberate per-app override, e.g. to deregister a repo without the
-  # chart recreating the CR on the next sync.
+  # Renders templates/pipelines-as-code/repository.yaml's Repository CR(s). Defaults true;
+  # set false to deregister a repo without the chart recreating the CR on next sync.
   registerPipelinesAsCode: true

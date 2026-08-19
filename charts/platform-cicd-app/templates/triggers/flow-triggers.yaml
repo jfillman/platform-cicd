@@ -2,23 +2,15 @@
 {{- include "platform-cicd-app.validateFlows" . -}}
 
 {{- /*
-This file only renders Trigger/TriggerBinding/TriggerTemplate objects for
-EVENT-CHAINED steps (index > 0 in a flow) - stages fired by a CDEvent the
-previous stage's `finally` block emits (artifact.published -> test,
-testcaserun.finished -> deploy, service.deployed -> release).
+Renders Trigger/TriggerBinding/TriggerTemplate only for EVENT-CHAINED steps (index > 0):
+stages fired by a CDEvent the previous stage's `finally` block emits (artifact.published
+-> test, testcaserun.finished -> deploy, service.deployed -> release).
 
-Git-rooted steps (a flow's first step, when trigger.source is "git") are
-deliberately NOT rendered here: PaC creates that PipelineRun directly via the
-.tekton/*.yaml files charts/platform-cicd-catalog/templates/tasks/
-deliver-onboarding-files.yaml generates in the app's own repo, driven by a
-real git event (push/tag/branch.created/pull_request) - see
-docs/chaining.md's "Why not Pipelines-as-Code for this" section. There is no
-broker hop for that first stage; forcing one through a synthetic
-change.created CDEvent would just be routing PaC's own job back through
-itself for no benefit. (release.created is deliberately not a supported git
-event at all - confirmed live that Pipelines-as-Code has no support for
-GitHub's "release" webhook, any version; publish a Release and trigger off
-its "tag" event instead, which fires a real push event PaC does support.)
+Git-rooted steps (a flow's first step, trigger.source: git) are not rendered here - PaC
+creates that PipelineRun directly from .tekton/*.yaml in the app's own repo, driven by a
+real git event. Routing that through a synthetic CDEvent would add a broker hop for no
+benefit. (release.created isn't a supported git event - PaC has no GitHub "release"
+webhook support; trigger off "tag" instead.) See docs/admin/chaining.md.
 */ -}}
 
 {{- $appNamespace := include "platform-cicd-app.namespace" . -}}
@@ -30,7 +22,6 @@ its "tag" event instead, which fires a real push event PaC does support.)
 {{- if gt $stepCount 0 -}}
 {{- $rootTrigger := $normalizedFlow.trigger | default (dict) -}}
 
-{{- /* Determine root trigger source, only to know which index 0 to skip */ -}}
 {{- $triggerSource := $rootTrigger.source | default "" -}}
 {{- if eq $triggerSource "" -}}
   {{- $triggerEvent := $rootTrigger.event | default ($rootTrigger.type | default "") -}}
@@ -45,85 +36,39 @@ its "tag" event instead, which fires a real push event PaC does support.)
 {{- $isFirst := eq $index 0 -}}
 {{- $isLast := eq $index (sub $stepCount 1) -}}
 {{- $isGitRooted := and $isFirst (eq $triggerSource "git") -}}
-{{- /*
-A first step with trigger.source: event (an arbitrary external CDEvent, not git and
-not the standard build/test/deploy/release chain) has no previous step to look up a
-domain event type from - $eventTypeMap below is keyed by PREVIOUS stage name, which
-doesn't exist at index 0. Not a supported flow shape yet (no CEL filter construction
-exists for "arbitrary external event" root triggers) - skip rather than let `index`
-below fail on a negative offset.
-*/ -}}
+{{- /* A first step with trigger.source: event has no previous step to key
+$eventTypeMap from - not a supported flow shape yet, so skip rather than index -1. */ -}}
 {{- $isUnsupportedEventRoot := and $isFirst (eq $triggerSource "event") -}}
 {{- if and (not $isGitRooted) (not $isUnsupportedEventRoot) -}}
 {{- $stageName := $step.stage | default "build" -}}
-{{- /*
-Includes the step's own position ($index) - now that any stage can repeat within a
-flow (e.g. test after test), "flow-<name>-<stage>" alone would collide: two different
-steps both named e.g. "test" would render two Trigger/TriggerBinding/TriggerTemplate
-objects with the identical Kubernetes name, and Helm/kubectl would silently keep only
-the last one applied. The step index makes every occurrence unique regardless of
-whether its stage repeats.
-*/ -}}
+{{- /* Includes $index: since a stage can repeat within a flow, "flow-<name>-<stage>"
+alone would collide and Helm would silently keep only the last-applied object. */ -}}
 {{- $triggerName := printf "flow-%s-%d-%s" $flowName $index $stageName -}}
 {{- $pipelineName := $stageName -}}
 
-{{- /* Map stage to domain event type this step is chained from */ -}}
 {{- $eventTypeMap := dict "build" "artifact.published" "test" "testcaserun.finished" "deploy" "service.deployed" "release" "change.created" -}}
 {{- $prevIndex := sub $index 1 -}}
 {{- $prevStage := (index $steps $prevIndex).stage | default "" -}}
 {{- $eventType := get $eventTypeMap $prevStage -}}
 
 {{- /*
-CEL filter: trigger on the domain event from the previous stage - and ONLY from this
-flow's own chain, not any other flow's. A real, live-confirmed bug (found via a real
-runaway trace, not hypothetically): this filter used to check event-type + namespace
-only, with no flow-name/chain scoping at all. Every stage's own send-cdevent (test.yaml/
-deploy.yaml/release.yaml's finally blocks) fires the same domain event type regardless
-of which flow triggered it, so any app with two or more flows that share overlapping
-stage-transition event types (deploy->release->test in one flow, ...->deploy in another
-- exactly this app's "ci" and "release-then-test") had every stage of EVERY flow
-cross-triggering every OTHER flow's same-event-type step, with no way to terminate:
-release-then-test's `release` fired on ci's own `deploy` completing (both just emit
-service.deployed), release-then-test's `test` then fired ci's `deploy` again via
-testcaserun.finished, looping forever - confirmed live via a real trace with 24 test +
-20 deploy + 14 release spans under one chain, still actively growing over an hour later.
-Fixed by also requiring the event's source (which encodes the EMITTING PipelineRun's own
-name - catalog/lib/cdevents.sh's `source: /platform-cicd/<namespace>/<pipelinerun-name>`)
-to start with THIS flow's own name prefix - every PipelineRun this platform creates,
-git-rooted or event-chained alike, is already named/generateName'd `<flowName>-...` (see
-deliver-onboarding-files.yaml's generateName and this same file's own pipeline-run-name
-binding param below), so this needs no new data on the event, just a tighter check on
-data already there. Known, accepted limitation: two flow names where one is a literal
-prefix of the other (e.g. "release" and "release-fast") would still cross-match - not a
-real collision for any flow currently declared on this platform, exact chain-id-to-flow
-tracking would close it fully but is real added complexity for a currently-hypothetical
-case.
+CEL filter: must trigger only on the domain event from THIS flow's own chain, not just
+the right event type. A real bug: checking event-type + namespace alone let two flows
+sharing a stage-transition event type (e.g. one flow's deploy->release, another's
+X->deploy - both emit service.deployed) cross-trigger each other with no termination -
+an infinite cross-flow loop was observed live. Fixed by also requiring the event's
+source (which encodes the emitting PipelineRun's name, `<flowName>-...`) to start with
+this flow's name prefix. Known limitation: a flow name that's a literal prefix of
+another (e.g. "release"/"release-fast") would still cross-match; not worth the added
+complexity to close given no such flows currently exist.
 
-Still not enough on its own - found live the same day via a real, still-running loop: a
-flow-name prefix alone doesn't distinguish WHICH STEP within that same flow emitted the
-event, only which flow. Any flow with two steps sharing a stage name (e.g. this app's
-"ci" flow's deliberate two `test` steps, added specifically to exercise per-step-index
-Trigger naming) produces two Triggers with an otherwise byte-for-byte identical CEL
-filter - both just "a testcaserun.finished+Succeeded event from flow ci" - so EITHER
-test step completing fired BOTH the next test step's trigger and deploy's trigger at
-once, live-confirmed via the EventListener's own logs showing a single incoming event's
-one `/triggers-eventid` firing both `flow-ci-2-test` and `flow-ci-3-deploy`
-simultaneously. Since deploy's own domain event type differs, this didn't loop through
-deploy directly, but every fresh test run re-matched its own trigger too, running
-forever with no termination condition - functionally the same failure mode as the
-cross-flow loop above, just one level narrower in scope (sibling step within a flow,
-not sibling flow).
-
-Fixed by tightening the source match from the flow prefix down to the EXACT previous
-step that must have emitted it: `<flowName>-<prevIndex>-<prevStage>-`, matching this
-same file's own pipeline-run-name binding pattern below precisely. The one exception is
-when the previous step is the flow's own git-rooted root (index 0) - those PipelineRuns
-don't carry an index/stage segment at all, only `generateName: ${flow_name}-`
-(deliver-onboarding-files.yaml, deliberately keyed by flow name alone so two flows
-sharing a root stage, e.g. two different push flows both rooted at build, don't collide
-on `.tekton/`'s own generateName uniqueness requirement) - so that specific case keeps
-the older, looser flow-only prefix, the only shape a git-rooted PipelineRun's name can
-actually take.
+That alone wasn't sufficient: two steps in the same flow sharing a stage name (e.g. two
+`test` steps) produce byte-identical CEL filters, so either one completing fired both
+its own next-step trigger AND any sibling step's trigger - a narrower version of the
+same infinite-loop failure mode. Fixed by tightening the source match to the exact
+previous step: `<flowName>-<prevIndex>-<prevStage>-`, except when the previous step is
+the flow's git-rooted root (index 0), whose PipelineRuns carry no index/stage segment
+(just `generateName: ${flow_name}-`) - that case keeps the looser flow-only prefix.
 */ -}}
 {{- $prevStepIsGitRoot := and (eq $prevIndex 0) (eq $triggerSource "git") -}}
 {{- $sourcePrefix := printf "%s-%d-%s-" $flowName $prevIndex $prevStage -}}
@@ -132,44 +77,26 @@ actually take.
 {{- end -}}
 {{- $celFilter := printf "body.context.type == 'dev.cdevents.%s.0.3.0' && extensions.app_namespace == '%s' && body.context.source.startsWith('/platform-cicd/%s/%s')" $eventType $appNamespace $appNamespace $sourcePrefix -}}
 {{- /*
-An explicit outcome check is only needed when chaining from TEST specifically -
-test's testcaserun.finished is the one domain event that fires unconditionally
-(pass or fail), by design, so downstream chaining must filter on outcome itself.
-build/deploy/release's own domain events (artifact.published/service.deployed/
-change.created) are each gated at the SOURCE by a `when: tasks.status in
-[Succeeded, Completed]` on that send-cdevent task (see e.g. build.yaml's own
-artifact.published task) - their mere existence already implies success, so no
-outcome field exists on those events' subject.content to even check. Keyed off
-$prevStage (whatever this step actually chains from), not the current stage's
-identity - a fixed identity check would misfire once any stage can follow any
-other (e.g. deploy chained from release, not test).
+Only chaining from TEST needs an explicit outcome check: testcaserun.finished fires
+unconditionally (pass or fail) by design. build/deploy/release's events are already
+gated at the source by `when: tasks.status in [Succeeded, Completed]`, so their mere
+existence implies success. Keyed off $prevStage, not the current stage, since any
+stage can now follow any other.
 */ -}}
 {{- if eq $prevStage "test" -}}
   {{- $celFilter = printf "%s && body.subject.content.outcome == 'Succeeded'" $celFilter -}}
 {{- end -}}
 
-{{- /*
-Which subject.content field carries the image reference differs by CDEvents subject
-type: artifact/testCaseRun/change events (build/test/release) use "image", but
-service.deployed (deploy) uses "artifactId" - CDEvents' own real per-subject-type
-vocabulary, not an inconsistency to paper over by renaming one side. Now that any
-stage can chain from any other (not just the fixed build->test->deploy->release
-order), the extraction has to pick the right field for whatever $prevStage actually
-is, not assume "image" always.
-*/ -}}
+{{- /* CDEvents vocabulary differs by subject type: build/test/release events use
+"image", service.deployed (deploy) uses "artifactId". Must key off $prevStage since any
+stage can now chain from any other. */ -}}
 {{- $imageField := "image" -}}
 {{- if eq $prevStage "deploy" -}}
   {{- $imageField = "artifactId" -}}
 {{- end -}}
 
-{{- /*
-Only meaningful for a test step - falls back to the top-level test.suite so the
-common single-suite case doesn't need to repeat it on every step (same fallback
-validateFlows already requires resolve to something for a test stage). Threaded
-through unconditionally for every stage the same way cluster/name already are;
-build/deploy/release's Pipelines simply don't declare a `suite` param and Tekton
-tolerates the unused extra value, same as those two today.
-*/ -}}
+{{- /* Only meaningful for test; falls back to top-level test.suite. Threaded through
+unconditionally like cluster/name - Tekton tolerates the unused param on other stages. */ -}}
 {{- $effectiveSuite := $step.suite | default ($.Values.test.suite | default "") -}}
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -186,50 +113,33 @@ spec:
   params:
     - { name: flow-name, value: {{ $flowName | quote }} }
     - { name: stage-name, value: {{ $stageName | quote }} }
-    {{/* $(body.context.id), the incoming CDEvent's own unique id substituted by Tekton Triggers at runtime (dollar-paren, not Helm's double-brace), matches legacy fire-test.yaml's "<stage>-$(body.context.id)" dedup pattern - gives a real per-firing identity so a redelivered CDEvent no-ops, and now that stages can repeat within a flow, two different steps sharing a stage name never collide on it either. */}}
+    {{/* $(body.context.id) (Tekton runtime substitution, not Helm) gives each firing a
+    unique name so a redelivered CDEvent no-ops, and repeated stage names don't collide. */}}
     - { name: pipeline-run-name, value: {{ printf "%s-%d-%s-$(body.context.id)" $flowName $index $stageName | quote }} }
     - { name: env, value: {{ $step.env | default "dev" | quote }} }
     - { name: suite, value: {{ $effectiveSuite | quote }} }
-    {{/* $step.cluster if set, else resolved from deploy.upperEnvironments for $step.env
-    - see _helpers.tpl's resolveStepCluster for why the naive $step.cluster-only read
-    was a real bug: validateFlows's own error message tells users to OMIT a release
-    step's cluster: and let it resolve from upperEnvironments, but nothing here
-    actually did that resolution before - confirmed live 2026-08-11. */}}
+    {{/* $step.cluster if set, else resolved from upperEnvironments - see _helpers.tpl's
+    resolveStepCluster. */}}
     - { name: cluster, value: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) | quote }} }
     - { name: name, value: {{ $step.name | default "" | quote }} }
     - { name: is-flow-root, value: "false" }
-    {{/* Computed here, not left to each Pipeline's own default, since only the
-    generator knows this step's position within the flow's steps: list - see
-    docs/tracing.md and the is-flow-terminal param on catalog/pipelines/*.yaml. */}}
+    {{/* Computed here since only the generator knows this step's position in the
+    flow - see docs/admin/tracing.md. */}}
     - { name: is-flow-terminal, value: {{ $isLast | quote }} }
     - { name: git-url, value: "$(body.subject.content.git-url)" }
     - { name: git-revision, value: "$(body.subject.content.revision)" }
     - { name: image-ref, value: "$(body.subject.content.{{ $imageField }})" }
-    {{/* No "outcome" param here - it's never consumed downstream (nothing in the
-    resourcetemplate below references $(tt.params.outcome)), and unlike the CEL filter's
-    own outcome check (correctly conditional on $prevStage == "test" above), a binding
-    param's $(body...) JSONPath is evaluated unconditionally for every event. build/
-    deploy/release's own domain events genuinely have no subject.content.outcome field
-    (see this file's own header) - Tekton Triggers' ApplyEventValuesToParams treats a
-    missing JSONPath as a hard error, not an empty value, aborting ALL param binding for
-    the WHOLE trigger. Confirmed live: this silently broke every chain transition except
-    specifically chaining from test, via "failed to replace JSONPath value for param
-    outcome: ... outcome is not found" in the EventListener's own logs - no PipelineRun
-    ever got created, for any flow, until this was removed. */}}
+    {{/* No "outcome" param: a binding param's $(body...) JSONPath is evaluated
+    unconditionally, and build/deploy/release events have no subject.content.outcome
+    field - Tekton Triggers hard-errors on a missing JSONPath (not an empty value),
+    which previously broke every chain transition except from test. */}}
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
     - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
-    {{/* Performance pass (see docs/release.md): lets deploy/release skip their own
-    clone-repo+validate-config and inherit cicd.yaml's already-validated content
-    instead - see catalog/tasks/resolve-notify-config.yaml. Threaded unconditionally for
-    every stage the same way chain-id/traceparent already are above - test.yaml doesn't
-    declare a config-json param at all (it always validates its own config regardless),
-    and Tekton tolerates the unused extra value, same established pattern as `suite`
-    below. Always a plain string (customData.platform.config_json is JSON-as-a-string,
-    the same shape as traceparent/flow_start_time, not a nested JSON object) -
-    deliberately not relying on Tekton Triggers' JSONPath extraction serializing a
-    nested object correctly, since nothing else in this platform has ever needed that
-    and it isn't a proven pattern here. */}}
+    {{/* Lets deploy/release skip their own clone-repo+validate-config and inherit
+    cicd.yaml's already-validated content instead (resolve-notify-config.yaml). Always a
+    plain string (JSON-as-a-string, not a nested object) - Tekton Triggers' JSONPath
+    extraction of nested objects isn't a proven pattern here. */}}
     - { name: config-json, value: "$(body.customData.platform.config_json)" }
 ---
 apiVersion: triggers.tekton.dev/v1beta1
@@ -293,18 +203,10 @@ spec:
           - { name: flow-traceparent, value: $(tt.params.traceparent) }
           - { name: flow-start-time, value: $(tt.params.flow-start-time) }
           - { name: config-json, value: $(tt.params.config-json) }
-        {{- /*
-        Only test actually touches the source workspace (integration-test needs a real
-        checkout) - deploy/release both dropped their unconditional clone-repo+
-        validate-config in favor of resolve-notify-config, which works fine with no
-        workspace bound at all for the event-chained case this file exclusively handles
-        (see deploy.yaml/release.yaml's own headers and resolve-notify-config.yaml).
-        Omitting the binding entirely here - not just leaving it empty - is what skips
-        the PVC provisioning cost for every deploy/release PipelineRun this file creates,
-        which is the actual point: this was one full clone+PVC-provision+PVC-teardown
-        per stage, on every single flow transition, for a workspace two of the four
-        stages never read from at all.
-        */ -}}
+        {{- /* Only test needs the source workspace (real checkout for integration-test).
+        deploy/release use resolve-notify-config instead and need no workspace; omitting
+        the binding entirely (not just empty) skips a PVC provision/teardown per
+        transition for stages that never read from it. */ -}}
         {{- if eq $stageName "test" }}
         workspaces:
           - name: source

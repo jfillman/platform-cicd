@@ -1,46 +1,23 @@
 # templates/tekton/pipelinerun-pruner-cronjob.yaml
 #
-# Shared, platform-level CronJob (applied once, not per Application - same shape as
-# stalled-pipeline-detector-cronjob.yaml/pr-namespace-ttl-sweep-cronjob.yaml). Closes a
-# real gap: PaC's `pipelinesascode.tekton.dev/max-keep-runs` annotation only prunes
-# PaC-triggered PipelineRuns (a flow's git-rooted first step), not the event-chained
-# ones charts/platform-cicd-app/templates/triggers/flow-triggers.yaml's Tekton Triggers
-# create for every other step - and Tekton itself never garbage-collects completed
-# PipelineRuns/TaskRuns/Pods on its own. Confirmed live: a single heavy flow-testing
-# session left 200+ completed PipelineRuns behind with zero automatic cleanup, and this
-# cluster's single-node max-pods-per-node ceiling (~110) has already been hit by that
-# kind of accumulation more than once - completed TaskRun pods pile up right alongside
-# still-running ones competing for the same scheduling budget.
+# Shared, platform-level CronJob (not per-Application) - closes a real gap: PaC's
+# max-keep-runs annotation only prunes PaC-triggered PipelineRuns (a flow's git-rooted
+# first step), not the event-chained ones flow-triggers.yaml creates for every other
+# step, and Tekton never garbage-collects completed PipelineRuns/TaskRuns/Pods on its
+# own. A heavy test session once left 200+ completed runs behind, competing with running
+# pods for this cluster's node pod-count ceiling.
 #
-# Retention rule: group completed PipelineRuns by (namespace, tekton.dev/pipeline label)
-# - Tekton's own automatic label naming which Pipeline produced a run (build/test/
-# deploy/release/onboarding-resync/sast-check/...), confirmed live, no new labeling
-# needed. Within each group, the single newest completed run is NEVER pruned by this
-# job, regardless of age - always something to inspect per pipeline. Every other run in
-# that group is deleted once it's older than RETENTION_HOURS (default 24). A
-# still-Running PipelineRun can never be selected - excluded before grouping even
-# starts, by construction (only .status.completionTime != null is considered a
-# candidate at all).
+# Retention: group completed PipelineRuns by (namespace, tekton.dev/pipeline label); the
+# single newest per group is never pruned regardless of age; everything else older than
+# RETENTION_HOURS (default 24) is deleted. Both Succeeded and Failed count as "done"
+# here (unlike stalled-pipeline-detector, pruning doesn't need that distinction).
 #
-# completionTime is set for both Succeeded AND Failed terminal conditions in Tekton, so
-# both count as "done" here - unlike stalled-pipeline-detector-cronjob.yaml, which
-# treats a Failed run as a separate, already-visible condition (it deliberately doesn't
-# alert on it). Pruning doesn't need that distinction: a failed run's logs are just as
-# disk-consuming as a succeeded one's once nobody's actively debugging it.
+# Deletes TaskRuns explicitly before their owning PipelineRun rather than relying on
+# ownerReference cascade-GC - cascade deletion alone didn't reliably clean up orphaned
+# TaskRun pods under load in testing.
 #
-# Deletes TaskRuns explicitly (by Tekton's own tekton.dev/pipelineRun label) BEFORE
-# deleting the owning PipelineRun, rather than relying solely on ownerReference
-# cascade-GC - confirmed live in a prior heavy-testing session that cascade deletion
-# alone did not reliably clean up already-orphaned TaskRun pods under load; explicit
-# TaskRun deletion is what actually cleared them.
-#
-# RBAC is cluster-scoped by necessity (PipelineRuns live in every Application's own
-# namespace, and no app-namespace-discovery label exists anywhere in this platform yet -
-# same unavoidable exception stalled-pipeline-detector-cronjob.yaml already documents)
-# but narrow by verb: get/list/delete on pipelineruns.tekton.dev and taskruns.tekton.dev.
-# Nothing else - no Secrets, no other resource types, no write access to a PipelineRun's
-# spec/status (unlike stalled-pipeline-detector, which patches a dedup label - this job
-# only ever deletes or does nothing).
+# RBAC is cluster-scoped by necessity but narrow: get/list/delete on pipelineruns and
+# taskruns only - no Secrets, no write access to spec/status.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -103,7 +80,7 @@ spec:
           containers:
             - name: prune
               image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-              imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+              imagePullPolicy: IfNotPresent  # published to ghcr.io/jfillman, not kind-loaded - see hack/bootstrap.sh 4/6
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -119,11 +96,9 @@ spec:
                   retention_seconds=$(( RETENTION_HOURS * 3600 ))
 
                   # One pruning candidate per line: every completed PipelineRun in a
-                  # (namespace, pipeline) group EXCEPT that group's own newest - the
-                  # newest is dropped here (.[1:] after a completionTime-descending
-                  # sort), before age is even considered, so it's structurally
-                  # impossible for this job to ever prune the last surviving run of a
-                  # pipeline.
+                  # (namespace, pipeline) group except that group's own newest (dropped
+                  # before age is even considered, so the last surviving run of a
+                  # pipeline can never be pruned).
                   candidates="$(kubectl get pipelinerun -A -o json | jq -r '
                     .items
                     | map(select(.status.completionTime != null))

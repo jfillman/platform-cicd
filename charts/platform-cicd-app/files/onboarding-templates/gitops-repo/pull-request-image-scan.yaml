@@ -1,25 +1,16 @@
-# .tekton/pull-request-image-scan.yaml
+# BOILERPLATE - real (not stub). See pull-request-sast.yaml for the full pattern
+# explanation. References the dedicated image-scan-check Pipeline, which resolves the
+# promoted image from the gitops PR's staging manifest and runs a real Trivy scan.
 #
-# BOILERPLATE - real (not stub) as of Phase 3 item 8.5. See pull-request-sast.yaml for
-# the full pattern explanation. References platform-cicd's dedicated image-scan-check
-# Pipeline, which resolves the promoted image from the gitops PR's own staging manifest
-# and runs a real Trivy scan against it - see catalog/tasks/image-scan.yaml's own header.
-#
-# No <APP_NAMESPACE>/<APP_NAME> substitution and no workspace needed - repo-url/revision come
-# from PaC's own template vars, and extract-promoted-image.yaml clones the gitops repo
-# into its own scratch dir internally rather than a shared Pipeline workspace.
-#
-# pr-number - see pull-request-sast.yaml's own comment for why this is here (feeds the
-# finally-block PR comment, catalog/tasks/comment-pr-check-result.yaml).
+# No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
+# pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: image-scan
   annotations:
-    # See pull-request-sast.yaml's own annotation comment for why this is on-cel-expression
-    # (release-branch-only) rather than on-event/on-target-branch, and for why has()
-    # guards the pull_request field (a push webhook, e.g. from this same PR merging,
-    # has no pull_request key at all - real, live-found false-alarm bot comment).
+    # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
+    # and why has() guards the pull_request field.
     pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
     pipelinesascode.tekton.dev/max-keep-runs: "5"
 spec:

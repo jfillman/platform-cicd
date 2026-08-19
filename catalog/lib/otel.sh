@@ -1,37 +1,27 @@
 #!/usr/bin/env bash
 # catalog/lib/otel.sh
 #
-# Shared span-instrumentation helpers for pipeline step scripts, built on otel-cli
-# (github.com/equinix-labs/otel-cli), baked into the toolbox image (see
-# catalog/toolbox/Dockerfile). Every catalog Task step sources this file instead of
-# shelling out to otel-cli directly, so a version bump only needs a fix here.
+# Shared span-instrumentation helpers built on otel-cli, baked into the toolbox image
+# (catalog/toolbox/Dockerfile). Every catalog Task step sources this instead of calling
+# otel-cli directly, so a version bump only needs a fix here.
 #
-# Stateless by design: every span this file emits is sent via ONE bare `otel-cli span`
-# (or `otel-cli exec`) call carrying explicit trace-id/span-id/parent-span-id/timestamps,
-# never via otel-cli's `span background` + separate `span end`/`span event` daemon-socket
-# workflow. An earlier version of this file used that daemon workflow to let a span start
-# in one Tekton Task and end in a later one (needed for flow-root/stage spans, which span
-# multiple Tasks and even multiple independently-triggered PipelineRuns) - it never
-# worked, because each Tekton Task runs in its own Pod, and otel-cli's background daemon
-# listens on a Unix socket local to whichever Pod started it: a Task in a different Pod
-# calling `span end`/`span event` against that socket path can never reach it. Every span
-# sent through that path showed an exact 1.00s duration and a `timeout` event (verified
-# live, against real trace data in Tempo) - otel-cli's own default --timeout (1s) fired
-# because the real "end" call never arrived. See docs/tracing.md.
+# Stateless by design: every span is sent via one bare `otel-cli span`/`exec` call with
+# explicit trace-id/span-id/parent-span-id/timestamps - never otel-cli's `span
+# background` + `span end` daemon-socket workflow. That workflow can't span Tekton
+# Tasks (each runs in its own Pod, and the background daemon's Unix socket is local to
+# whichever Pod started it) - confirmed live via spans stuck at a hardcoded 1s
+# `timeout` duration. See docs/admin/tracing.md.
 #
-# The fix: split "begin" (mint identifiers + a start timestamp, thread them through
-# Tekton results/CDEvents exactly like traceparent already was) from "send" (one
-# stateless otel-cli call with explicit --start/--end/--force-*-id flags, safe from any
-# Task/Pod, run only once the real end time is known - see otel_span_send).
+# Fix: split "begin" (mint identifiers + start timestamp, thread through Tekton
+# results/CDEvents like traceparent) from "send" (one stateless call once the real end
+# time is known).
 #
 # Contract:
-#   - TRACEPARENT (W3C trace context) is threaded through Tekton task params/results,
-#     never rediscovered locally - see catalog/stepactions/otel-*.yaml.
-#   - One flow-root span covers an entire build->test->deploy->release run. Every
-#     stage's span parents directly to the flow root (flat, not nested - stages don't
-#     overlap in time, so nesting would misrepresent duration).
-#   - The flow-root traceparent is what gets carried inside the CDEvent payload across
-#     independently-triggered PipelineRuns - see cdevents.sh.
+#   - traceparent is threaded through Tekton params/results, never rediscovered locally.
+#   - One flow-root span covers an entire build->test->deploy->release run; every
+#     stage's span parents directly to it (flat, not nested - stages don't overlap).
+#   - The flow-root traceparent rides inside the CDEvent payload across independently
+#     triggered PipelineRuns - see cdevents.sh.
 
 set -euo pipefail
 
@@ -71,21 +61,13 @@ otel_stage_span_begin() {
 }
 
 # _otel_cli_send <args...>
-# Shared retry wrapper around a one-shot `otel-cli span` call - used by otel_span_send
-# and otel_task_span_send, both of which mint their span's identity/timestamps up
-# front and send them in a single explicit-id, explicit-timestamp call, making a retry
-# of the exact same call safe (never a duplicate side effect, just the same span
-# re-offered to the collector). Real bug, found live 2026-08-12: a bare `otel-cli
-# span ...` call has no retry AND (without --fail, which nothing here passed) exits 0
-# even when it can't reach the collector at all (confirmed by pointing it at an
-# unroutable address) - so a transient hiccup either silently dropped the span with no
-# error, or - when otel-cli's own default 1s --timeout wasn't enough under real load
-# (confirmed live: failed during a burst of 8 concurrent governance-check
-# PipelineRuns) - failed the whole calling TaskRun outright with no retry, which is
-# what actually broke a real release stage's trace. --fail makes both failure modes
-# surface as a real exit code; --timeout 5s gives real sends more room than otel-cli's
-# default under load; 3 attempts with a short backoff covers a one-off blip without
-# masking a genuinely down collector for long.
+# Retry wrapper around a one-shot `otel-cli span` call. Explicit ids/timestamps make a
+# retry of the same call safe (no duplicate side effect). A bare `otel-cli span` call
+# has no retry and, without --fail, exits 0 even when it can't reach the collector -
+# silently dropping the span. --fail surfaces that as a real exit code; --timeout 5s
+# gives more room than otel-cli's default under load (seen failing during a burst of
+# concurrent PipelineRuns); 3 attempts with backoff covers a blip without masking a
+# genuinely down collector.
 _otel_cli_send() {
   local attempt
   for attempt in 1 2 3; do
@@ -136,19 +118,12 @@ otel_span_send() {
 }
 
 # otel_task_span_send <name> <flow-traceparent> <parent-span-id> <start-time> <end-time> <tekton-status> [attrs]
-# Sends a span for one Task's own already-finished work, nested under an explicit
-# <parent-span-id> (typically the current stage's span id). Distinct from
-# otel_span_send on purpose: that function is hardcoded for a STAGE's own span (always
-# parents to the flow root, and reuses its <span-id> arg AS the new span's own id,
-# since that id was pre-minted by otel_stage_span_begin specifically for the stage).
-# Calling otel_span_send from a Task with the stage span id doesn't nest the Task under
-# the stage - it mints a span with the *same id as the stage span itself*, parented to
-# the flow root as a sibling, not a child. Real bug, found live: multiple Task spans
-# (and the stage span) all claiming the same (trace-id, span-id) pair meant Tempo could
-# only keep one of them - explains why some Task spans silently never appeared while
-# others "worked" (one arbitrary survivor of the collision). This function mints a
-# genuinely fresh span id every call and takes the parent explicitly, so nesting is
-# correct and no id is ever reused across spans.
+# Sends a span for one Task's own work, nested under an explicit <parent-span-id>.
+# Distinct from otel_span_send, which reuses its <span-id> arg as the new span's own id
+# (correct only for a stage's own span). Calling otel_span_send from a Task instead
+# would mint a span sharing the stage's own (trace-id, span-id) - Tempo can only keep
+# one of two spans with the same id pair, which is why some Task spans silently never
+# appeared. This function always mints a fresh span id, so nesting is correct.
 otel_task_span_send() {
   : "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
   local name="$1" flow_traceparent="$2" parent_span_id="$3" start_time="$4" end_time="$5" tekton_status="$6"
@@ -170,15 +145,12 @@ otel_task_span_send() {
 }
 
 # otel_child_span <name> <flow-traceparent> <parent-span-id> <attrs> -- <command...>
-# Runs <command...> wrapped in one stateless child span via `otel-cli exec` - safe to
-# call from a Task with no connection to whatever process/Pod owns the parent span,
-# since parenting is set with explicit --force-*-id flags, not inherited daemon/
-# process state. Used by governance-gate-stub to attach a real, queryable child span
-# under the current stage span. governance.stub=true is a span *attribute* here, not
-# an OTel span event - an earlier version emitted it as an event on the (unreachable)
-# background span, which meant it was neither delivered nor queryable via TraceQL's
-# `name =` (which matches spans, not events). A real span is straightforwardly
-# queryable, e.g. `{ name =~ "^governance:.*" }`.
+# Runs <command...> wrapped in one stateless child span via `otel-cli exec` - parenting
+# is explicit (--force-*-id), not inherited daemon/process state, so this works from
+# any Task regardless of which Pod owns the parent span. Used by governance-gate-stub
+# to attach a queryable child span (governance.stub=true as a span *attribute*, not an
+# event - a span is queryable via TraceQL's `name =`, an event on an unreachable
+# background span isn't).
 otel_child_span() {
   : "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
   local name="$1" flow_traceparent="$2" parent_span_id="$3" attrs="$4"; shift 4

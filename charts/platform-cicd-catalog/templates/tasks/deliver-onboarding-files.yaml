@@ -1,20 +1,13 @@
-# templates/tasks/deliver-onboarding-files.yaml (Phase 3 item 7 - see
-# docs/onboarding.md's "Keeping onboarding boilerplate in sync" section)
+# templates/tasks/deliver-onboarding-files.yaml - see docs/onboarding.md.
 #
-# Replaces both the fully-manual copy-paste onboarding process AND the old system's
-# ConfigMap+trigger-field re-sync button, with the same design language this platform
-# already uses everywhere else for a repo-write operation: mint a fresh, single-repo-
-# scoped GitHub App installation token per target repo (never a standing credential),
-# open a PR rather than pushing directly to a default branch, and let PaC's own already-
-# trusted webhook auth be the thing that decides when this Task should run at all - see
-# files/onboarding-templates/app-repo/onboarding-resync.yaml's own header for exactly which
-# events trigger it (a cicd.yaml change on the app repo).
+# Replaces manual copy-paste onboarding: mints a fresh, single-repo-scoped GitHub App
+# installation token per target repo (never a standing credential), opens a PR rather than
+# pushing directly to the default branch, and lets PaC's own webhook auth decide when this
+# Task runs (see files/onboarding-templates/app-repo/onboarding-resync.yaml).
 #
-# Deliberately NOT touching the gitsign-enforced path: policy-check's gitsign
-# verification runs only as a Check on the gitops repo's release PR (verifying the
-# app-repo commit via X-App-Repo/X-App-Commit trailers - see open-release-pr.yaml) -
-# there is no gitsign/policy-check gate wired onto either repo's default branch here, so
-# this Task's own machine-generated commits never need to be signed.
+# Not gitsign-gated: policy-check's gitsign verification only runs on the gitops repo's
+# release PR, not on either repo's default branch, so this Task's machine commits don't
+# need to be signed.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -35,11 +28,7 @@ spec:
       type: string
       description: >-
         platformIdentity.type ("app"/"infra"/...) - forwarded into each generated
-        git-rooted PipelineRun's own app-type param (deploy.yaml/release.yaml both
-        need it - see docs/concepts.md). A real, pre-existing gap this closes: this
-        Task never threaded app-type through at all before, for ANY stage, so a
-        git-rooted deploy or cluster-mapped release would have hit a missing-required-
-        param admission error the first time either was actually tried.
+        git-rooted PipelineRun's app-type param (deploy.yaml/release.yaml need it).
     - name: github-owner
       type: string
     - name: gitops-repo-url
@@ -49,10 +38,8 @@ spec:
         Optional - only needed if this Application's pipeline declares a release stage
         (see the app chart's own conditional rendering). Empty skips the gitops-repo
         delivery half entirely, not an error.
-  # Same audience-bound projected-ServiceAccount-token volume shape already proven in
-  # send-cdevent.yaml/open-release-pr.yaml/pr-token-refresher-cronjob.yaml - no new
-  # identity, no new RBAC (talking to the broker isn't RBAC-gated). This Task is meant to
-  # run as the Application's own existing pipeline-runner SA, not a new one.
+  # Same audience-bound projected-ServiceAccount-token pattern as send-cdevent.yaml/
+  # open-release-pr.yaml - no new identity or RBAC needed; runs as pipeline-runner.
   volumes:
     - name: github-token-broker-token
       projected:
@@ -61,18 +48,11 @@ spec:
               path: github-token-broker-token
               audience: github-installation-token
               expirationSeconds: 600
-    # charts/platform-cicd-app/templates/configmaps/onboarding-templates.yaml - rendered
-    # by the APP chart (one copy per Application), NOT this catalog chart, even though
-    # this Task itself is a shared, cluster-resolved definition. A Pod can only
-    # volume-mount a ConfigMap from its own namespace, and this Task's Pod always
-    # executes in the CALLING PipelineRun's namespace (whichever Application triggered
-    # it) - never platform-catalog, regardless of where the Task definition itself was
-    # resolved from. A fixed ConfigMap name works here specifically because Kubernetes
-    # resolves it within whatever namespace the Pod actually ends up in - the same
-    # shared Task definition transparently mounts a DIFFERENT Application's own copy
-    # for each Application, no per-tenant Task change needed. See that ConfigMap
-    # template's own header for the fuller reasoning (including a discarded
-    # cross-namespace-kubectl-read alternative and why it was dropped).
+    # Rendered by the APP chart (one copy per Application), not this catalog chart -
+    # a Pod can only mount a ConfigMap from its own namespace, and this Task's Pod always
+    # runs in the calling Application's namespace, not platform-catalog. A fixed ConfigMap
+    # name works because each Application's own copy resolves locally, so this one shared
+    # Task definition transparently mounts a different copy per tenant.
     - name: onboarding-templates-app-repo
       configMap:
         name: onboarding-templates-app-repo
@@ -114,15 +94,9 @@ spec:
         repo="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
         image_repo="ghcr.io/${GITHUB_OWNER}/${APP_NAME}"
 
-        # app-type is optional now (onboarding-resync.yaml's own Pipeline param has no
-        # default, deliberately - see that file's header) precisely so a stale trigger
-        # file committed in a tenant repo before app-type existed can still fire THIS
-        # Task and self-heal, instead of deadlocking on the one required param that
-        # would have fixed it. Derived from app-namespace when absent - every namespace
-        # this platform ever creates is <type>-<app-name>-<env> (envNamespace helper,
-        # charts/platform-cicd-app/templates/_helpers.tpl), and this Task's own
-        # app-namespace param is always that Application's CI/CD namespace specifically,
-        # i.e. env="cicd" - so stripping "-${APP_NAME}-cicd" off the end recovers type.
+        # app-type is optional so a stale trigger file committed before app-type existed
+        # can still fire this Task and self-heal. Derived from app-namespace when absent:
+        # every namespace is <type>-<app-name>-cicd, so stripping the suffix recovers type.
         if [[ -z "${APP_TYPE}" ]]; then
           APP_TYPE="${APP_NAMESPACE%-${APP_NAME}-cicd}"
           echo "app-type not supplied - derived '${APP_TYPE}' from app-namespace=${APP_NAMESPACE}"
@@ -135,13 +109,10 @@ spec:
         cd "${workdir}/repo"
         mkdir -p .tekton
 
-        # onboarding-resync.yaml is the one truly platform-required file delivered
-        # unconditionally - the app repo's own copy of the trigger that re-invokes this
-        # whole mechanism the next time cicd.yaml changes. Everything else (build on
-        # push, PR validation, tag releases, ...) is app-specific pipeline BEHAVIOR, not
-        # platform plumbing, so it comes entirely from cicd.yaml's own `pipelines:`
-        # section below instead of being hardcoded here - there is no more implicit
-        # "push to main always builds" default; an app that wants that declares it.
+        # onboarding-resync.yaml is the only file delivered unconditionally - the trigger
+        # that re-invokes this mechanism next time cicd.yaml changes. Everything else is
+        # app-specific behavior, generated below from cicd.yaml's own `pipelines:` section;
+        # there's no implicit "push to main always builds" default.
         sed \
           -e "s|<APP_NAMESPACE>|${APP_NAMESPACE}|g" \
           -e "s|<APP_NAME>|${APP_NAME}|g" \
@@ -150,39 +121,28 @@ spec:
           -e "s|<GITOPS_REPO_URL>|${GITOPS_REPO_URL}|g" \
           "/opt/platform/onboarding-templates/app-repo/onboarding-resync.yaml" > ".tekton/onboarding-resync.yaml"
 
-        # Every other .tekton/ file comes from named flows under cicd.yaml's
-        # `pipelines:` section - see docs/user-guide/cicd-yaml-reference.md. Only a flow's
-        # git-rooted first step needs a PaC file here; event-chained later steps (test/
-        # deploy/release-after-deploy) are fired by the in-cluster CDEvents broker
-        # instead - see charts/platform-cicd-app/templates/triggers/flow-triggers.yaml's
-        # own header. Regenerated fresh every run (stale removed first) so a flow
-        # deleted from cicd.yaml also disappears from .tekton/, not just accumulates.
+        # Every other .tekton/ file comes from named flows under cicd.yaml's `pipelines:`
+        # section. Only a flow's git-rooted first step needs a PaC file here - event-chained
+        # later steps are fired by the in-cluster CDEvents broker instead. Regenerated fresh
+        # every run (stale removed first) so a flow deleted from cicd.yaml also disappears.
         rm -f .tekton/flow-*.yaml
         if [[ -f cicd.yaml ]]; then
           pipelines_json="$(yq -o=json '.pipelines // {}' cicd.yaml)"
           source_volume_size_raw="$(yq -r '.build.sourceVolume.size // "small"' cicd.yaml)"
-          # env name -> cluster lookup ("" for a same-cluster entry), mirroring
-          # charts/platform-cicd-app/templates/_helpers.tpl's own
-          # platform-cicd-app.upperEnvClusters exactly (same shape normalization,
-          # necessarily duplicated as jq rather than shared - this script runs as bash
-          # against the tenant's raw cicd.yaml, outside Helm's render pass entirely,
-          # same reason SOURCE_VOLUME_STORAGE's lookup below is duplicated too). Used so
-          # a git-rooted release step that OMITS its own cluster: (validateFlows's own
-          # recommended way to declare one) still resolves the right cluster here,
-          # instead of silently falling through to the same-cluster path - a real bug,
-          # confirmed live 2026-08-11, that affected this bash-generated path exactly
-          # the same way it affected flow-triggers.yaml's Go-template one.
+          # env name -> cluster lookup ("" for same-cluster), mirroring
+          # platform-cicd-app.upperEnvClusters. Necessarily duplicated as jq rather than
+          # shared - this script runs as bash against raw cicd.yaml, outside Helm's render
+          # pass. Needed so a git-rooted release step that omits cluster: still resolves the
+          # right cluster instead of silently falling through to same-cluster (a real bug
+          # that hit flow-triggers.yaml's Go-template equivalent too).
           upper_env_clusters_json="$(yq -o=json '.deploy.upperEnvironments // []' cicd.yaml | jq 'map(if type == "object" then {(.name): (.cluster // "")} else {(.): ""} end) | add // {}')"
         else
           pipelines_json="{}"
           source_volume_size_raw="small"
           upper_env_clusters_json="{}"
         fi
-        # T-shirt lookup for build.sourceVolume.size - same dictionary as
-        # charts/platform-cicd-app/templates/_helpers.tpl's sourceVolumeSize helper, but
-        # necessarily duplicated as bash rather than shared: this script generates YAML
-        # committed straight into the APP's own repo at Tekton runtime, outside Helm's
-        # render pass entirely, so it has no access to that helper.
+        # T-shirt lookup for build.sourceVolume.size, duplicated from the sourceVolumeSize
+        # Helm helper since this script runs outside Helm's render pass and can't call it.
         case "${source_volume_size_raw}" in
           small) SOURCE_VOLUME_STORAGE="2Gi" ;;
           medium) SOURCE_VOLUME_STORAGE="5Gi" ;;
@@ -191,41 +151,28 @@ spec:
           *) SOURCE_VOLUME_STORAGE="2Gi" ;;
         esac
 
-        # PaC's own dynamic-variable syntax (double-brace-wrapped names like repo_url)
-        # uses the same delimiter Helm's template engine renders THIS file with - writing
-        # it literally here would make Helm try to parse it instead of passing it through
-        # (a real error hit once building this: "unexpected '{' in operand", then again
-        # as "function \"repo_url\" not defined" the first time this exact comment
-        # accidentally spelled it out literally). Built from printf hex escapes instead,
-        # so no literal double-brace sequence ever appears in this file's own source text
-        # for Helm to trip over - only assembled at runtime, in the delivered file's
-        # actual content.
+        # PaC's dynamic-variable syntax uses the same double-brace delimiter Helm renders
+        # this file with, so writing it literally would make Helm try to parse it instead
+        # of passing it through. Built from printf hex escapes instead so no literal
+        # double-brace sequence appears in this file's own source.
         OB="$(printf '\x7b\x7b')"
         CB="$(printf '\x7d\x7d')"
         GIT_URL_VAR="${OB} repo_url ${CB}"
         GIT_REVISION_VAR="${OB} revision ${CB}"
         # PaC's source_branch dynamic var carries the raw ref for a tag push (e.g.
-        # refs/tags/v1.2.3), matching what build-image.yaml's version-extraction step
-        # already expects to strip - see that Task's own git-tag param description.
-        # Confirmed live against a real tag push (only user of this var now that
-        # release.created is gone - see the tag) case's own comment for why).
+        # refs/tags/v1.2.3), matching what build-image.yaml's version-extraction expects.
         GIT_TAG_VAR="${OB} source_branch ${CB}"
 
         generate_flow_file() {
           local flow_name="$1" event="$2" branch="$3" tag_pattern="$4" file_paths_json="$5" root_stage="$6"
           local root_env="$7" root_suite="$8" root_cluster="$9" root_name="${10}" is_flow_terminal="${11}"
           local on_event="" branch_line="" cel_line="" tag_param_line=""
-          # deploy/release/test can all be a flow's git-rooted first step (e.g. a tag
-          # push deploying straight to prod, or a test-only flow on a scratch branch -
-          # see validateFlows's own header). Their Pipelines read env/suite/cluster/name
-          # as regular params either way, same as the event-chained path - only emitted
-          # when actually set, so build/other stages' generated files don't carry stray
-          # empty params. Previously this whole param quartet was missing here entirely:
-          # a git-rooted deploy declaring `env: staging` silently deployed to "dev"
-          # instead (deploy.yaml's own Tekton-level default), since nothing here ever
-          # passed the declared value through - confirmed by reading deploy.yaml's param
-          # list, not yet hit in practice since the one git-rooted deploy example in the
-          # docs never overrides the default.
+          # deploy/release/test can all be a flow's git-rooted first step (e.g. a tag push
+          # deploying straight to prod). Their Pipelines read env/suite/cluster/name as
+          # regular params, only emitted when set. This quartet was previously missing
+          # entirely: a git-rooted deploy declaring `env: staging` would have silently
+          # deployed to "dev" (deploy.yaml's own Tekton-level default) since nothing passed
+          # the declared value through.
           local root_param_lines=""
           if [[ -n "${root_env}" ]]; then
             root_param_lines="${root_param_lines}
@@ -254,44 +201,29 @@ spec:
               if [[ -n "${branch}" ]]; then
                 branch_line="    pipelinesascode.tekton.dev/on-target-branch: \"[${branch}]\""
               fi
-              # Always AND in a guard against deploy-manifests.yaml's own commits
-              # re-triggering this exact flow - a real infinite loop hit live on
-              # checkout-api: that Task commits straight to platform/envs/<env>.yaml on
-              # this SAME branch (see deploy-manifests.yaml's own header), which is
-              # itself a `push` to `main`, which re-triggered build, which deployed
-              # again, forever (~20 min / 10 real commits + image pushes before it
-              # happened to stop on its own - a live incident, not a hypothetical).
+              # Guard against deploy-manifests.yaml's own commits re-triggering this flow -
+              # a real infinite loop hit live on checkout-api: that Task commits to
+              # platform/envs/<env>.yaml on this same branch, which is itself a push to
+              # main, which re-triggered build, which deployed again, forever.
               #
-              # Deliberately a CEL expression here, not the separate
-              # on-path-change-ignore annotation, even though checkout-api's own case
-              # has no other on-cel-expression to combine with - PaC's own matcher
-              # (pkg/matcher/annotation_matcher.go, confirmed by reading its real
-              # source) takes CEL's branch of the if/else ENTIRELY whenever
-              # on-cel-expression is set and never evaluates on-path-change-ignore at
-              # all, so an app that ALSO sets trigger.paths (producing its own
-              # cel_line below) would silently keep looping if this guard were the
-              # separate annotation instead. One mechanism, always applied, works for
-              # both cases.
+              # Uses a CEL expression rather than the separate on-path-change-ignore
+              # annotation: PaC's matcher takes the CEL branch entirely whenever
+              # on-cel-expression is set and never evaluates on-path-change-ignore, so an
+              # app that also sets trigger.paths would silently keep looping if this guard
+              # were the separate annotation. One mechanism, always applied, covers both.
               #
-              # !("platform/envs/**".pathChanged()) rather than trying to express PaC's
-              # docs' stated "skip only if ALL changed files are under this path"
-              # semantics precisely: pathChanged() (like the annotation) actually
-              # matches on ANY changed file (confirmed the same way, reading the real
-              # source) - a real gap between the docs and the implementation. Accepted
-              # tradeoff, not a mistake: a push that touches platform/envs/*.yaml
-              # alongside real app code in the SAME commit also gets skipped, but
-              # deploy-manifests.yaml's own commits never touch anything else, and a
-              # human intentionally hand-editing platform/envs/ (gitops-strategy.md
-              # §10's own self-service path) is expected to do it as its own
-              # standalone commit anyway.
+              # !("platform/envs/**".pathChanged()), not PaC's docs-stated "skip only if
+              # ALL changed files are under this path" semantics: pathChanged() actually
+              # matches on ANY changed file (a real gap between docs and implementation).
+              # Accepted tradeoff - deploy-manifests.yaml's commits never touch anything
+              # else, and a human hand-editing platform/envs/ is expected to do it as its
+              # own standalone commit anyway.
               local loop_guard='!("platform/envs/**".pathChanged())'
               if [[ "${file_paths_json}" != "[]" ]]; then
                 local expr
-                # pathChanged() is a suffix method on the glob-pattern string itself
-                # ("<pattern>".pathChanged()), not a function taking the pattern as an
-                # argument - confirmed live: the inverted form parses (jq/bash don't
-                # catch it) but PaC's CEL evaluator rejects it at webhook-delivery time
-                # with "no matching overload for 'pathChanged' applied to '(string)'".
+                # pathChanged() is a suffix method on the pattern string itself, not a
+                # function taking the pattern as an argument - the inverted form parses
+                # but PaC's CEL evaluator rejects it at webhook-delivery time.
                 expr="$(echo "${file_paths_json}" | jq -r 'map("\"" + . + "\".pathChanged()") | join(" || ")')"
                 cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '(${expr}) && ${loop_guard}'"
               else
@@ -310,14 +242,12 @@ spec:
               local branch_expr=""
               if [[ -n "${branch}" ]]; then
                 # branch.created has no PaC on-target-branch annotation to lean on (that
-                # matcher is for an existing branch's own pushes, not "was this ref just
-                # created") - confirmed live the previous version of this cel_line ignored
-                # trigger.branch entirely, so e.g. Example 5's `branch: "release/*"` never
-                # actually filtered: ANY newly created branch fired the flow. Fold the same
-                # glob syntax push/pull_request already accept via on-target-branch into
-                # CEL instead: escape regex metacharacters, then turn the glob's own "*"
-                # into ".*". Raw string (r"...") for the same reason as the tag case below
-                # - a pattern containing a literal "." would otherwise need double-escaping.
+                # matcher is for an existing branch's pushes, not "was this ref just
+                # created"). A previous version of this cel_line ignored trigger.branch
+                # entirely, so e.g. `branch: "release/*"` never filtered - any newly
+                # created branch fired the flow. Fold the same glob syntax push/pull_request
+                # accept via on-target-branch into CEL instead. Raw string (r"...") avoids
+                # double-escaping a pattern containing a literal ".".
                 local branch_regex
                 branch_regex="$(echo "${branch}" | sed -E 's/[.+?^${}()|\[\]\\]/\\&/g; s/\*/.*/g')"
                 branch_expr=" && body.ref.matches(r\"refs/heads/${branch_regex}\")"
@@ -328,41 +258,28 @@ spec:
               on_event="[push]"
               local pattern="${tag_pattern:-v[0-9]+.[0-9]+.[0-9]+}"
               # A regex tagPattern legitimately contains backslash escapes (\. for a
-              # literal dot, etc.) - CEL's own double-quoted string literals treat
-              # backslash as their OWN escape character, so splicing the pattern into a
-              # plain "..." literal breaks CEL's lexer on any backslash (confirmed live:
-              # "token recognition error at: '\"refs/tags/v[0-9]+\\.'"). A CEL raw
-              # string (r"...") disables CEL's escape processing so the pattern's own
-              # backslashes reach RE2's matches() unmolested.
+              # literal dot). CEL's double-quoted literals treat backslash as their own
+              # escape character, breaking CEL's lexer on any backslash. A CEL raw string
+              # (r"...") disables that escape processing so the pattern reaches RE2 unmolested.
               cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'body.ref.startsWith(\"refs/tags/\") && body.ref.matches(r\"refs/tags/${pattern}\")'"
               tag_param_line="    - { name: git-tag, value: \"${GIT_TAG_VAR}\" }"
               ;;
-            # No release.created case - deliberately removed. Confirmed live: PaC has no
-            # support for GitHub's "release" webhook at all, at any version - a real
-            # delivery came back 200 with body {"message":"skipping non supported event"},
-            # filtered out before PaC's own annotation/CEL matching ever runs, so no
-            # on-event/on-cel-expression combination here could ever have made this fire.
-            # Publishing a GitHub Release also creates its underlying tag, which fires a
-            # real, working "tag" push event instead (see above) - use that.
+            # No release.created case - PaC has no support for GitHub's "release" webhook
+            # at any version (confirmed: deliveries come back "skipping non supported
+            # event"). Publishing a GitHub Release also creates its underlying tag, which
+            # fires the "tag" push event above instead - use that.
           esac
 
-          # Body below is indented 8 spaces to stay inside this step's own `script: |`
-          # YAML block scalar (Helm - not bash - requires that; bash heredocs don't care
-          # about leading whitespace either way). Helm's own block-scalar parsing already
-          # strips that common 8-space indent when it renders this Task, the same way it
-          # does for every other multi-line script in this file - no extra stripping
-          # needed here, and adding one would double-strip and corrupt nested indentation
-          # (caught live: a bare `sed 's/^        //'` here knocked 8 more spaces off
-          # every already-8-or-more-indented line, flattening volumeClaimTemplate.spec).
+          # Body below is indented 8 spaces to stay inside this step's `script: |` YAML
+          # block scalar - Helm strips that common indent when rendering, so don't add any
+          # extra stripping here (a bare `sed 's/^        //'` previously flattened
+          # volumeClaimTemplate.spec by double-stripping).
           # generateName is keyed by flow_name, not root_stage - PaC requires every
-          # PipelineRun definition under .tekton/ to have a unique generateName/name
-          # across the WHOLE repo, not just within one file. Two different flows can
-          # legitimately share a root stage (e.g. a "ci" push flow and a "pr-check"
-          # pull_request flow both rooted at build) - confirmed live: PaC's matcher
-          # aborts the entire event with "found multiple pipelinerun in .tekton with
-          # the same generateName: build-, please update" and creates NOTHING, even for
-          # the annotation set that matched. flow_name is a cicd.yaml `pipelines:` map
-          # key, so it's already guaranteed unique.
+          # PipelineRun under .tekton/ to have a unique generateName across the whole repo.
+          # Two flows can share a root stage (e.g. a "ci" push flow and a "pr-check"
+          # pull_request flow both rooted at build), which would collide on generateName
+          # and make PaC create nothing at all. flow_name (a cicd.yaml map key) is
+          # guaranteed unique.
           cat <<YAMLEOF
         apiVersion: tekton.dev/v1
         kind: PipelineRun
@@ -423,8 +340,7 @@ spec:
             esac
           fi
           # Only a flow's git-rooted first step is generated here - event-chained flows
-          # (trigger.source: event) and multi-step flows' later steps are entirely the
-          # broker/flow-triggers.yaml's responsibility, not PaC's.
+          # and later steps are the broker/flow-triggers.yaml's responsibility, not PaC's.
           [[ "${trigger_source}" != "git" ]] && continue
 
           branch="$(echo "${flow_json}" | jq -r '.trigger.branch // ""')"
@@ -438,11 +354,9 @@ spec:
             root_cluster="$(jq -r --arg e "${root_env}" '.[$e] // ""' <<<"${upper_env_clusters_json}")"
           fi
           root_name="$(echo "${flow_json}" | jq -r '.steps[0].name // ""')"
-          # This function only ever generates a flow's FIRST step (index 0 - see the
-          # git-rooted-only skip above). That first step is also the flow's LAST step,
-          # and therefore the one that should close the flow-root span, exactly when the
-          # flow has no further steps at all (a build-only or single-step-release flow) -
-          # see is-flow-terminal on catalog/pipelines/*.yaml and docs/tracing.md.
+          # This function only generates a flow's first step (index 0). is-flow-terminal
+          # tells that step's Pipeline to close the flow-root span when it's also the
+          # flow's last step (a build-only or single-step-release flow).
           step_count="$(echo "${flow_json}" | jq -r '.steps | length')"
           is_flow_terminal="false"
           [[ "${step_count}" -eq 1 ]] && is_flow_terminal="true"

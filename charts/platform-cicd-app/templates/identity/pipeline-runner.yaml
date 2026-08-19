@@ -1,7 +1,5 @@
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
-# templates/identity/pipeline-runner.yaml (from platform/broker/manifests/
-# tenant-triggers-template.yaml's "Application identity" section, pre-Helm - unconditional,
-# every Application needs this regardless of which pipeline stages are declared)
+# Unconditional - every Application needs this identity regardless of declared stages.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -10,9 +8,8 @@ metadata:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "identity"
   namespace: {{ $appNamespace }}
-# imagePullSecrets reuses the same registry-credentials Secret kaniko already pushes
-# with - needed so every TaskRun's pod can actually pull the shared platform-cicd-toolbox
-# image from ghcr.io/jfillman, which defaults to PRIVATE on GHCR.
+# Reuses kaniko's registry-credentials Secret so TaskRun pods can pull the private
+# platform-cicd-toolbox image from ghcr.io/jfillman.
 imagePullSecrets:
   - name: registry-credentials
 ---
@@ -31,12 +28,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
-  # Deliberately absent: no apps/deployments rule here - that's <type>-<app>-<env>, a
-  # different (peer, not nested) namespace, see templates/env/deploy-rbac.yaml. Also
-  # deliberately absent: no impersonate, no wildcard verbs/resources, no cluster-scoped
-  # rules, no other cross-namespace access. This is the entire blast radius of a
-  # compromised pipeline-runner identity for this one Application, within its own
-  # namespace.
+  # Deliberately no apps/deployments rule (that's deploy-rbac.yaml, a peer namespace),
+  # no impersonate, no wildcards, no cluster-scoped rules - this is the entire blast
+  # radius of a compromised pipeline-runner identity.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -52,10 +46,9 @@ subjects:
     name: pipeline-runner
     namespace: {{ $appNamespace }}
 ---
-# Lets the shared broker's ServiceAccount (platform-system/cdevents-broker) create the
-# next-stage PipelineRun AS this Application's own pipeline-runner SA, and ONLY this one,
-# and ONLY in this namespace - one narrow, per-Application, auditable,
-# individually-revocable grant, not a cluster-wide impersonate on every ServiceAccount.
+# Lets the shared broker (platform-system/cdevents-broker) create the next-stage
+# PipelineRun as this Application's pipeline-runner SA only, in this namespace only -
+# not a cluster-wide impersonate grant.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

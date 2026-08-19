@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
 # catalog/lib/argocd-outcome-hook.sh
 #
-# Runs as an ArgoCD PostSync/SyncFail hook Job on a cluster-mapped upper-env cluster
-# (see open-release-pr.yaml's platform-outcome-postsync.yaml/platform-outcome-syncfail.yaml,
-# docs/multi-cluster.md) - reports a confirmed release outcome straight to the dev
-# cluster's argocd-outcome-relay. Replaces an earlier ArgoCD-Notifications-based design
-# entirely - see docs/multi-cluster.md for why: Notifications fired on ANY completed
-# sync operation (including pure selfHeal drift-correction with no release involved -
-# confirmed live), and reading per-release data off the Application object's own
-# metadata was racy against the app-of-apps root's independent reconcile loop (also
-# confirmed live). Neither problem exists here: a hook Job only runs when the
-# resources in ITS OWN sync actually had something to (re)apply, and PostSync
-# specifically only fires once those resources are deployed AND healthy (confirmed
-# live - see docs/multi-cluster.md's hook-timing test) - so there's no live object to
-# read at all, only env vars baked in by open-release-pr.yaml at commit time, at the
-# exact moment it already had the real values in hand.
+# Runs as an ArgoCD PostSync/SyncFail hook Job on a cluster-mapped upper-env cluster -
+# reports a confirmed release outcome straight to the dev cluster's
+# argocd-outcome-relay. Replaces an earlier ArgoCD-Notifications design: Notifications
+# fired on any completed sync (including pure selfHeal drift, no release involved), and
+# reading per-release data off the Application object's own metadata was racy against
+# the app-of-apps root's independent reconcile loop. A hook Job avoids both - it only
+# runs when its own sync had something to apply, PostSync only fires once healthy, and
+# every value here is an env var baked in by open-release-pr.yaml at commit time
+# instead of read live. See docs/admin/multi-cluster.md.
 #
-# PHASE is the one field baked in per-hook-type (Succeeded for the PostSync variant,
-# Failed for the SyncFail one) rather than discovered live - which hook ran already
-# tells us the outcome.
+# PHASE is baked in per-hook-type (Succeeded/Failed) rather than discovered live -
+# which hook ran already tells us the outcome.
 set -euo pipefail
 
 : "${RELAY_URL:?RELAY_URL must be set}"
@@ -28,26 +22,19 @@ set -euo pipefail
 : "${PHASE:?PHASE must be set}"
 : "${POD_NAMESPACE:?POD_NAMESPACE must be set - downward API, set on the hook Job spec}"
 
-# Optional, unlike the required fields above - CHAIN_ID lets argocd-outcome-relay tag
-# the release-outcome span it sends (catalog/tasks/release-outcome-span.yaml) with the
-# same chain-id the rest of this flow's spans carry, for correlation in Tempo/Grafana.
-# Not `:?`-required: an app onboarded before this field existed would otherwise break
-# every release until re-onboarded, for a correlation nicety, not a functional one.
-#
-# PR_CREATED_AT, same "optional, don't break old releases" reasoning - the real start
-# anchor for that same span (see release-outcome-span.yaml's own header for why it's
-# PR-creation time, not flow-start-time). Falls back to flow-start-time there if empty.
+# CHAIN_ID and PR_CREATED_AT are optional, unlike the required fields above: both feed
+# release-outcome-span.yaml's Tempo correlation (chain-id tagging, PR-creation as the
+# real start anchor, falling back to flow-start-time if empty), and making them
+# required would break every release from an app onboarded before either field existed.
 
-# The shared per-cluster secret, hand-provisioned once per app namespace on THIS
-# cluster (never committed to git, never passed through open-release-pr.yaml - that
-# Task runs on the dev cluster and never sees this value) - see docs/multi-cluster.md
-# for the exact provisioning command.
+# Shared per-cluster secret, hand-provisioned once per app namespace on THIS cluster -
+# never committed to git, never passed through open-release-pr.yaml (which runs on the
+# dev cluster and never sees it). See docs/admin/multi-cluster.md for provisioning.
 token="$(kubectl get secret platform-outcome-relay-token -n "${POD_NAMESPACE}" -o jsonpath='{.data.token}' | base64 -d)"
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# jq -n --arg, not string interpolation - every field here is safely JSON-encoded
-# regardless of content, the same lesson this platform's own bash-to-JSON call sites
-# (cdevents.sh, open-release-pr.yaml's own PR body) already learned the hard way.
+# jq -n --arg, not string interpolation, so every field is safely JSON-encoded
+# regardless of content (same convention as cdevents.sh).
 payload="$(jq -n \
   --arg appNamespace "${APP_NAMESPACE}" \
   --arg appName "${APP_NAME}" \

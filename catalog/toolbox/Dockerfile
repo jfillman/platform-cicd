@@ -1,55 +1,34 @@
 # catalog/toolbox/Dockerfile
 #
-# Shared base image for every catalog Task step. All step logic is bash (per platform
-# requirement) - this image exists so common tools/libs are versioned and patched in
-# exactly one place instead of duplicated per Task, the same problem that scattered
-# bespoke bash+curl+jq snippets across every task-*.yaml in the old platform.
+# Shared base image for every catalog Task step (all step logic is bash) - common
+# tools/libs are versioned and patched in exactly one place instead of duplicated per
+# Task. Tool versions are pinned explicit build args, not "latest" - a supply-chain-
+# sensitive shared image.
 #
-# Pinned tool versions are intentionally explicit build args, not "latest" - a shared
-# image used by every tenant's pipelines is a supply-chain-sensitive artifact.
+# Architecture-aware: built and run on an arm64 node, so every download resolves via
+# `uname -m` at build time rather than hardcoding amd64 - a hardcoded amd64 binary
+# would fail at runtime with "exec format error", not at build time.
 #
-# Architecture-aware by necessity, not just care: this gets built and run on kind-observe's
-# arm64 node, and every download below is resolved via `uname -m` at build time rather
-# than hardcoded to amd64 - an earlier version of this file hardcoded linux_amd64
-# unconditionally, which would have baked unrunnable binaries into an image meant to run
-# on arm64 (exec format error at runtime, not a build-time failure - the kind of bug that
-# only surfaces once a real pipeline actually tries to run a step).
-#
-# yajsv (JSON Schema validator, used by validate-cicd-config) doesn't publish a linux/arm64
-# binary at all (checked against its actual release assets, v1.4.1 - only linux/amd64 and
-# linux/386, plus darwin/arm64) - built from source in a Go stage instead of downloaded.
-#
-# gitsign - used by catalog/tasks/verify-commit-signature.yaml to verify a fetched app-repo
-# commit's signature/identity, not to sign anything from inside a Task (signing is a
-# developer-machine, interactive-OIDC-flow action, see docs/commit-signing.md). Real
-# linux_amd64/linux_arm64 asset names confirmed against the actual v0.17.0 release (checked
-# live via the GitHub API), not guessed.
-#
-# ec (Conforma CLI, docs/provenance-policy.md) - used by
-# catalog/tasks/verify-image-provenance.yaml. Deliberately the GitHub-release binary
-# (github.com/conforma/cli), not the quay.io/enterprise-contract/ec-cli container image -
-# that image is amd64-only and genuinely crashes under this node's arm64 emulation with a
-# real Go-runtime panic (confirmed live, not assumed), while a real native
-# ec_linux_arm64 release asset exists and runs natively.
-#
-# cosign - also used by verify-image-provenance.yaml, for the actual signature/attestation
-# cryptographic verification (ec's own built-in verification needs a TUF-distributed trust
-# root; cosign's --ca-roots flag verifies against a local file directly, no TUF needed -
-# see that Task's own header comment for the full reasoning).
-#
-# libxml2-utils (xmllint) - used by build-image.yaml's resolve-build-config step to pull
-# the real <version> out of a Maven app's pom.xml for untagged (non-tag-triggered) builds,
-# the same source-of-truth pattern the old cd-pipelines platform's task-get-tag.yaml used
-# (package.json's version needs only jq, already present above).
+# Notable tool choices:
+#   - yajsv: no linux/arm64 release binary exists, so built from source in a Go stage.
+#   - gitsign: verifies a fetched app-repo commit's signature (never signs from inside
+#     a Task - signing is a developer-machine, interactive-OIDC action). See
+#     docs/admin/commit-signing.md.
+#   - ec (Conforma CLI): the GitHub-release binary, not the quay.io container image -
+#     that image is amd64-only and crashes under arm64 emulation. See
+#     docs/admin/provenance-policy.md.
+#   - cosign: does the actual signature/attestation crypto verification - its
+#     --ca-roots flag verifies against a local file directly, no TUF trust
+#     distribution needed (which ec's own built-in verification would require).
+#   - libxml2-utils (xmllint): pulls a Maven app's <version> from pom.xml for untagged
+#     builds (package.json's version needs only jq, already present).
 #
 # Build context MUST be the repo root (paths below are repo-root-relative):
 #   docker build -f catalog/toolbox/Dockerfile -t ghcr.io/jfillman/platform-cicd-toolbox:latest .
 #
-# schemas/cicd.schema.json is baked in here rather than mounted from a ConfigMap, which
-# means a schema change requires a toolbox image rebuild + catalog version bump, not a
-# silent live update - see docs/cicd-yaml-reference.md for why that's deliberate
-# (avoids the "config takes effect asynchronously from some other sync" problem the
-# architecture plan explicitly rejected for cicd.yaml itself).
+# schemas/cicd.schema.json is baked in rather than mounted from a ConfigMap, so a
+# schema change requires an image rebuild + version bump, not a silent live update -
+# deliberate, see docs/user/cicd-yaml-reference.md.
 
 FROM golang:1.22-alpine AS yajsv-build
 ARG YAJSV_VERSION=1.4.1
@@ -113,23 +92,16 @@ COPY catalog/lib/build-agents.env /opt/platform/lib/build-agents.env
 RUN chmod +x /opt/platform/lib/argocd-outcome-hook.sh
 COPY schemas/cicd.schema.json /opt/platform/schemas/cicd.schema.json
 
-# Onboarding boilerplate (Phase 3 item 7's PaC-delivery mechanism - see
-# catalog/tasks/deliver-onboarding-files.yaml and docs/onboarding.md) used to be baked in
-# here the same way catalog/lib and the schema still are - moved to a ConfigMap
-# (charts/platform-cicd-app/templates/configmaps/onboarding-templates.yaml, one copy per
-# Application, sourced from charts/platform-cicd-app/files/onboarding-templates/)
-# instead, deliberately the OPPOSITE choice from schema.json below. Baking these in
-# meant a template edit silently depended on an image rebuild+push AND on
-# :latest/IfNotPresent actually re-pulling on every node, the same staleness class that
-# once left a stale image reference live in the stalled-pipeline-detector CronJob for
-# days. A ConfigMap ties a template edit to a real `helm upgrade` instead - of the APP
-# chart, per Application, not a single shared catalog-chart release (a first version
-# tried a single shared ConfigMap in the catalog chart, which would have needed a
-# cross-namespace kubectl read plus new RBAC to actually work, since a Pod can only
-# volume-mount a ConfigMap from its own namespace - dropped in favor of this simpler,
-# per-Application shape, consistent with how every other per-tenant resource in this
-# platform already works). schemas/cicd.schema.json below stays baked in on purpose -
-# see its own comment for why forcing an explicit rebuild is the right call THERE.
+# Onboarding boilerplate (catalog/tasks/deliver-onboarding-files.yaml,
+# docs/admin/onboarding-mechanics.md) used to be baked in here too - moved to a
+# ConfigMap instead (charts/platform-cicd-app/templates/configmaps/onboarding-
+# templates.yaml, one per Application), the opposite choice from schema.json below.
+# Baking it in meant a template edit silently depended on an image rebuild+push AND
+# :latest/IfNotPresent re-pulling on every node - a real staleness class this platform
+# has hit before. A ConfigMap ties an edit to a real `helm upgrade` of the app chart
+# instead. A shared catalog-chart ConfigMap was tried first and dropped - a Pod can
+# only volume-mount a ConfigMap from its own namespace, so that shape would have needed
+# cross-namespace RBAC for no real benefit.
 
 # Non-root by default - every catalog Task should run under Pod Security Standards
 # "restricted" without needing per-Task overrides.

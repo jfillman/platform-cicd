@@ -1,50 +1,25 @@
 # platform/broker/manifests/stalled-pipeline-detector-cronjob.yaml
 #
-# Shared, platform-level CronJob (applied once, not per Application - same shape as
-# platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml) - detects a stage that completed
-# successfully but whose expected next-stage PipelineRun never appeared, which means a
-# CDEvent got lost somewhere between this stage's `finally` block and the broker's
-# Trigger actually firing (this session hit exactly this failure class repeatedly and
-# manually, via the recurring cloudflared tunnel dying with nothing downstream to
-# notice - see docs/stalled-pipeline-detector.md).
+# Shared, platform-level CronJob (not per-Application) - detects a stage that completed
+# successfully but whose expected next-stage PipelineRun never appeared, meaning a
+# CDEvent was lost between a stage's `finally` block and the broker's Trigger firing
+# (see docs/stalled-pipeline-detector.md).
 #
-# NOT covering CDEvents idempotency/dedup here - that's already done. PipelineRun names
-# are deterministic (catalog/lib/cdevents.sh's cdevent_send()) so at-least-once
-# redelivery is already a harmless AlreadyExists, not a duplicate run. This CronJob is
-# only about the opposite failure: a stage finishing and NOTHING happening next.
+# Not about CDEvents dedup (PipelineRun names are deterministic, see cdevents.sh, so
+# redelivery is a harmless no-op) - only about a stage finishing and nothing happening next.
 #
-# Detection uses two labels every flow-generated PipelineRun now carries -
-# platform.io/flow and platform.io/step-index (stamped by both
-# charts/platform-cicd-catalog/templates/tasks/deliver-onboarding-files.yaml, for a
-# flow's git-rooted first step, and charts/platform-cicd-app/templates/triggers/
-# flow-triggers.yaml, for every event-chained step after it) - plus the is-flow-terminal
-# Pipeline param every catalog/pipelines/*.yaml now accepts (see docs/tracing.md). A
-# completed stage is only a stall candidate if is-flow-terminal is NOT "true"; if it
-# isn't, "chain OK" means a PipelineRun exists in the same namespace labeled with this
-# flow's name and step-index+1.
+# Detection uses platform.io/flow + platform.io/step-index labels plus the
+# is-flow-terminal Pipeline param (docs/tracing.md): a completed, non-terminal stage is a
+# stall candidate unless a PipelineRun exists labeled with this flow + step-index+1.
 #
-# Real bug, found and fixed 2026-08-11, same investigation as docs/tracing.md's
-# is-flow-terminal fix: this used to reconstruct the expected successor's name by
-# recomputing cdevents.sh's sha256("<this-run-name>:<event-type>")[:20] hash and
-# prefixing it with a hardcoded next-stage name (build->test, test->deploy,
-# deploy->release). That scheme predates Phase 3 item 7's multi-flow work, which
-# changed the REAL naming scheme to "<flowName>-<index>-<stageName>-<eventID>" (see
-# flow-triggers.yaml's pipeline-run-name param) to avoid collisions between flows/
-# repeated stages - the CronJob's guess never matched either the real event-chained
-# name OR a git-rooted PaC generateName, so `kubectl get pipelinerun "${expected_name}"`
-# always failed and every completed build/test/deploy run got falsely flagged, not just
-# genuinely-terminal ones. Confirmed live: build and test runs with real, existing
-# successors were both labeled platform.io/stall-alerted=true. The label-based check
-# above doesn't predict a name at all, so it isn't coupled to cdevents.sh's naming
-# scheme any more, and it also now covers `release` (previously never checked, even
-# though an event-chained release can have real successors - e.g. release -> test).
+# Real bug fixed: this used to reconstruct the expected successor's name via a
+# hash-based guess tied to the old single-flow naming scheme, which broke once Phase 3
+# item 7's multi-flow naming ("<flow>-<index>-<stage>-<eventID>") shipped - every
+# completed run got falsely flagged. The label-based check above doesn't predict a name
+# at all, so it also now correctly covers `release`.
 #
-# RBAC is cluster-scoped by necessity (PipelineRuns live in every Application's own
-# namespace, and no app-namespace-discovery label exists anywhere in this platform yet -
-# the broker's own EventListener already scans namespaceSelector: {matchNames: ["*"]}
-# for the same reason, see eventlistener.yaml) but narrow by verb: get/list/patch on
-# pipelineruns.tekton.dev (patch only to set the dedup label below), create on events.
-# Nothing else - deliberately no Secrets access, see the alerting note below.
+# RBAC is cluster-scoped by necessity (no app-namespace-discovery label exists yet) but
+# narrow: get/list/patch on pipelineruns (patch only for the dedup label), create on events.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -110,7 +85,7 @@ spec:
           containers:
             - name: detect
               image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-              imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+              imagePullPolicy: IfNotPresent  # published to ghcr.io/jfillman, not kind-loaded - see hack/bootstrap.sh 4/6
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -125,14 +100,8 @@ spec:
                   now_epoch="$(date -u +%s)"
                   threshold_seconds=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-                  # One candidate per line: run-name, run-namespace, flow-name,
-                  # step-index, stage-name, completionTime - only stages that actually
-                  # succeeded (a failed stage is a different, already-visible condition -
-                  # see file header), aren't already labeled from a prior alert, belong to
-                  # a flow at all (platform.io/flow absent = onboarding-resync and other
-                  # non-flow PipelineRuns, not this CronJob's concern), and are NOT
-                  # themselves this flow's terminal step (is-flow-terminal - a terminal
-                  # step correctly has no successor by design, not a stall).
+                  # One candidate per line: succeeded stages not already alerted, that
+                  # belong to a flow, and aren't themselves the flow's terminal step.
                   kubectl get pipelinerun -A -o json | jq -r '
                     .items[]
                     | select(.status.conditions // [] | any(.type == "Succeeded" and .status == "True"))
@@ -150,10 +119,8 @@ spec:
                       continue
                     fi
 
-                    # Does ANY PipelineRun in this namespace belong to this flow's next
-                    # step? Doesn't predict a name - just asks whether the next step ran,
-                    # which is true regardless of whether it was git-rooted or
-                    # event-chained, or whether the stage name repeats within the flow.
+                    # Does any PipelineRun in this namespace belong to this flow's next
+                    # step - doesn't predict a name, just checks whether it ran.
                     next_index=$(( step_index + 1 ))
                     successor_count="$(kubectl get pipelinerun -n "${run_ns}" -l "platform.io/flow=${flow_name},platform.io/step-index=${next_index}" -o name | wc -l)"
 
@@ -164,10 +131,9 @@ spec:
 
                     echo "[stall-detector] STALL DETECTED: ${run_ns}/${run_name} (flow=${flow_name} stage=${stage_name} step=${step_index}) completed ${age}s ago, step ${next_index} of this flow never appeared - CDEvent likely lost in transit"
 
-                    # Built with printf + explicit \n, not an embedded heredoc - a raw
-                    # multi-line heredoc nested inside this already-indented block scalar
-                    # broke YAML parsing once before in this exact codebase (see
-                    # catalog/tasks/open-release-pr.yaml's PR-body construction).
+                    # printf + explicit \n, not a heredoc - a raw heredoc nested in this
+                    # indented block scalar broke YAML parsing once (see
+                    # open-release-pr.yaml's PR-body construction).
                     now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
                     message="${stage_name} (flow ${flow_name}, step ${step_index}) completed ${age}s ago but step ${next_index} was never created - CDEvents delivery may have failed"
                     printf 'apiVersion: v1\nkind: Event\nmetadata:\n  generateName: stall-detected-\n  namespace: %s\ninvolvedObject:\n  apiVersion: tekton.dev/v1\n  kind: PipelineRun\n  name: %s\n  namespace: %s\nreason: StageChainStalled\nmessage: %s\ntype: Warning\nsource:\n  component: stalled-pipeline-detector\nfirstTimestamp: "%s"\nlastTimestamp: "%s"\ncount: 1\n' \

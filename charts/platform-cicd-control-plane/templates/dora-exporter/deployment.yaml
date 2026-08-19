@@ -1,26 +1,16 @@
 # platform/dora-exporter/manifests/deployment.yaml
 #
-# Deploys the DORA exporter (../cmd/dora-exporter) - a plain metrics-serving Deployment,
-# not registered as anything Tekton-specific (unlike token-review-interceptor's
-# ClusterInterceptor registration), since it only watches ArgoCD Applications and serves
-# /metrics for Prometheus to scrape. See docs/dora-metrics.md.
+# Deploys the DORA exporter - a plain metrics Deployment (not Tekton-specific), only
+# watching ArgoCD Applications and serving /metrics. See docs/dora-metrics.md.
 #
-# 1 replica, not 2 like cdevents-broker-auth - this is a metrics accumulator with
-# acceptable-loss in-memory state on restart (a brief gap in coverage while it re-syncs
-# its informer cache, not incorrect data - Add events replay every currently-matching
-# Application on startup, see main.go), not a request-serving path on the critical
-# chaining path that needs HA the way the broker's own interceptor does.
+# 1 replica, not 2 like the broker: acceptable-loss in-memory state (a brief re-sync gap
+# on restart, not incorrect data), not on the critical chaining path.
 #
-# RBAC is a namespaced Role, not a ClusterRole - genuinely narrower than every other
-# cluster-scoped component in this platform (stalled-pipeline-detector, the TTL sweep),
-# because every Application this exporter ever needs to read lives in the single argocd
-# namespace, regardless of which Application it belongs to. get/list/watch to observe
-# status; patch is the one
-# deliberate widening beyond read-only, to clear its own platform.io/dora-* tracking
-# annotations once it's reacted to them - Kubernetes RBAC can't scope patch down to
+# RBAC is a namespaced Role (argocd namespace only), narrower than this platform's other
+# cluster-scoped components. patch is a deliberate widening beyond read-only, to clear
+# its own platform.io/dora-* tracking annotations - RBAC can't scope patch to
 # "annotations only", so this identity can technically modify any field on any
-# Application in argocd, narrowed by namespace and resource type, not by field. Same
-# honest framing already applied to the stalled-pipeline detector's own patch grant.
+# Application in argocd.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -80,14 +70,10 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: exporter
-          # Real gap found+fixed 2026-08-15 (installing a second instance of this chart
-          # on kind-dev): this literal claimed "pushed to ghcr.io/jfillman (public), not
-          # kind-loaded" but was actually never pushed anywhere - hack/bootstrap.sh never
-          # built/published it, it only ran on kind-observe because it was kind-loaded by
-          # hand once, off-script (confirmed live: `docker pull
-          # ghcr.io/platform-cicd/dora-exporter:latest` -> "manifest unknown"). Now a
-          # real value, defaulting to a genuinely registry-published tag - see
-          # hack/bootstrap.sh's build+push step, same pattern as toolboxImage above it.
+          # Real gap: this claimed to be registry-published but was never built/pushed by
+          # bootstrap.sh - it only worked on kind-observe via a manual, off-script
+          # kind-load. Now a real value defaulting to a genuinely published tag - see
+          # hack/bootstrap.sh's build+push step.
           image: {{ .Values.doraExporterImage }}
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: metrics }]
@@ -102,12 +88,9 @@ apiVersion: v1
 kind: Service
 metadata:
   name: dora-exporter
-  # ServiceMonitor's selector.matchLabels matches against THIS Service's own
-  # metadata.labels, not spec.selector (which only selects the pods it fronts) - caught
-  # live via Prometheus's own /api/v1/status/config: the generated scrape job's first
-  # relabel_configs rule keeps only targets where
-  # __meta_kubernetes_service_label_app=dora-exporter, sourced from here. Without this,
-  # every real target got silently dropped despite matching on every other criterion.
+  # ServiceMonitor's selector.matchLabels matches THIS Service's own metadata.labels,
+  # not spec.selector (which only selects pods) - without the `app` label here,
+  # Prometheus's relabel rule drops every target.
   labels:
     {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
     platform.io/subcomponent: "dora-exporter"

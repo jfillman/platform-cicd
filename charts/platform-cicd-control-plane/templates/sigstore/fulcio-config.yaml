@@ -1,47 +1,24 @@
 # platform/sigstore/fulcio-config.yaml
 #
-# The non-sensitive half of Fulcio's config - the `type: kubernetes` OIDC issuer that
-# lets Fulcio validate a plain Kubernetes-projected ServiceAccount token directly against
-# this cluster's own API server (TokenReview-style), with no SPIFFE/SPIRE and no public
-# exposure - everything reaching Fulcio does so via in-cluster Service DNS only. Confirmed
-# against Fulcio's own real CI test (sigstore/fulcio/.github/workflows/verify-k8s.yml),
-# not guessed - that's also where this exact issuer-url/client-id pairing and the
-# config.yaml/server.yaml file split (this file vs. fulcio-server-config, a Secret since
-# it carries the CA passphrase) come from.
+# Non-sensitive half of Fulcio's config: a `type: kubernetes` OIDC issuer letting Fulcio
+# validate a Kubernetes-projected SA token directly against this cluster's API server
+# (TokenReview-style, no SPIFFE/SPIRE, no public exposure - matches sigstore/fulcio's own
+# verify-k8s.yml CI test, including the config.yaml/server.yaml file split).
 #
-# issuer-url must exactly match signers.x509.fulcio.issuer in Tekton Chains' own
-# chains-config (platform/sigstore/chains-config-patch.yaml) - if these two ever drift,
-# Chains' identity token gets rejected. See docs/image-signing.md.
+# issuer-url must exactly match signers.x509.fulcio.issuer in Tekton Chains' chains-config
+# or Chains' identity token gets rejected (docs/image-signing.md). It's the LONGER
+# "https://kubernetes.default.svc.cluster.local" form, not upstream's shorter example -
+# this cluster's OIDC discovery returns that form, and Go's OIDC client requires an exact
+# match. Re-verify if repointing at a different cluster.
 #
-# The issuer-url value is cluster-specific, confirmed live, not copied verbatim from
-# Fulcio's own CI example (which uses "https://kubernetes.default.svc" - no
-# ".cluster.local" suffix). On kind-observe, Fulcio's own OIDC discovery against the API
-# server returns "https://kubernetes.default.svc.cluster.local" - using the shorter
-# upstream-example form here fails with "issuer URL provided to client ... did not match
-# the issuer URL returned by provider" at Fulcio startup (Go's OIDC client requires the
-# discovery document's own self-reported "issuer" field to exactly match the URL used to
-# fetch it). Re-verify this if ever repointing at a different cluster - it depends on
-# that cluster's own --service-account-issuer / cluster domain config, not a
-# platform-cicd constant.
+# ca-cert must be set explicitly (this cluster's kube-root-ca.crt): Fulcio's
+# auto-trust-cluster-CA shortcut only applies when the issuer key is the *exact* literal
+# "https://kubernetes.default.svc" - our issuer key is the longer form above, so the
+# shortcut doesn't fire and this is the documented escape hatch instead.
 #
-# ca-cert is inlined PEM (this cluster's own kube-root-ca.crt ConfigMap's "ca.crt" key,
-# read live, not guessed), not a file path. Fulcio's source
-# (pkg/config/config.go's httpClientForIssuer) has a special-case shortcut that
-# auto-trusts the cluster CA and auto-attaches a bearer token when the issuer key is the
-# *exact* hardcoded literal "https://kubernetes.default.svc" - but that shortcut doesn't
-# apply here since our issuer key is the (required, per above) longer
-# ".cluster.local" form, confirmed live via the "x509: certificate signed by unknown
-# authority" error that appeared without this field. Setting ca-cert explicitly is the
-# documented, general-purpose escape hatch for exactly this case - see the CACert field's
-# own doc comment in that source file.
-#
-# Templated from .Values.fulcio.issuerCACert (2026-08-15, installing a second instance
-# of this chart on kind-dev) - genuinely cluster-specific content, confirmed live it
-# differs between kind-observe and kind-dev (the issuer-url string above does NOT
-# differ - confirmed live too, both clusters' own OIDC discovery return the identical
-# ".cluster.local" form, so that stays a plain literal, not a value). Default in
-# values.yaml is kind-observe's own current cert, so a plain `helm upgrade` with no
-# override renders byte-identical to before this change.
+# Templated from .Values.fulcio.issuerCACert - genuinely cluster-specific, differs per
+# cluster (the issuer-url string itself does not - every cluster's OIDC discovery returns
+# the same .cluster.local form).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -59,7 +36,5 @@ data:
         type: "kubernetes"
         ca-cert: |
           {{- .Values.fulcio.issuerCACert | trim | nindent 10 }}
-        # NOTE: this is the cluster's kube-root-ca.crt content as of implementation time
-        # - if the cluster's serving CA is ever rotated, this needs to be refreshed too
-        # (a real, accepted maintenance burden of inlining rather than reading a mounted
-        # file at startup, worth revisiting if that ever becomes disruptive in practice).
+        # kube-root-ca.crt content as of implementation time - needs refreshing if the
+        # cluster's serving CA is ever rotated (accepted maintenance burden of inlining).

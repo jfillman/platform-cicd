@@ -1,47 +1,23 @@
 # catalog/tasks/release-outcome-span.yaml
 #
-# Sends one real, standalone span reporting a cluster-mapped release's confirmed
-# ArgoCD-sync outcome (docs/multi-cluster.md) - the missing half of "close the loop"
-# that release-outcome-notify.yaml only did for Slack until now (real gap, found live
-# 2026-08-12: this Pipeline had no tracing task at all).
+# Sends a standalone span reporting a cluster-mapped release's confirmed ArgoCD-sync
+# outcome (docs/multi-cluster.md) - closes the loop release-outcome-notify.yaml only
+# did for Slack.
 #
-# Deliberately its OWN standalone trace, not a child appended to the original flow's
-# trace - the flow-root span for that original trace is already closed by the time a
-# human reviews, approves, and merges this release's PR (release.yaml's own end-flow
-# finally task, gated on is-flow-terminal, fires at PR-open time). Appending a child
-# span here - potentially minutes to days later - would reproduce the exact bug
-# release.yaml's own header already documents fixing: a span sent after its trace's
-# root already closed shows up with a start/end time AFTER the trace's supposed end.
-# Human review/merge/ArgoCD-sync time is unbounded process time, not pipeline
-# execution time, and was already deliberately excluded from the original trace for
-# that reason - see release.yaml's header.
+# Deliberately its OWN trace, not a child of the original flow's trace: that flow's
+# root span is already closed by PR-open time, and a human review/ArgoCD-sync gap of
+# minutes-to-days would otherwise show a child span ending after the trace's root
+# closed. Correlation instead comes from chain-id as a span ATTRIBUTE
+# (platform.chain_id), so Tempo/Grafana can still group this span with the original
+# flow's spans despite the separate trace. Empty for apps onboarded before this field
+# existed.
 #
-# Correlation instead comes from chain-id (CDEvents' own causal-sequence correlator,
-# distinct from the OTel trace/span ids - see otel.sh's file header), carried as a
-# span ATTRIBUTE (platform.chain_id) rather than a structural parent - the same
-# chain-id the original flow's build/release spans already carry, so
-# `{ platform.chain_id = "..." }` in Tempo/Grafana surfaces this span alongside them
-# even though it lives in a different trace. chain-id arrives here via
-# open-release-pr.yaml (baked into the outcome-reporting hook Job at PR-open time) ->
-# argocd-outcome-hook.sh -> argocd-outcome-relay -> release-outcome-trigger.yaml - see
-# each of those files' own comments. Empty (backward-compatible) for an app onboarded
-# before this field existed; the span still sends, just without that attribute.
-#
-# start-time is pr-created-at (when open-release-pr.yaml's own API call actually
-# created this release PR), not flow-start-time and not "when this PipelineRun itself
-# started". Real design choice, changed 2026-08-12 at the user's request ("connect the
-# PR release and the release outcome so we can see how long it takes between creating
-# the PR and application deployment"): flow-start-time covers commit -> PR-open, which
-# is this platform's own automated build/test/deploy/release execution time - already
-# fully visible as the "stage:release" span's own end time in the ORIGINAL flow trace
-# (docs/tracing.md). Anchoring THIS span there too would double-count that segment
-# inside "release lead time" instead of isolating the actually-interesting, previously
-# invisible segment: how long the human-review-plus-ArgoCD-sync gap itself took.
-# flow-start-time is still carried as a span ATTRIBUTE (platform.flow_start_time,
-# below) for anyone who wants full commit-to-deploy DORA lead time instead - it's a
-# strict superset of this span's own start/end, derivable without re-instrumenting
-# anything. Falls back to flow-start-time (then otel_now) as the actual start-time if
-# pr-created-at is empty, for an app onboarded before that field existed.
+# start-time is pr-created-at, not flow-start-time: flow-start-time only covers
+# commit->PR-open (already visible as the release stage span's end time); anchoring
+# there too would double-count that segment instead of isolating the human-review +
+# ArgoCD-sync gap this span exists to measure. flow-start-time is still carried as an
+# attribute for full commit-to-deploy DORA lead time, and used as a fallback start-time
+# when pr-created-at is empty.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -63,20 +39,15 @@ spec:
     - name: chain-id
       type: string
       default: ""
-      description: The original flow's chain-id, when the reporting app/release predates this field - see this file's own header.
+      description: The original flow's chain-id, empty when the reporting app/release predates this field. See header.
     - name: flow-start-time
       type: string
       default: ""
-      description: >-
-        The original flow's own start time - carried as a span attribute (full DORA
-        lead-time anchor) and used as the start-time fallback when pr-created-at is
-        empty. See this file's own header.
+      description: The original flow's start time - carried as a span attribute and used as start-time fallback. See header.
     - name: pr-created-at
       type: string
       default: ""
-      description: >-
-        When this release's PR was actually created - the real start-time for this
-        span. See this file's own header for why, not flow-start-time.
+      description: When this release's PR was created - the real start-time for this span. See header for why, not flow-start-time.
   steps:
     - name: send-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
@@ -103,13 +74,9 @@ spec:
         set -euo pipefail
         source "${PLATFORM_LIB}/otel.sh"
 
-        # A standalone one-span trace (own fresh trace-id, own root span) - see this
-        # file's own header for why it's deliberately NOT parented under the original
-        # flow's already-closed root.
+        # Standalone one-span trace (own trace-id/root span) - see header for why it's
+        # not parented under the original flow's already-closed root.
         read -r traceparent _ <<< "$(otel_flow_root_begin)"
-        # pr-created-at is the real start anchor (see this file's own header); fall
-        # back to flow-start-time, then otel_now, for an app onboarded before
-        # pr-created-at existed.
         start_time="${PR_CREATED_AT}"
         [[ -z "${start_time}" ]] && start_time="${FLOW_START_TIME}"
         [[ -z "${start_time}" ]] && start_time="$(otel_now)"
@@ -118,13 +85,9 @@ spec:
         [[ -n "${CHAIN_ID}" ]] && attrs="${attrs},platform.chain_id=${CHAIN_ID}"
         [[ -n "${FLOW_START_TIME}" ]] && attrs="${attrs},platform.flow_start_time=${FLOW_START_TIME}"
 
-        # Outcome baked directly into the span's own name (not just its OTel status
-        # code) - 2026-08-12, real bug found live: Tempo's TraceQL search API has no
-        # way to promote a matched span's own attribute/status to a trace-level field
-        # (the ONLY fields a search result exposes flat, without a nested per-row
-        # sub-frame Grafana can't render as a plain value - confirmed live via
-        # Grafana's own /api/ds/query). The span's NAME is one of those flat fields
-        # (Tempo's own rootTraceName), so this is the one place status can land
-        # somewhere the dashboard's Release outcomes panel can show directly, no
-        # nested-table rendering involved at all.
+        # Outcome baked into the span's own name, not just its OTel status code: Tempo's
+        # TraceQL search API can't promote a span attribute/status to a flat
+        # trace-level field Grafana can render directly - the span NAME (rootTraceName)
+        # is one of the few fields that IS flat, so that's where status has to live
+        # for the dashboard's Release outcomes panel to show it without a nested table.
         otel_span_send "release-outcome:${APP_NAME}/${ENV_NAME} [${STATUS}]" "${traceparent}" "" "${start_time}" "$(otel_now)" "${STATUS}" "${attrs}"

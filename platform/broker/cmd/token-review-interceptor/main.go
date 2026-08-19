@@ -1,33 +1,19 @@
-// platform/broker/cmd/token-review-interceptor/main.go
+// Implements the Tekton Triggers ClusterInterceptor webhook contract, registered as
+// "cdevents-broker-auth" and referenced from every Application's Trigger CRs.
 //
-// Implements the Tekton Triggers ClusterInterceptor webhook contract. Registered as a
-// ClusterInterceptor named "cdevents-broker-auth" (see
-// ../../manifests/cluster-interceptor.yaml) and referenced from every Application's
-// Trigger CRs (see charts/platform-cicd-app/templates/triggers/*.yaml).
+// Authenticates callers of the shared CDEvents broker via each caller's own
+// cluster-issued, audience-bound SA token (Kubernetes TokenReview), replacing the old
+// JWT-minting-server. On success this sets extensions.app_namespace to the calling SA's
+// namespace; each Trigger's CEL filter checks that against the CDEvent's source
+// namespace - that check, not network topology, is the real app-isolation boundary
+// here. See docs/admin/chaining.md.
 //
-// Purpose: authenticate callers of the shared CDEvents broker using each caller's own
-// cluster-issued, audience-bound projected ServiceAccount token (verified via the
-// Kubernetes TokenReview API) instead of a platform-minted credential - see
-// docs/chaining.md for why this replaces the old platform's JWT-minting-server
-// entirely. On success this sets extensions.app_namespace to the calling SA's
-// namespace; every Application's own Trigger CEL filter then checks that against the
-// CDEvent's declared source namespace. That check, not network topology, is the real
-// app-isolation boundary on this shared broker - see docs/chaining.md.
-//
-// This service also mints scoped GitHub App installation tokens for the release stage's
-// GitOps PR flow (see ../../internal/githubapp and handleGitHubInstallationToken below) -
-// a scope extension of this same trusted, TokenReview-authenticated component rather
-// than a new service, since the alternative (copying the App's private key into every
-// Application namespace) would let one compromised Application's Task mint tokens for
-// every other Application's repos. See docs/release.md. The GitHub App client itself
-// (JWT signing + installation-token minting) moved into internal/githubapp so
-// cmd/argocd-outcome-relay can share it - that service needs the same credential for a
-// different reason, see its own main.go header.
-//
-// NOTE: the request/response JSON shape below mirrors the documented Tekton Triggers
-// ClusterInterceptor webhook contract (InterceptorRequest/InterceptorResponse). Re-
-// verify field names against whichever Triggers version is pinned in Phase 0 before
-// trusting this in a real cluster - see the plan's build-sequence Phase 0 item.
+// Also mints scoped GitHub App installation tokens for the release GitOps PR flow
+// (internal/githubapp, handleGitHubInstallationToken below) - an extension of this same
+// trusted component rather than a new service, since copying the App's private key into
+// every Application namespace would let one compromised Task mint tokens for every
+// other Application's repos. cmd/argocd-outcome-relay shares the same githubapp client
+// for a different reason (see its own header).
 package main
 
 import (
@@ -81,27 +67,18 @@ const (
 
 const defaultAudience = "cdevents-broker"
 
-// Plain HTTP, not HTTPS, deliberately - not an oversight. This service was originally
-// TLS-terminated with a cert-manager-issued self-signed-CA certificate, matching how
-// Tekton's own built-in ClusterInterceptors (cel, github, ...) are configured via
-// spec.clientConfig.caBundle. In practice the EventListener sink rejected that cert on
-// every call ("x509: certificate signed by unknown authority") no matter what was tried
-// live against a real cluster: confirming the CA genuinely issued the serving cert,
-// restarting the sink to rule out a stale informer cache, deleting and recreating the
-// ClusterInterceptor with caBundle set at creation instead of patched in afterward, and
-// attempting to add the CA to the sink pod's own trust store - blocked outright by the
-// EventListener CRD's admission webhook ("must not set the field(s): ...volumes,
-// ...volumeMounts, ...env[].value"), and a direct patch of the underlying Deployment
-// was silently reverted by the EventListener reconciler on the next resync. Whatever
-// the built-in interceptors rely on to make caBundle work is not something a custom
-// ClusterInterceptor could reach in the time available to debug it live.
+// Plain HTTP, not HTTPS - deliberate, not an oversight. A cert-manager-issued
+// self-signed-CA certificate (matching how Tekton's built-in ClusterInterceptors use
+// spec.clientConfig.caBundle) was tried first, but the EventListener sink rejected it
+// with "x509: certificate signed by unknown authority" on every call, and neither
+// recreating the ClusterInterceptor with caBundle set at creation nor patching the
+// sink's trust store worked (the latter blocked by the EventListener CRD's admission
+// webhook, and a direct Deployment patch got reverted by the reconciler). Whatever
+// makes caBundle work for the built-in interceptors wasn't reachable here.
 //
-// This is not a silent downgrade of the security model: per docs/chaining.md, the real
-// trust boundary here was always TokenReview-verified caller identity, not transport
-// TLS - this call never leaves the cluster, and NetworkPolicy enforcement on
-// kind-observe is already a documented, accepted gap for the same reason (see
-// docs/bootstrap.md). Revisit if this needs to run somewhere the caBundle mechanism
-// can be made to work, or if a later Triggers version fixes whatever this hit.
+// Not a security downgrade: the real trust boundary is TokenReview-verified caller
+// identity, not transport TLS, and this call never leaves the cluster (see
+// docs/admin/chaining.md). Revisit if this needs to run somewhere caBundle can work.
 func main() {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -116,9 +93,8 @@ func main() {
 		log.Fatalf("building dynamic client: %v", err)
 	}
 
-	// Loaded once at startup, not lazily per-request: fail fast and loudly if the
-	// github-app-creds volume isn't mounted correctly, rather than only discovering it
-	// on the first release PR attempt.
+	// Loaded once at startup so a misconfigured github-app-creds mount fails fast,
+	// not on the first release PR attempt.
 	appCreds, err := githubapp.LoadCreds()
 	if err != nil {
 		log.Fatalf("loading GitHub App credentials: %v", err)
@@ -166,10 +142,8 @@ func handle(clientset kubernetes.Interface) http.HandlerFunc {
 	}
 }
 
-// verifyCallerAppNamespace runs the same TokenReview check the CDEvents broker path
-// uses, shared with handleGitHubInstallationToken below - one trust primitive, two
-// callers. Returns the caller's namespace, or an empty namespace + a human-readable
-// error message on any failure.
+// verifyCallerAppNamespace is the one TokenReview trust primitive, shared by both the
+// CDEvents broker path and handleGitHubInstallationToken below.
 func verifyCallerAppNamespace(clientset kubernetes.Interface, token, audience string) (namespace string, errMsg string) {
 	review := &authenticationv1.TokenReview{
 		Spec: authenticationv1.TokenReviewSpec{
@@ -213,15 +187,11 @@ type githubInstallationTokenResponse struct {
 }
 
 // handleGitHubInstallationToken mints a GitHub App installation token scoped to exactly
-// one repo, for a caller whose own Application namespace genuinely owns that repo -
-// either directly (its own app repo, e.g. for the ephemeral-envs ApplicationSet's
-// PR-listing token, see docs/ephemeral-environments.md) or via the platform's
-// gitops-<app-name> convention (see docs/release.md). It's not enough that the caller
-// presents a valid ServiceAccount token (that only proves *which* Application is
-// asking) - the Application also has to actually have a PaC Repository CR whose name
-// matches the requested repo. Deliberately narrow (list, not any write verb) RBAC on
-// repositories.pipelinesascode.tekton.dev is all this needs from its own
-// ServiceAccount.
+// one repo, for a caller whose Application namespace genuinely owns that repo - either
+// directly (its own app repo) or via the gitops-<app-name> convention. A valid SA token
+// alone only proves which Application is asking; the Application also needs a PaC
+// Repository CR whose name matches the requested repo. Needs only list RBAC on
+// repositories.pipelinesascode.tekton.dev.
 func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dynamic.Interface, appCreds *githubapp.Creds) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -275,16 +245,11 @@ func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dyn
 	}
 }
 
-// verifyAppOwnsRepo lists PaC Repository CRs in the caller's own namespace (never
-// cross-namespace - the caller can only ever prove it, not other Applications') and
-// checks whether any of them, by name, match the requested repo either directly (the
-// app's own repo - needed by the ApplicationSet's pullRequest-generator token, which
-// lists PRs on the app repo itself, see docs/ephemeral-environments.md) or via this
-// platform's gitops-<app-name> convention (see catalog/tasks/open-release-pr.yaml,
-// docs/release.md). Deliberately does NOT trust the requested "owner" as part of this
-// check - the app name -> gitops repo mapping is owner-agnostic by design (an
-// Application's app-repo org and its gitops-repo org don't have to match, same lesson
-// learned the hard way earlier in this platform's build - see docs/chaining.md).
+// verifyAppOwnsRepo lists PaC Repository CRs in the caller's own namespace only, and
+// checks whether any match the requested repo directly (the app's own repo) or via the
+// gitops-<app-name> convention. Deliberately ignores the requested "owner" - the app
+// name -> gitops repo mapping is owner-agnostic (an app's own repo org and its gitops
+// repo org don't have to match).
 func verifyAppOwnsRepo(dynClient dynamic.Interface, appNamespace, requestedRepo string) error {
 	list, err := dynClient.Resource(repositoryGVR).Namespace(appNamespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil {

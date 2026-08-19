@@ -1,20 +1,13 @@
-// platform/broker/internal/githubapp/githubapp.go
+// Shared GitHub App client (JWT signing + installation-token minting), used by both
+// token-review-interceptor and argocd-outcome-relay. The relay holds this client
+// directly rather than calling the interceptor's /github-installation-token endpoint,
+// because that endpoint's authorization check trusts only the caller's own
+// TokenReview-verified app namespace - which doesn't fit a platform-wide service that
+// legitimately needs tokens for any app's gitops repo. Same credential, same narrow
+// per-request repo scoping either way - not a widening of what any single Application
+// can reach.
 //
-// Shared GitHub App client (JWT signing + installation-token minting), extracted from
-// cmd/token-review-interceptor/github_app.go so cmd/argocd-outcome-relay can use the
-// identical, already-correct implementation rather than a second copy - see that
-// relay's own main.go for why it needs this directly (not via the broker's
-// /github-installation-token HTTP endpoint): that endpoint's authorization check
-// (verifyAppOwnsRepo) trusts only the CALLER's own TokenReview-verified app namespace,
-// which fits every per-Application caller this platform has had until now but not a
-// platform-wide service like the relay that legitimately needs tokens for potentially
-// any app's gitops repo. The relay holding this client directly (same credential,
-// same narrow per-request repo scoping) is a second platform-level trust boundary of
-// the same shape as token-review-interceptor's own, not a widening of what any single
-// Application can reach.
-//
-// Standard library only for the JWT signing (RS256) - see the original file's own
-// header for why a JWT library isn't worth pulling in for this.
+// Standard library only for JWT signing (RS256) - not worth a library for this.
 package githubapp
 
 import (
@@ -46,11 +39,9 @@ type Creds struct {
 	privateKey *rsa.PrivateKey
 }
 
-// LoadCreds reads the App ID/private key from the same fixed paths
-// charts/platform-cicd-control-plane/templates/broker/interceptor.yaml (and now
-// templates/clusters/argocd-outcome-relay.yaml) mount the hand-created
-// github-app-creds Secret at - see that manifest's own header for how that Secret is
-// provisioned (a copy of two fields from PaC's own secret, never pasted through chat).
+// LoadCreds reads the App ID/private key from the fixed paths the hand-created
+// github-app-creds Secret is mounted at (a copy of two fields from PaC's own secret,
+// never pasted through chat).
 func LoadCreds() (*Creds, error) {
 	idBytes, err := os.ReadFile(appIDPath)
 	if err != nil {
@@ -112,10 +103,9 @@ func base64URLEncode(b []byte) string {
 }
 
 // InstallationIDForRepo looks up the App's installation ID for a specific repo,
-// authenticated with the App-level JWT (not an installation token, which doesn't exist
-// yet at this point) - avoids needing to statically configure/store installation IDs
-// anywhere, since a repo can only resolve to an installation ID at all once the App is
-// actually installed on it (a manual step - see docs/release.md).
+// authenticated with the App-level JWT (an installation token doesn't exist yet at this
+// point) - avoids statically storing installation IDs, since a repo only resolves to
+// one once the App is installed on it (a manual step).
 func InstallationIDForRepo(appJWT, owner, repo string) (int64, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/repos/%s/%s/installation", githubAPIBase, owner, repo), nil)
 	if err != nil {

@@ -1,9 +1,8 @@
 {{/*
-platform-cicd-control-plane.labels - see charts/platform-cicd-catalog/templates/
-_helpers.tpl's identical-in-spirit helper for the full rationale. Every resource in this
-chart includes this via `{{- include "platform-cicd-control-plane.labels" . | nindent 4 }}`
-under its own metadata.labels, then adds `platform.io/subcomponent: <broker|dora-exporter|
-sigstore|secretstore|hooks>` alongside it - see docs/naming-conventions.md.
+platform-cicd-control-plane.labels - shared label set for every resource in this chart,
+mirroring charts/platform-cicd-catalog/templates/_helpers.tpl's own helper. Callers add
+platform.io/subcomponent: <broker|dora-exporter|sigstore|secretstore|hooks> alongside it -
+see docs/naming-conventions.md.
 */}}
 {{- define "platform-cicd-control-plane.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}

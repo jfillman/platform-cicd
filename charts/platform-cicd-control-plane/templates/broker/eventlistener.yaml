@@ -1,27 +1,15 @@
 # platform/broker/manifests/eventlistener.yaml
 #
-# The single shared internal broker for inter-stage chaining (build->test->deploy-
-# >release), replacing both the old platform's per-purpose EventListener split AND its
-# JWT-minting server. Discovers per-Application Trigger CRs living in each Application's
-# own namespace via namespaceSelector - see
-# charts/platform-cicd-app/templates/triggers/*.yaml - rather than one EventListener pod
-# per Application (rejected in design review as an unnecessary ongoing operational tax
-# at "many Applications" scale; see docs/chaining.md).
+# Shared internal broker EventListener for inter-stage chaining (build->test->deploy->
+# release) - discovers per-Application Trigger CRs via namespaceSelector, rather than one
+# EventListener per Application (unnecessary operational tax at scale; see docs/admin/chaining.md).
 #
-# RBAC note: this EventListener's own ServiceAccount can only WATCH Trigger/
-# TriggerBinding/TriggerTemplate objects cluster-wide - it holds no rights to create
-# PipelineRuns anywhere itself. When a Trigger fires, Tekton Triggers creates the
-# resulting PipelineRun using THAT Trigger's own `spec.serviceAccountName` (the
-# Application's own least-privilege SA - see
-# charts/platform-cicd-app/templates/triggers/*.yaml), not this EventListener's identity.
-# Tekton Triggers implements that hand-off via scoped ServiceAccount impersonation: each
-# Application's onboarding grants this broker SA `impersonate` on exactly that one named
-# SA in that one namespace (see the RBAC block in
-# charts/platform-cicd-app/templates/identity/pipeline-runner.yaml) - a world apart from
-# the old platform's single cluster-wide `impersonate` on every ServiceAccount plus a
-# cluster-admin binding.
-# VERIFY against the pinned Tekton Triggers version in Phase 0: confirm this is still
-# the exact mechanism (vs. a token-based hand-off) before treating this comment as fact.
+# RBAC note: this ServiceAccount can only WATCH Trigger objects - it never creates
+# PipelineRuns itself. Tekton Triggers creates the PipelineRun using the firing Trigger's
+# own least-privilege serviceAccountName via scoped SA impersonation (each Application
+# grants this broker SA `impersonate` on exactly its own pipeline-runner SA), not the
+# broker's own identity - a world apart from the old platform's cluster-wide impersonate
+# + cluster-admin binding.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -40,12 +28,9 @@ metadata:
     platform.io/subcomponent: "broker"
 rules:
   - apiGroups: ["triggers.tekton.dev"]
-    # eventlisteners and interceptors (namespaced, v1alpha1 - distinct from the
-    # cluster-scoped clusterinterceptors) were missing from an earlier version of this
-    # list - the sink controller watches its own EventListener object and any
-    # Interceptor CRs to react to config changes, and crash-loops without list/watch on
-    # both ("... is forbidden ... at the cluster scope", caught live via pod logs, not
-    # anticipated in review).
+    # eventlisteners/interceptors (namespaced) were missing from an earlier version -
+    # the sink controller watches its own EventListener/Interceptor objects and
+    # crash-loops without list/watch on both.
     resources: ["triggers", "triggerbindings", "triggertemplates", "clustertriggerbindings", "clusterinterceptors", "eventlisteners", "interceptors"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
@@ -75,12 +60,9 @@ metadata:
   namespace: platform-system
 spec:
   serviceAccountName: cdevents-broker
-  # NamespaceSelector lives directly on EventListenerSpec, NOT nested under a
-  # "triggerSelector" field - an earlier version of this file had it wrong (nested,
-  # copying a shape from the old platform's OpenShift Pipelines-era manifests without
-  # checking it against this project's actual current API). Confirmed against
-  # tektoncd/triggers' EventListenerSpec Go type directly, not guessed - see
-  # docs/chaining.md.
+  # NamespaceSelector lives directly on EventListenerSpec, not nested under
+  # triggerSelector - confirmed against tektoncd/triggers' actual API, not the
+  # OpenShift-Pipelines-era shape this once copied. See docs/admin/chaining.md.
   namespaceSelector:
     matchNames: ["*"]
   resources:

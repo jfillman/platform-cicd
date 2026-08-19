@@ -1,34 +1,18 @@
 # catalog/tasks/sast-scan.yaml
 #
-# Real (not stub) SAST via Semgrep - Phase 3 item 8.4. Replaces governance-gate-stub for
-# the `sast` gate in build.yaml. The gitops repo's PR-triggered sast Check
-# (catalog/pipelines/sast-check.yaml) does NOT call this Task - it looks up this Task's
-# own attested outcome from the promoted image's SLSA provenance instead of re-running
-# Semgrep against unchanged source, see verify-sast-attestation.yaml's own header for
-# why (a real redundancy caught by the user, not the original design).
+# Real Semgrep SAST for the `sast` gate (replaces governance-gate-stub). The gitops
+# PR-check (sast-check.yaml) doesn't call this Task directly - it reads this Task's
+# attested outcome from the image's SLSA provenance instead, avoiding a re-scan of
+# unchanged source (see verify-sast-attestation.yaml).
 #
-# Semgrep, not CodeQL: broad multi-language support matching this platform's multi-agent
-# (nodejs/java, more later) ambition, no license server/GitHub-Advanced-Security
-# dependency. Runs on the OFFICIAL semgrep/semgrep image directly as this Task's step
-# image, not baked into the shared toolbox image - checked live before deciding this:
-# Semgrep's GitHub releases ship ZERO downloadable binary assets (confirmed via the
-# GitHub API - `.assets` is an empty array on the latest release), so the toolbox's usual
-# pinned-static-binary pattern (gitsign/ec/cosign) doesn't apply here at all. A dedicated
-# step image is the same deliberate exception already established in this codebase for
-# kaniko (see build-image.yaml's own header) - confirmed the official image is genuinely
-# multi-arch (linux/arm64 included) via `docker manifest inspect` before committing to it,
-# not assumed.
+# Runs on the official semgrep/semgrep image directly, not the shared toolbox image -
+# Semgrep ships no downloadable binary release to pin, so the usual static-binary
+# pattern (gitsign/ec/cosign) doesn't apply. Same exception already made for kaniko
+# (build-image.yaml).
 #
-# `--config p/ci --config p/security-audit`: both free, no-login-required registry
-# rulesets (`--config auto` needs a Semgrep App token for its full behavior, which this
-# platform doesn't have or want to depend on for a build-blocking gate). p/ci alone was
-# tried first and found genuinely insufficient for a SECURITY gate, not just assumed
-# adequate: a deliberately-planted command-injection snippet (child_process.exec with
-# unsanitized input) scanned clean under p/ci (only 16 JS rules, more a general-quality
-# bundle than a security one), then correctly flagged as a blocking finding
-# (javascript.lang.security.detect-child-process) once p/security-audit was added -
-# confirmed live via a throwaway pod before committing to this config, not guessed from
-# Semgrep's own naming.
+# Rules: p/ci + p/security-audit (both free, no Semgrep App token needed - `--config
+# auto` requires one). p/ci alone is a quality bundle, not a security one - it missed a
+# deliberately-planted command-injection snippet that p/security-audit caught.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -64,64 +48,48 @@ spec:
       default: ""
   results:
     - name: outcome
-      description: "'passed'/'failed' - a real result, never 'stub' (this is a real implementation, not governance-gate-stub)."
+      description: "'passed' or 'failed' - a real result, never 'stub'."
     - name: span-start-time
     - name: span-end-time
-      description: Set only if the scan step itself ran to completion (pass or fail) - see emit-span's own comment. Task-level (not step-level), like outcome above - all three are written and read within this same self-contained Task, matching build-source.yaml's own proven pattern for this shape.
+      description: Task-level result, set only once the scan step completes (pass or fail) - written and read within this same self-contained Task.
     - name: findings-summary
-      description: 'Total finding count plus up to 8 real findings (severity/rule-id/file:line), extracted from Semgrep''s own JSON output for the shift-left Slack notification below - not just the "Findings: N (M blocking)" summary line, a real gap the user caught live.'
+      description: "Total finding count plus up to 8 real findings (severity/rule-id/file:line) extracted from Semgrep's JSON output, for the Slack notification below - richer than the plain \"Findings: N (M blocking)\" summary line."
   volumes:
     - name: slack-webhook
       secret:
         secretName: app-secrets
         optional: true
   steps:
-    # onError: continue - a real bug found live (see image-scan.yaml's identical fix,
-    # found first): Tekton's DEFAULT behavior is to skip every subsequent step once one
-    # fails ("Skipping step because a previous step failed" in the pod logs), not run
-    # them regardless. The comment below (pre-existing, now corrected) originally
-    # believed emit-span already ran unconditionally - untrue without this. notify-slack
-    # below re-raises this step's real failure explicitly (reading the outcome result) -
-    # onError: continue means this step no longer fails the Task on its own.
+    # onError: continue - Tekton's default is to skip all later steps once one fails, so
+    # without this emit-span/notify-slack below would never run. notify-slack re-raises
+    # the real failure explicitly by reading the outcome result. Same fix as image-scan.yaml.
     - name: scan
       onError: continue
       image: semgrep/semgrep:1.172.0
       workingDir: $(workspaces.source.path)
       script: |
         #!/usr/bin/env bash
-        # Not set -e: semgrep's own exit code (0=clean, 1=findings under --error) is the
-        # real pass/fail signal this Task reports - a script-level early exit would skip
-        # writing the `outcome` result entirely, turning a real failure into a silent gap.
+        # Not set -e: semgrep's exit code (0=clean, 1=findings under --error) is the
+        # real pass/fail signal - a script-level early exit would skip writing `outcome`.
         set -uo pipefail
-        # Plain `date`, not catalog/lib/otel.sh - this step runs in semgrep's own image
-        # (neither otel-cli nor $PLATFORM_LIB present), same handoff-to-a-later-toolbox-
-        # step pattern as build-source.yaml/run-tests.yaml's own agent-image steps.
+        # Plain `date`, not catalog/lib/otel.sh - this image has neither otel-cli nor
+        # $PLATFORM_LIB (same as build-source.yaml/run-tests.yaml's agent-image steps).
         #
-        # Whole-second precision (%SZ), not %N (nanoseconds) like those other agent-image
-        # steps use - a real bug found live: semgrep/semgrep is Alpine WITHOUT GNU
-        # coreutils (unlike every build-agent image in build-agents.env, deliberately
-        # chosen to be full/Debian-based since Alpine lacks bash), so its `date` is
-        # BusyBox's, which doesn't support %N and silently truncates the whole format
-        # string right after it - `date -u +"%Y-%m-%dT%H:%M:%S.%NZ"` produced
-        # "2026-08-05T18:57:11." with the fractional seconds AND the trailing Z both
-        # missing, a malformed timestamp that reached otel-cli and the span simply never
-        # showed up in Tempo (no error, confirmed live, not assumed). A real Semgrep scan
-        # takes seconds, so whole-second precision loses nothing meaningful here.
+        # Whole-second precision, not %N: semgrep/semgrep is Alpine/BusyBox, whose `date`
+        # doesn't support %N and silently truncates the format string after it, producing
+        # a malformed timestamp that otel-cli couldn't use (span never reached Tempo).
+        # A scan takes seconds, so whole-second precision is fine here.
         date -u +"%Y-%m-%dT%H:%M:%SZ" | tee "$(results.span-start-time.path)"
 
-        # --json --output (a FILE, not stdout) alongside the normal human-readable run -
-        # confirmed live this keeps stdout human-readable (unlike Trivy, which needed a
-        # genuinely separate second invocation for this - --format fully replaces its
-        # stdout) while also writing real structured findings to parse below.
+        # --json --output writes to a FILE so stdout stays human-readable (unlike Trivy,
+        # whose --format fully replaces stdout).
         semgrep scan --config p/ci --config p/security-audit --error --json --output /tmp/scan-results.json . 2>&1 | tee /tmp/scan-output.txt
         EXIT_CODE=${PIPESTATUS[0]}
 
         date -u +"%Y-%m-%dT%H:%M:%SZ" | tee "$(results.span-end-time.path)"
 
-        # Real findings, not just Semgrep's own "Findings: N (M blocking)" summary line -
-        # the same real gap the user caught in image-scan.yaml's own first version,
-        # fixed the same way here. Confirmed live (not assumed) via `semgrep --json`'s
-        # real schema: .results[] with check_id/path/start.line/extra.severity.
+        # Extract real findings (not just the "Findings: N (M blocking)" summary line)
+        # from semgrep --json's schema: .results[] with check_id/path/start.line/extra.severity.
         TOTAL_COUNT="$(jq -r '.results | length' /tmp/scan-results.json 2>/dev/null || echo 0)"
         TOP_FINDINGS="$(jq -r '
           .results[:8]
@@ -144,11 +112,8 @@ spec:
           exit 1
         fi
 
-    # Reached whether the scan passed OR failed (unlike build-source/run-tests' own
-    # emit-span, which only runs on success) - because `scan` above has onError:
-    # continue, not because of anything about its own exit-1 timing (a stale belief
-    # this comment used to state as fact - see that step's own comment for the real
-    # explanation, found live).
+    # Runs whether scan passed or failed, because scan has onError: continue (unlike
+    # build-source/run-tests' emit-span, which only runs on success).
     - name: emit-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
@@ -167,12 +132,10 @@ spec:
           exit 0
         fi
         source "${PLATFORM_LIB}/otel.sh"
-        # outcome/span-start-time/span-end-time are all TASK-level results written by an
-        # earlier step (scan) - a cross-step templated reference to a task-level result
-        # silently resolves to the literal unresolved placeholder string (the same real
-        # bug found live in build-image.yaml's emit-image-ref-result - see that file's
-        # own comment). Read the stable, well-documented /tekton/results/<name> path
-        # directly instead, same proven workaround.
+        # outcome/span-start-time/span-end-time are Task-level results written by an
+        # earlier step (scan). A cross-step $(results.*) reference silently resolves to
+        # the literal placeholder string, so read /tekton/results/<name> directly instead
+        # (same workaround as build-image.yaml's emit-image-ref-result).
         OUTCOME_VALUE="$(cat /tekton/results/outcome 2>/dev/null || echo unknown)"
         SPAN_START="$(cat /tekton/results/span-start-time 2>/dev/null || echo "")"
         SPAN_END="$(cat /tekton/results/span-end-time 2>/dev/null || echo "")"
@@ -181,13 +144,9 @@ spec:
         otel_task_span_send "sast-scan" "${FLOW_TRACEPARENT}" "${STAGE_SPAN_ID}" \
           "${SPAN_START}" "${SPAN_END}" "${TEKTON_STATUS}" "sast.outcome=${OUTCOME_VALUE}"
 
-    # Shift-left visibility (prompted directly by the user): tells developers about a
-    # real SAST result the moment the build produces it, not just via the pipeline's own
-    # generic pass/fail notification later. Same reliably-runs-regardless-of-scan-
-    # outcome placement as emit-span above, for the same reason - a Tekton `finally`
-    # task referencing a failed task's result gets skipped entirely (see notify-
-    # slack.yaml's own image-repo comment for the established precedent), so this lives
-    # inside the Task itself rather than as a separate pipeline-level notify step.
+    # Shift-left Slack notification, sent from inside this Task rather than as a
+    # pipeline-level `finally` step - a `finally` task referencing a failed task's
+    # result gets skipped entirely (see notify-slack.yaml), so it has to live here.
     - name: notify-slack
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
       imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
@@ -205,11 +164,9 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        # Read this first, and re-check it at the very end regardless of what happens
-        # in between - scan (above) has onError: continue, so a real failure there no
-        # longer fails this Task on its own; every early-exit path below must fall
-        # through to that final check rather than `exit 0` directly, or a real scan
-        # failure would silently report as a passing Task.
+        # scan has onError: continue, so its failure doesn't fail this Task on its own -
+        # every path below must fall through to the final check rather than `exit 0`
+        # directly, or a real scan failure would silently report as passing.
         OUTCOME_VALUE="$(cat /tekton/results/outcome 2>/dev/null || echo unknown)"
 
         CFG='$(params.config-json)'

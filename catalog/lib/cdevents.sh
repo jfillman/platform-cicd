@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # catalog/lib/cdevents.sh
 #
-# Emits CDEvents (https://cdevents.dev) to the shared internal broker, used to chain
-# independently-triggered PipelineRuns (build -> test -> deploy -> release). This is
-# the only place the platform.traceparent / chainId fields are assembled - kept as two
-# distinct fields on purpose: chainId is CDEvents' own causal-sequence correlator,
-# platform.traceparent is the separate W3C trace-context used to stitch one Tempo trace
-# across the whole flow. See docs/chaining.md and docs/tracing.md.
+# Emits CDEvents (https://cdevents.dev) to the shared internal broker, chaining
+# independently-triggered PipelineRuns (build -> test -> deploy -> release). Assembles
+# both chainId (CDEvents' causal-sequence correlator) and platform.traceparent (the
+# separate W3C trace context stitching one Tempo trace across the whole flow) - see
+# docs/admin/chaining.md and docs/admin/tracing.md.
 #
-# Auth: the caller's own audience-bound projected ServiceAccount token (mounted by the
-# pipeline pod's ServiceAccount, see platform/broker/manifests/projected-token-volume.yaml)
-# is sent as a bearer token. The broker verifies it via the Kubernetes TokenReview API -
-# there is no platform-minted credential anywhere in this path.
+# Auth: the pipeline pod's own audience-bound projected ServiceAccount token, sent as a
+# bearer token and verified by the broker via Kubernetes TokenReview - no
+# platform-minted credential anywhere in this path.
 
 set -euo pipefail
 
@@ -23,49 +21,35 @@ _BROKER_TOKEN_PATH="/var/run/secrets/platform/broker-token"
 
 # cdevent_send <event-type> <subject-type> <subject-id> <subject-content-json>
 #   event-type            e.g. dev.cdevents.artifact.published.0.3.0
-#   subject-type           the CDEvents subject type this event's context.type implies -
+#   subject-type           CDEvents subject type this event's context.type implies -
 #                           e.g. "artifact" for artifact.published, "pipelineRun" for
-#                           pipelinerun.started/finished. CamelCase for multi-word subject
-#                           names (pipelineRun, taskRun, testCaseRun), lowercase for
-#                           single-word ones (artifact, service, change, build) - matches
-#                           the CDEvents spec's own subject-name casing convention. There
-#                           is no derivation from event-type alone worth trusting (the
-#                           event-type segment is always lowercase regardless), so this is
-#                           a required, explicit argument, not inferred.
+#                           pipelinerun.*. CamelCase for multi-word names, lowercase for
+#                           single-word (matches the CDEvents spec convention) - not
+#                           derivable from event-type alone, so passed explicitly.
 #   subject-id             the emitting PipelineRun's own name
-#   subject-content-json    a JSON object merged into subject.content (single-quoted JSON)
+#   subject-content-json    a JSON object merged into subject.content
 #
-# Idempotency: the CDEvents "id" is deterministically derived from the PipelineRun name
-# + event-type, not randomly generated, so at-least-once delivery from a retried step
-# produces the same event id every time. The next-stage Trigger uses this id to name the
-# PipelineRun it creates, so redelivery is a harmless no-op instead of a duplicate run.
+# Idempotency: the CDEvents "id" is deterministically derived from PipelineRun name +
+# event-type, not random - a retried step's at-least-once delivery produces the same id
+# every time, so the next-stage Trigger (which names its PipelineRun from this id) sees
+# a harmless no-op redelivery, not a duplicate run.
 cdevent_send() {
   local event_type="$1" subject_type="$2" subject_id="$3" subject_content_json="$4"
 
-  # PLATFORM_CONFIG_JSON is optional, unlike chain-id/traceparent/flow-start-time above -
-  # every stage's own domain-completion event (build's artifact.published, test's
-  # testcaserun.finished, deploy's service.deployed, release's change.created) sets it
-  # to something real, letting deploy/release skip their own clone-repo+validate-config
-  # and inherit cicd.yaml's already-validated content instead (see
-  # resolve-notify-config.yaml) - see send-cdevent.yaml's own param doc for the real,
-  # live-found bug this fixed (build/release originally left it unset, silently
-  # breaking notify-slack for any free-form flow chaining straight off either of them).
-  # Every other call site (pipelinerun.started/finished) leaves it unset - deliberately
-  # defaulted with bash `:-`, not `:?` like the three required fields above, since
-  # nothing downstream of those call sites ever reads it.
+  # PLATFORM_CONFIG_JSON is optional, unlike chain-id/traceparent/flow-start-time above.
+  # Each stage's own domain-completion event sets it to cicd.yaml's already-validated
+  # content, letting deploy/release skip their own clone+validate (see
+  # resolve-notify-config.yaml). Other call sites (pipelinerun.started/finished) leave
+  # it unset - nothing downstream of those reads it.
   local config_json="${PLATFORM_CONFIG_JSON:-}"
   [[ -z "${config_json}" ]] && config_json='{}'
 
   local sa_token
   sa_token="$(cat "${_BROKER_TOKEN_PATH}")"
 
-  # Truncated to 20 hex chars (80 bits - collision odds are irrelevant at this
-  # volume): the TriggerTemplates build PipelineRun names as "test-$(body.context.id)"
-  # / "deploy-$(body.context.id)", and Kubernetes resource names cap at 63 characters.
-  # A full sha256sum (64 hex chars) blew that limit outright - "test-" plus the full
-  # hash is 69 characters - and the resulting PipelineRun silently never got created
-  # (caught live via the EventListener's own logs: the Trigger matched and resolved
-  # correctly, admission just rejected the name it built).
+  # Truncated to 20 hex chars (80 bits, collision odds irrelevant at this volume): a
+  # full sha256sum pushed PipelineRun names like "test-<hash>" past Kubernetes' 63-char
+  # resource name limit, so the run silently never got created.
   local event_id
   event_id="$(printf '%s' "${TEKTON_PIPELINE_RUN}:${event_type}" | sha256sum | cut -d' ' -f1 | cut -c1-20)"
 
@@ -111,12 +95,9 @@ cdevent_send() {
 }
 
 # cdevents_map_outcome <tekton-status>
-#   Maps a Tekton PipelineRun's real status.conditions[].reason value (confirmed against
-#   Tekton's own docs: Succeeded, Completed, Failed, Cancelled, PipelineRunTimeout, plus
-#   other less common error reasons) to CDEvents' pipelineRun/taskRun "outcome" enum
-#   (success/failure/cancel/error - see core.md in the cdevents/spec repo). Used by
-#   send-cdevent.yaml's optional tekton-status param, not called directly by pipelines -
-#   see docs/chaining.md.
+#   Maps a Tekton PipelineRun status reason (Succeeded/Completed/Failed/Cancelled/...)
+#   to CDEvents' pipelineRun/taskRun "outcome" enum. Used by send-cdevent.yaml's
+#   optional tekton-status param - see docs/admin/chaining.md.
 cdevents_map_outcome() {
   case "$1" in
     Succeeded|Completed) echo "success" ;;

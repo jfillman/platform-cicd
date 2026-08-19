@@ -1,46 +1,21 @@
-// platform/broker/cmd/argocd-outcome-relay/main.go
+// Closes the loop on the release stage (docs/admin/multi-cluster.md): an upper-env
+// cluster's ArgoCD sync-hook Jobs (catalog/lib/argocd-outcome-hook.sh) POST here once a
+// release completes, and this service reshapes that into a CDEvent and forwards it to
+// the existing broker (see catalog/lib/cdevents.sh for the JSON shape mirrored here).
 //
-// Closes the loop on the release stage (Phase 3 item 4, docs/multi-cluster.md): an
-// upper-env cluster's own outcome-reporting hook Jobs (see catalog/lib/
-// argocd-outcome-hook.sh, PostSync/SyncFail ArgoCD sync hooks) POST here once a
-// release genuinely completes, and this service reshapes that into a real CDEvent and
-// forwards it into the existing, UNMODIFIED broker
-// (charts/platform-cicd-control-plane/templates/broker/eventlistener.yaml) - see
-// catalog/lib/cdevents.sh for the exact JSON shape this mirrors in Go.
+// Auth is a shared secret per upstream cluster (POST /outcome/<cluster>, resolved live
+// via the cluster-registry ConfigMap), not the broker's own TokenReview - TokenReview
+// can't validate a token issued by a different cluster's API server. Trust boundary:
+// the secret proves the call came from cluster X, not that the payload's claimed
+// appName/env are accurate - acceptable because which apps can run a hook Job on
+// cluster X is already gated by the PR-review + branch-protection flow, so a
+// compromised cluster secret can spoof an outcome, not fabricate a release.
 //
-// Auth is deliberately NOT the broker's own TokenReview mechanism
-// (platform/broker/cmd/token-review-interceptor) - TokenReview can only validate a
-// token against its OWN issuing cluster's API server, so it structurally cannot
-// authenticate a caller from a genuinely different cluster. Instead: a shared secret
-// per upstream cluster (POST /outcome/<cluster>, Authorization: Bearer <token>,
-// resolved live via the cluster-registry ConfigMap -> a Secret in this same
-// namespace), matching the class of check Tekton Triggers' own built-in `gitlab`
-// ClusterInterceptor already does for X-Gitlab-Token.
-//
-// Trust boundary this establishes: the shared secret proves "this call really came
-// from cluster X," not "this event is really about app Y" - the payload's own claimed
-// appName/env ride on top of that cluster-level trust unverified by this service.
-// That's an intentional, bounded weakening relative to the broker's own TokenReview
-// path (which verifies caller identity down to the exact SA), not an oversight: which
-// apps can even have a hook Job running on cluster X in the first place is already
-// gated by Phase D's PR-review + branch-protection flow, so a compromised cluster
-// secret can spoof an outcome, not fabricate a release.
-//
-// Earlier design history worth knowing before touching this file again (full account
-// in docs/multi-cluster.md): a first version had ArgoCD Notifications call here with
-// only identity/status fields, and this service fetched the actual per-release data
-// from GitHub by git revision, because the Application object's own annotations were
-// racy against the app-of-apps root's independent reconcile loop. That entire
-// mechanism (GitHub App JWT signing, Contents API fetch, the internal/githubapp
-// dependency) was REMOVED once ArgoCD Notifications itself turned out to have a worse
-// problem: it fired on ANY completed sync, including pure selfHeal drift-correction
-// with zero release involved (confirmed live). Sync-hook Jobs don't have either
-// problem - a hook only runs when the resources in ITS OWN sync actually needed
-// reapplying (confirmed live: a drift-only sync didn't re-fire one), and everything
-// they report is baked in at commit time by the same Task that already has the real
-// values in hand. So this service is back to being pure auth-and-forward, the way it
-// started - not a coincidence, the simpler shape turned out to be the actually-correct
-// one too.
+// Earlier design fetched release data from GitHub via ArgoCD Notifications callbacks,
+// dropped because Notifications fired on any completed sync (including pure selfHeal
+// drift-correction with no release involved). Sync-hook Jobs only run when their own
+// sync needed reapplying, and already carry the real values baked in at commit time -
+// simpler and correct.
 package main
 
 import (
@@ -69,32 +44,30 @@ const (
 	brokerTokenPath    = "/var/run/secrets/platform/broker-token"
 	eventType          = "dev.cdevents.environment.deployed.0.1.0"
 	cdeventsVersion    = "0.4.1"
-	requestBodyMaxSize = 1 << 16 // this payload is a handful of short fields, never legitimately larger
+	requestBodyMaxSize = 1 << 16 // a handful of short fields, never legitimately larger
 )
 
-// Mirrors charts/platform-cicd-control-plane/templates/clusters/cluster-registry.yaml's
-// per-cluster JSON value - only the field this service needs out of it.
+// Mirrors cluster-registry.yaml's per-cluster JSON value - only the field this service needs.
 type registryEntry struct {
 	RelaySecretName string `json:"relaySecretName"`
 }
 
-// The body catalog/lib/argocd-outcome-hook.sh sends - every field baked in by
-// open-release-pr.yaml at commit time, nothing fetched or read live from anywhere by
-// either the hook or this service. See this file's own header for why.
+// The body catalog/lib/argocd-outcome-hook.sh sends - every field baked in at commit
+// time by open-release-pr.yaml, nothing fetched live.
 type outcomeRequest struct {
 	AppNamespace  string `json:"appNamespace"`
 	AppName       string `json:"appName"`
 	Env           string `json:"env"`
-	Phase         string `json:"phase"` // Succeeded or Failed - which hook ran, baked in per-hook-type
+	Phase         string `json:"phase"` // Succeeded or Failed - which hook ran
 	Revision      string `json:"revision"`
 	GitURL        string `json:"gitUrl"`
 	GitRevision   string `json:"gitRevision"`
 	FlowStartTime string `json:"flowStartTime"`
-	FinishedAt    string `json:"finishedAt"` // set by the hook script itself (date -u), the moment it actually runs
-	PRUrl         string `json:"prUrl"`      // the GitOps PR this release/hook Job came from - see notify-slack.yaml's own pr-url param
+	FinishedAt    string `json:"finishedAt"` // set by the hook script (date -u) when it runs
+	PRUrl         string `json:"prUrl"`      // the GitOps PR this hook Job came from
 	ConfigJSONB64 string `json:"configJsonB64"`
-	ChainID       string `json:"chainId"`     // optional - see catalog/lib/argocd-outcome-hook.sh's own comment on why this isn't required
-	PRCreatedAt   string `json:"prCreatedAt"` // optional, same reasoning - see catalog/lib/argocd-outcome-hook.sh's own comment
+	ChainID       string `json:"chainId"`     // optional - apps onboarded before this field existed omit it
+	PRCreatedAt   string `json:"prCreatedAt"` // optional, same reasoning
 }
 
 func main() {
@@ -163,8 +136,8 @@ func (h *handler) handleOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort, not on the critical path - see docs/multi-cluster.md's Phase F
-	// section for why this is a direct call rather than a second broker round trip.
+	// Best-effort, not on the critical path - a direct call rather than a second
+	// broker round trip (docs/admin/multi-cluster.md).
 	if h.doraExporterURL != "" {
 		if err := h.forwardToDoraExporter(ctx, req); err != nil {
 			log.Printf("argocd-outcome-relay: dora-exporter forward failed (non-fatal, app=%s/%s): %v", req.AppNamespace, req.AppName, err)
@@ -175,11 +148,9 @@ func (h *handler) handleOutcome(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate resolves cluster -> relaySecretName live off the cluster-registry
-// ConfigMap, then compares the caller's bearer token against that Secret's own
-// "token" key. Nothing here is cached across requests - this fires on real releases,
-// not a hot path, and a live lookup means a rotated/revoked secret takes effect
-// immediately with no relay restart, matching this platform's established preference
-// for live lookups over baked-in state (see cluster-registry.yaml's own header).
+// ConfigMap, then compares the caller's bearer token against that Secret's "token" key.
+// Not cached - this isn't a hot path, and a live lookup lets a rotated/revoked secret
+// take effect without a relay restart.
 func (h *handler) authenticate(ctx context.Context, cluster, authHeader string) error {
 	const prefix = "Bearer "
 	if !strings.HasPrefix(authHeader, prefix) {
@@ -218,17 +189,11 @@ func (h *handler) authenticate(ctx context.Context, cluster, authHeader string) 
 	return nil
 }
 
-// forwardToBroker builds a CDEvent matching catalog/lib/cdevents.sh's exact shape
-// (context/subject/customData) and POSTs it using this pod's OWN projected
-// ServiceAccount token - the same mechanism catalog/tasks/send-cdevent.yaml already
-// uses, verified by the broker's existing, unmodified TokenReview interceptor. This
-// service's SA lives in platform-system, not the target app's namespace, so
-// extensions.app_namespace (which the interceptor sets from the CALLER's own verified
-// identity) will read "platform-system" here, never the app's - the new Trigger that
-// consumes this event type therefore can't rely on that extension the way every
-// per-flow Trigger in flow-triggers.yaml does, and matches on the event's own claimed
-// appNamespace field instead. See that Trigger's own CEL filter and this file's header
-// for the trust-boundary reasoning.
+// forwardToBroker builds a CDEvent matching cdevents.sh's shape and POSTs it using this
+// pod's own projected SA token, verified by the broker's existing TokenReview
+// interceptor. Since this SA lives in platform-system, not the app's namespace,
+// extensions.app_namespace will read "platform-system" here - the consuming Trigger
+// matches on the event's claimed appNamespace field instead (see this file's header).
 func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outcomeRequest) error {
 	tokenBytes, err := os.ReadFile(brokerTokenPath)
 	if err != nil {
@@ -236,14 +201,11 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 	}
 
 	source := fmt.Sprintf("/platform-cicd/%s/%s-%s-%s-outcome", req.AppNamespace, cluster, req.AppName, req.Env)
-	// Two vocabularies, both included, deliberately not derived from each other
-	// downstream: "outcome" is CDEvents' own success/failure convention (matches
-	// cdevents_map_outcome in catalog/lib/cdevents.sh), "status" is the
-	// Succeeded/Failed vocabulary notify-slack.yaml's status-display switch already
-	// expects from every other caller. Tekton Triggers' $(tt.params.x) substitution
-	// is plain string interpolation, not a CEL evaluator - there's no ternary
-	// available in a TriggerTemplate to derive one from the other, so both are sent
-	// pre-computed rather than pushing that mapping onto the Trigger.
+	// Two vocabularies sent pre-computed, not derived from each other downstream:
+	// "outcome" is CDEvents' success/failure convention, "status" is the
+	// Succeeded/Failed vocabulary notify-slack.yaml expects. Tekton Triggers'
+	// $(tt.params.x) is plain string substitution with no ternary to derive one from
+	// the other in a TriggerTemplate.
 	outcome, status := "success", "Succeeded"
 	if req.Phase != "Succeeded" {
 		outcome, status = "failure", "Failed"
@@ -260,30 +222,21 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 	payload := map[string]interface{}{
 		"context": map[string]interface{}{
 			"version": cdeventsVersion,
-			// finishedAt in the id, not just source+eventType - a real bug caught live
-			// while verifying this: context.source has no per-attempt uniqueness (it's
-			// a fixed string per app/env/cluster, unlike a real PipelineRun's own
-			// unique name that cdevents.sh's identical-looking id scheme keys off of),
-			// so every distinct release outcome for the same app/env was colliding on
-			// the same id - meaning the same downstream pipeline-run-name, meaning
-			// only the FIRST ever outcome for a given app/env actually created a
-			// release-outcome-notify PipelineRun; every later one silently no-op'd as
-			// "already exists" at the Trigger's own admission step. finishedAt makes
-			// each genuinely distinct outcome produce a distinct id again, while true
-			// redelivery of the SAME outcome (a hook Job retry after a transient
-			// relay hiccup, say) stays idempotent, since it'd carry the same
-			// finishedAt.
+			// finishedAt is part of the id, not just source+eventType: context.source
+			// is a fixed string per app/env/cluster (no per-attempt uniqueness), so
+			// without finishedAt every distinct release outcome for the same app/env
+			// collided on the same id and only the first ever created a
+			// release-outcome-notify PipelineRun - later ones silently no-op'd as
+			// "already exists". A true redelivery of the same outcome still carries
+			// the same finishedAt, so idempotency is preserved.
 			"id":        deterministicID(source, eventType, req.FinishedAt),
 			"source":    source,
 			"type":      eventType,
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			// The ORIGINAL flow's chain-id, not a fresh one - see catalog/lib/
-			// argocd-outcome-hook.sh's own comment: lets release-outcome-span.yaml tag
-			// its own (necessarily separate, since the flow-root span already closed
-			// at PR-open time) span with the same chain-id the rest of this flow's
-			// spans carry, so it's still findable by TraceQL/Grafana alongside them.
-			// Empty for an app onboarded before this field existed (backward-
-			// compatible default, not a required field - see the hook script).
+			// The original flow's chain-id, not a fresh one, so release-outcome-span.yaml
+			// can tag its own span with the same chain-id and stay findable alongside
+			// the rest of the flow's spans in Grafana. Empty for apps onboarded before
+			// this field existed.
 			"chainId": req.ChainID,
 		},
 		"subject": map[string]interface{}{
@@ -305,11 +258,9 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 				"finishedAt":    req.FinishedAt,
 				"prUrl":         req.PRUrl,
 				"configJson":    configJSON,
-				// The real start anchor for release-outcome-span.yaml's own span -
-				// see that file's own header for why PR-creation time, not
-				// flowStartTime above, is what "lead time" should measure here.
-				// Empty for an app onboarded before this field existed (same
-				// backward-compatible default as chainId above).
+				// The real start anchor for release-outcome-span.yaml's span - lead
+				// time is measured from PR-creation, not flowStartTime above. Empty
+				// for apps onboarded before this field existed.
 				"prCreatedAt": req.PRCreatedAt,
 			},
 		},
@@ -346,12 +297,9 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 	return nil
 }
 
-// forwardToDoraExporter is a direct, best-effort HTTP call to the DORA exporter's own
-// outcome endpoint (Phase F) - deliberately NOT routed through the broker/Tekton
-// Trigger path the way the notification consumer is. docs/dora-metrics.md already
-// explains why DORA was kept out of the CDEvents-subscriber model originally (avoiding
-// PipelineRun overhead for what's fundamentally a metrics update); a direct call here
-// is the same reasoning applied to this new path.
+// forwardToDoraExporter is a direct, best-effort HTTP call to the DORA exporter's
+// outcome endpoint, not routed through the broker/Tekton Trigger path - avoids
+// PipelineRun overhead for what's fundamentally a metrics update.
 func (h *handler) forwardToDoraExporter(ctx context.Context, req outcomeRequest) error {
 	payload := map[string]string{
 		"appNamespace":  req.AppNamespace,
@@ -381,10 +329,9 @@ func (h *handler) forwardToDoraExporter(ctx context.Context, req outcomeRequest)
 	return nil
 }
 
-// deterministicID mirrors cdevents.sh's own scheme exactly (sha256, truncated to 20
-// hex chars - see that file's comment on the 63-char Kubernetes resource-name limit)
-// so this event's id is stable across at-least-once redelivery, the same idempotency
-// property every other CDEvent in this platform already has.
+// deterministicID mirrors cdevents.sh's scheme (sha256 truncated to 20 hex chars, to
+// fit Kubernetes' 63-char resource-name limit) so the id is stable across at-least-once
+// redelivery.
 func deterministicID(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, ":")))
 	return hex.EncodeToString(sum[:])[:20]

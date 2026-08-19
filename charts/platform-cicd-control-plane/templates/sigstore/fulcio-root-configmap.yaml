@@ -1,25 +1,17 @@
 # platform/sigstore/fulcio-root-configmap.yaml
 #
-# The PUBLIC half of fulcio-secret (platform/sigstore/fulcio-deployment.yaml), split out
-# on purpose - not a duplicate for convenience. fulcio-secret holds cert.pem AND key.pem
-# together; Kubernetes RBAC can't scope access to one key within a Secret, only to the
-# whole object, so granting any Application `get` on fulcio-secret to read the public
-# cert would also hand them the private signing key - a real regression from the
-# "fulcio-secret readable only by Fulcio's own pod" property verified live in sub-item 2.
-# This ConfigMap holds only the public cert (genuinely public information - it's
-# embedded in every cert Fulcio issues, discoverable via Fulcio's own
-# /api/v2/configuration endpoint already), so it's safe to expose broadly.
+# Public half of fulcio-secret, split out deliberately: fulcio-secret holds cert.pem AND
+# key.pem together, and RBAC can't scope access to one key within a Secret - granting
+# any Application `get` on fulcio-secret would hand them the private signing key too.
+# This ConfigMap holds only the public cert (already discoverable via Fulcio's own
+# /api/v2/configuration), so it's safe to expose broadly.
 #
-# Consumed by catalog/tasks/verify-image-provenance.yaml as the --ca-roots trust anchor
-# for `cosign verify`/`verify-attestation` - see docs/provenance-policy.md.
+# Consumed by verify-image-provenance.yaml as the --ca-roots trust anchor for cosign
+# verify/verify-attestation (docs/provenance-policy.md).
 #
-# Templated from .Values.fulcio.rootCert (2026-08-15, installing a second instance of
-# this chart on kind-dev) - the public half of whatever fulcio-secret (fulcio-
-# deployment.yaml) was generated with. Genuinely cluster-specific: each cluster gets its
-# own independently-generated root CA (docs/image-signing.md's one-time openssl
-# bootstrap), never a copy of another cluster's. Default in values.yaml is
-# kind-observe's own current root cert, so a plain `helm upgrade` with no override
-# renders byte-identical to before this change.
+# Templated from .Values.fulcio.rootCert - the public half of whatever fulcio-secret was
+# generated with. Genuinely cluster-specific: each cluster gets its own independently
+# generated root CA (docs/image-signing.md), never copied from another cluster.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -32,11 +24,9 @@ data:
   cert.pem: |
     {{- .Values.fulcio.rootCert | trim | nindent 4 }}
 ---
-# Broad, but deliberately so and narrowly-scoped by resource: this ConfigMap holds
-# genuinely public data (same trust level as Fulcio's own public API), so granting read
-# access to every ServiceAccount cluster-wide (rather than enumerating each Application's
-# pipeline-runner individually) is a reasonable trade - not a blanket grant on
-# configmaps in general, resourceNames-scoped to exactly this one object.
+# Broad but narrowly-scoped by resourceName: this ConfigMap holds genuinely public data,
+# so granting read to every ServiceAccount cluster-wide (rather than enumerating each
+# Application) is a reasonable trade.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

@@ -1,25 +1,15 @@
 # platform/argocd/pr-namespace-ttl-sweep-cronjob.yaml
 #
-# Shared, platform-level CronJob (applied once, NOT a per-Application template like the
-# other files in this directory) - deletes any platform.io/ephemeral-env=true namespace
-# older than 24h, regardless of which Application it belongs to. One shared sweep across
-# every Application, matching the same "one shared component, not one per Application"
-# pattern already used for the CDEvents broker.
+# Shared, platform-level CronJob (not per-Application) - deletes any
+# platform.io/ephemeral-env=true namespace older than 24h, across all Applications.
 #
-# This is a BACKSTOP, not the primary cleanup mechanism - the ApplicationSet's
-# resources-finalizer.argocd.argoproj.io (see
-# charts/platform-cicd-app/templates/argocd/ephemeral-envs.yaml) is verified live to
-# correctly cascade-delete a PR's namespace when its Application goes away (PR closed/
-# label removed). This sweep exists because the old cd-pipelines system's
-# equivalent mechanism (a working finalizer at some point) still failed in some way its
-# own commit history doesn't fully explain, and never got a working backstop either - a
-# real namespace lingering 24h despite the primary mechanism is far more likely to be
-# something stuck than a still-legitimately-open PR, so no live GitHub check is needed
-# here at all: just age + the label.
+# Backstop, not the primary mechanism: ephemeral-envs.yaml's ArgoCD finalizer normally
+# cascade-deletes a PR's namespace when its Application goes away. This catches cases
+# where that fails - a namespace lingering 24h is far more likely stuck than a
+# legitimately open PR, so age + label is enough with no GitHub check needed.
 #
-# RBAC here is cluster-scoped by necessity (Namespace has no namespaced form, same
-# unavoidable exception as the TokenReview interceptor's own TokenReview-creation grant)
-# but deliberately narrow: list/get/delete on namespaces only, nothing else.
+# RBAC is cluster-scoped by necessity (Namespace has no namespaced form) but narrow:
+# list/get/delete on namespaces only.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

@@ -1,32 +1,21 @@
 # catalog/stepactions/governance-stub.yaml
 #
-# Deliberate, structural fix for the old platform's "governance theater": that system
-# had gates (QA, gatekeeper, image-scan-check, SAST-check) that were `exit 0` one-liners
-# reported to developers with the same visual confidence as the gates that actually ran.
+# Fixes the old platform's "governance theater": stub gates (QA, gatekeeper, etc.) were
+# `exit 0` one-liners that looked identical to real checks. Every stubbed gate here MUST
+# call this StepAction, which emits a real child span carrying governance.stub=true so
+# Grafana's pipeline-detail dashboard can render it visually distinct from a real result.
+# When a real implementation lands for a gate, just delete the call - nothing else
+# about the Pipeline shape changes.
 #
-# This platform makes stub-ness a first-class, machine-readable fact instead of hiding
-# it in a script body: every stubbed governance gate MUST call this StepAction, which
-# emits its own real child span (parented to the current stage span) carrying
-# governance.stub=true as a span attribute. Grafana's pipeline-detail dashboard renders
-# any span carrying this attribute as visually distinct (grey/hatched) from real results
-# - see charts/platform-cicd-control-plane/files/dashboards/pipeline-detail.json. When a real implementation
-# lands for a gate (Phase 3), delete the call to this StepAction from that Task; nothing
-# else about the Pipeline shape needs to change.
+# Previously attached governance.stub as a span *event* via a background daemon - that
+# daemon was unreachable across Task Pod boundaries and TraceQL doesn't match span
+# events anyway, so it never worked. A real standalone child span fixes both.
 #
-# This used to attach the governance.stub fact as an OTel span *event* on the (then
-# background-daemon) stage span, via otel_mark_governance_stub. That daemon was
-# unreachable from this StepAction's own Pod (see otel.sh's file header) - the event
-# never landed anywhere, and even if it had, TraceQL's `name =` matches spans, not span
-# events, so pipeline-detail.json's governance panel could never have found it either
-# way. A real, standalone child span (otel_child_span) fixes both problems at once.
-#
-# flow-traceparent/stage-span-id are optional (default "") because this same StepAction
-# is now also called from PR-triggered governance checks on an Application's GitOps repo (see
-# docs/release.md) - those checks have no flow/stage context at all, since they're not
-# part of the CDEvents-chained PipelineRun sequence, just an independent, human-paced PR
-# review. Emitting a span there would mean inventing a fake parent trace, which is worse
-# than not tracing at all - so span emission is skipped entirely (real stub work and
-# logging still happen) whenever flow-traceparent is empty.
+# flow-traceparent/stage-span-id default to "" because this StepAction is also called
+# from PR-triggered GitOps-repo governance checks, which have no flow/stage context at
+# all (not part of the CDEvents chain). Emitting a span there would mean inventing a
+# fake parent trace, so span emission is skipped whenever flow-traceparent is empty
+# (the stub work and logging still happen).
 apiVersion: tekton.dev/v1beta1
 kind: StepAction
 metadata:

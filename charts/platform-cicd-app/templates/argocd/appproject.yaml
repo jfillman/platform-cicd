@@ -3,15 +3,11 @@
 {{- if or $hasRelease $hasEphemeral }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 {{- $localUpperEnvs := include "platform-cicd-app.localUpperEnvs" . | fromYamlArray }}
-# templates/argocd/appproject.yaml - unifies what used to be two separate hand-applied
-# files updating the SAME AppProject object (tenant-release-argocd-template.yaml creating
-# it, tenant-ephemeral-envs-argocd-template.yaml updating it in place) into one
-# conditionally-rendered template - Helm can't have two templates own the same resource
-# within one release, so both concerns live here now, each gated independently.
-#
-# Scoped rather than reusing the cluster's existing `default` AppProject (unscoped - any
-# Application in it can sync anything, from any source, anywhere) - consistent with how
-# every other identity in this platform is narrowly scoped.
+# Unifies what used to be two separate hand-applied files updating the same AppProject
+# (release + ephemeral-envs) into one conditionally-rendered template - Helm can't have
+# two templates own the same resource in one release. Scoped per-app rather than reusing
+# the cluster's unscoped `default` AppProject, consistent with this platform's narrow
+# scoping elsewhere.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -21,10 +17,8 @@ metadata:
     platform.io/subcomponent: "argocd"
   namespace: argocd
 spec:
-  {{- /* $releaseDesc: only mentions local upper envs when at least one exists - an app
-  whose upper envs are ALL cluster-mapped (see docs/multi-cluster.md) legitimately has
-  nothing left for THIS cluster's AppProject to describe/authorize for release, which is
-  correct, not a bug (its Application(s) live entirely on another cluster's ArgoCD). */ -}}
+  {{- /* No local upper envs is valid, not a bug, if all are cluster-mapped
+  (docs/multi-cluster.md) - those Applications live entirely on another cluster's ArgoCD. */ -}}
   {{- $releaseDesc := "" }}
   {{- if gt (len $localUpperEnvs) 0 }}
     {{- $releaseDesc = printf "Release-stage (%s) deployments for %s" (join ", " $localUpperEnvs) .Values.platformIdentity.appName }}
@@ -47,22 +41,15 @@ spec:
     - {{ .Values.platformIdentity.appRepoUrl }}
     {{- end }}
   {{- if $hasEphemeral }}
-  # Lets the pr-envs ApplicationSet (templates/argocd/ephemeral-envs.yaml), which lives
-  # in this app's own -cicd namespace rather than argocd's, reference this project.
-  # Required by ArgoCD's ApplicationSet-in-any-namespace feature - the project must list
-  # a namespace here before anything resident in it can use `project: {{ $appNamespace }}`.
-  # Matched by argocd-platform's own applicationsetcontroller.namespaces/
-  # application.namespaces (*-cicd glob) - see gitops-cluster-dev/01-argocd-platform.
+  # Required by ArgoCD's ApplicationSet-in-any-namespace feature so the pr-envs
+  # ApplicationSet (ephemeral-envs.yaml), which lives in this app's -cicd namespace
+  # rather than argocd's, can reference this project.
   sourceNamespaces:
     - {{ $appNamespace }}
   {{- end }}
   destinations:
-    {{- /* Cluster-mapped upper envs (docs/multi-cluster.md) get no destination entry
-    here at all - this AppProject only governs what THIS cluster's ArgoCD is allowed to
-    sync, and a cluster-mapped env's Application doesn't live in this cluster's ArgoCD
-    in the first place. Explicit [] fallback (matching clusterResourceWhitelist's own
-    pattern below) rather than an empty key - keeps this a real empty array even when
-    every upper env is cluster-mapped and $hasEphemeral is also false. */ -}}
+    {{- /* Cluster-mapped upper envs get no destination entry - this AppProject only
+    governs this cluster's ArgoCD. Explicit [] fallback keeps this a real empty array. */ -}}
     {{- if or (gt (len $localUpperEnvs) 0) $hasEphemeral }}
     {{- range $localUpperEnvs }}
     - namespace: {{ include "platform-cicd-app.envNamespace" (list $ .) }}
@@ -77,9 +64,8 @@ spec:
     {{- end }}
   clusterResourceWhitelist:
     {{- if $hasEphemeral }}
-    # Namespace is cluster-scoped (unlike Deployment/Service) - needs to be here, not
-    # namespaceResourceWhitelist, or ArgoCD blocks the sync of k8s/ephemeral/namespace.yaml
-    # outright. Still nothing else cluster-scoped is allowed.
+    # Namespace is cluster-scoped, so it must be whitelisted here (not
+    # namespaceResourceWhitelist) or ArgoCD blocks syncing k8s/ephemeral/namespace.yaml.
     - { group: "", kind: Namespace }
     {{- else }}
     []

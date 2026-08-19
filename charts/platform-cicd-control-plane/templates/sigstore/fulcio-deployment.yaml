@@ -1,25 +1,16 @@
 # platform/sigstore/fulcio-deployment.yaml
 #
-# Self-hosted Fulcio (Phase 3 item 2, sub-item 2 - see docs/image-signing.md). Deliberately
-# a plain Deployment/Service, not Knative (sigstore-scaffolding's own "getting started"
-# path deploys Fulcio as a Knative Service behind Kourier ingress - built for external test
-# clients authenticating like a human/CI job, not our case: every caller here is in-cluster
-# and reaches Fulcio via plain Service DNS). Shape matches Fulcio's own real
-# config/deployment.yaml almost exactly (confirmed live from the upstream repo, not
-# reconstructed from memory), with two deliberate deviations:
-#
-# - replicas: 1, resources trimmed to 100Mi/50m (matching Fulcio's own CI test's exact
-#   reduction from its production defaults of 3 replicas / 1G / 0.5 CPU each - this is a
-#   single-organization dev/test platform, not a target for that kind of HA footprint,
-#   and the cluster is already memory-constrained - see the plan's Concrete-pieces
-#   section).
-# - Service type ClusterIP, not LoadBalancer - kind-observe has no LoadBalancer
-#   controller (confirmed, an already-documented gap elsewhere in this platform), and
-#   nothing outside the cluster needs to reach Fulcio anyway.
-#
-# The FULCIO_SERVE_GCP_PRIVATE_CA_PARENT env var / "private-ca" ConfigMap in upstream's
-# manifest is googleca-specific plumbing, irrelevant to the fileca backend used here -
-# deliberately omitted, not an oversight.
+# Self-hosted Fulcio (docs/image-signing.md) - plain Deployment/Service, not Knative:
+# every caller here is in-cluster via plain Service DNS, unlike sigstore-scaffolding's
+# Knative/Kourier "getting started" path built for external test clients. Shape matches
+# Fulcio's own upstream config/deployment.yaml, with two deviations:
+# - replicas: 1, trimmed resources (100Mi/50m) - matches Fulcio's own CI test's reduction
+#   from prod defaults; this is a single-org dev/test platform on a memory-constrained
+#   cluster, not an HA target.
+# - ClusterIP, not LoadBalancer - kind-observe has no LoadBalancer controller and nothing
+#   outside the cluster needs to reach Fulcio.
+# FULCIO_SERVE_GCP_PRIVATE_CA_PARENT/the "private-ca" ConfigMap from upstream's manifest
+# are googleca-specific and omitted - irrelevant to the fileca backend used here.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -97,10 +88,9 @@ spec:
         - name: fulcio-secret
           secret:
             secretName: fulcio-secret
-        # Lets Fulcio trust this cluster's own API server TLS cert when it validates a
-        # `type: kubernetes` token against it - kube-root-ca.crt is a well-known
-        # ConfigMap Kubernetes auto-populates in every namespace, not something this
-        # platform creates itself. Matches Fulcio's own upstream manifest exactly.
+        # Lets Fulcio trust this cluster's API server TLS cert when validating a `type:
+        # kubernetes` token - kube-root-ca.crt is Kubernetes' own auto-populated
+        # ConfigMap, matching Fulcio's upstream manifest.
         - name: oidc-info
           projected:
             sources:

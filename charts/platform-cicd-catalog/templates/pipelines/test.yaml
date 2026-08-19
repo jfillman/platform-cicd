@@ -1,12 +1,10 @@
 # catalog/pipelines/test.yaml
 #
-# Second stage of the flow, normally event-chained - fired by the shared broker in
-# response to the build Pipeline's dev.cdevents.artifact.published event (see
-# platform/broker/). Can also be git-rooted directly (e.g. a "test-only" flow on push
-# to a scratch branch, with no build stage at all) - start-flow's idempotent generate-
-# or-pass-through behavior (see start-flow-root-span.yaml) makes both cases uniform:
-# every downstream task references start-flow's results, never the incoming params
-# directly. See docs/tracing.md and docs/chaining.md.
+# Second stage of the flow, normally event-chained off build's artifact.published
+# event (see platform/broker/), but can also be git-rooted directly (e.g. a
+# test-only flow on a scratch branch). start-flow's generate-or-pass-through behavior
+# (start-flow-root-span.yaml) makes both cases uniform - every downstream task reads
+# start-flow's results, never the incoming params directly. See docs/tracing.md.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -23,7 +21,7 @@ spec:
     - name: is-flow-terminal
       type: string
       default: "false"
-      description: "true if this step is the LAST step in its flow's steps: list (computed at generation time - see deliver-onboarding-files.yaml/flow-triggers.yaml); this stage's finally block closes the flow-root span iff true. See docs/tracing.md."
+      description: "true if this stage is the LAST step in its flow (computed at generation time - see flow-triggers.yaml); its finally block then closes the flow-root span. See docs/tracing.md."
     - name: git-url
       type: string
     - name: git-revision
@@ -31,11 +29,11 @@ spec:
     - name: git-tag
       type: string
       default: ""
-      description: "Git tag passed by PaC for a tag-triggered test-only flow. Accepted for param-list consistency with the other three stages (any of which deliver-onboarding-files.yaml may generate a git-rooted .tekton file for) - not otherwise used, since test has nothing to version."
+      description: "Git tag passed by PaC for a tag-triggered test-only flow. Accepted for param-list consistency with the other three stages - not otherwise used, since test has nothing to version."
     - name: image-repo
       type: string
       default: ""
-      description: "Destination registry/repo. Accepted for the same reason as git-tag above - not otherwise used."
+      description: "Destination registry/repo. Accepted for the same consistency reason as git-tag - not otherwise used."
     - name: image-ref
       type: string
       default: ""
@@ -91,14 +89,10 @@ spec:
         - { name: chain-id, value: $(params.chain-id) }
         - { name: traceparent, value: $(params.flow-traceparent) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-      # Idempotent: passes the incoming values through unchanged when event-chained
-      # (the normal case), or generates new root span data when they arrive empty
-      # (git-rooted test-only flow) - see start-flow-root-span.yaml.
+      # Idempotent passthrough-or-generate - see start-flow-root-span.yaml.
 
-    # Deeper CDEvents coverage (Phase 3 item 1, see docs/chaining.md): a generic
-    # pipelinerun.started signal, independent of test's own domain-specific
-    # testcaserun.finished event below. References start-flow results (either
-    # generated for a git-rooted test-only flow, or passed through event-chained).
+    # Generic pipelinerun.started signal, independent of the domain-specific
+    # testcaserun.finished event below (docs/chaining.md).
     - name: pipelinerun-started
       runAfter: [start-flow]
       taskRef:
@@ -172,10 +166,8 @@ spec:
         - { name: start-time, value: $(tasks.start-test-stage-span.results.start-time) }
         - { name: status, value: $(tasks.status) }
 
-    # Closes the flow-root span iff test happens to be the LAST step of its flow - see
-    # is-flow-terminal above and docs/tracing.md. Every stage Pipeline carries an
-    # identical copy of this task, gated the same way; whichever one is actually
-    # terminal for THIS flow instance is the one that fires.
+    # Closes the flow-root span iff test is the LAST stage of its flow (is-flow-terminal
+    # above). Every stage Pipeline carries an identical copy of this task.
     - name: end-flow
       when:
         - { input: $(params.is-flow-terminal), operator: in, values: ["true"] }
@@ -226,17 +218,15 @@ spec:
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
         # Forwarded to deploy so it can skip its own clone+validate-config just to get
-        # notify-slack's config-json - test always validates its own config already (see
-        # integration-test above), so this is free. validate-config is a plain (never
-        # when-gated) task in this Pipeline, so referencing its result from a finally
-        # task here is always safe - see resolve-notify-config.yaml's own header for why
-        # that safety property matters and doesn't hold for deploy/release themselves.
+        # this - free here since validate-config always runs (never when-gated) in this
+        # Pipeline, so referencing its result from finally is always safe. See
+        # resolve-notify-config.yaml for why that safety doesn't hold for deploy/release.
         - { name: config-json, value: $(tasks.validate-config.results.config-json) }
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
-    # Deeper CDEvents coverage (Phase 3 item 1) - generic completion signal, deliberately
-    # NOT gated on success like the domain-specific event above. See docs/chaining.md.
+    # Generic completion signal, deliberately NOT gated on success like the
+    # domain-specific event above.
     - name: pipelinerun-finished
       taskRef:
         resolver: cluster

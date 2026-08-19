@@ -1,20 +1,12 @@
-# templates/triggers/release-outcome-trigger.yaml (Phase 3 item 4, docs/multi-cluster.md)
-#
 # Consumes the environment.deployed CDEvent argocd-outcome-relay forwards once a
-# cluster-mapped release env's ArgoCD confirms a real sync outcome. Only rendered for
-# apps that actually have a cluster-mapped upper env - most apps don't and get nothing
-# here.
+# cluster-mapped release env's ArgoCD confirms a sync outcome. Only rendered for apps
+# with a cluster-mapped upper env (docs/admin/multi-cluster.md).
 #
-# Unlike every Trigger in flow-triggers.yaml, this one's CEL filter does NOT check
-# extensions.app_namespace (the value the broker's TokenReview interceptor sets from
-# the CALLER's own verified SA identity) - the caller here is always
-# argocd-outcome-relay, running as its own platform-system ServiceAccount, forwarding
-# on behalf of potentially any app. That extension would read "platform-system" for
-# every one of these events regardless of which app they're actually about, so it
-# can't be the per-app discriminator here. Matches on the event's own claimed
-# body.subject.content.appNamespace instead - see argocd-outcome-relay/main.go's own
-# header for why that's a deliberate, bounded trust difference from the TokenReview
-# path, not an oversight.
+# Unlike flow-triggers.yaml, this CEL filter does not check extensions.app_namespace -
+# the caller is always argocd-outcome-relay's own platform-system SA forwarding on
+# behalf of any app, so that extension would just read "platform-system" here. Matches
+# on the event's claimed body.subject.content.appNamespace instead - a deliberate,
+# bounded trust difference from the TokenReview path (see argocd-outcome-relay/main.go).
 {{- if eq (include "platform-cicd-app.hasClusterMappedUpperEnv" .) "true" }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
 ---
@@ -85,10 +77,7 @@ spec:
           - { name: env, value: $(tt.params.env) }
           - { name: cluster, value: $(tt.params.cluster) }
           # Already Succeeded/Failed by the time it gets here - the relay precomputes
-          # both CDEvents' own outcome vocabulary and this Succeeded/Failed one (see
-          # argocd-outcome-relay/main.go), since $(tt.params.x) is plain string
-          # substitution, not a CEL evaluator - no ternary available in a
-          # TriggerTemplate to derive one from the other here.
+          # this since a TriggerTemplate has no ternary to derive it here.
           - { name: status, value: $(tt.params.status) }
           - { name: git-url, value: $(tt.params.git-url) }
           - { name: git-revision, value: $(tt.params.git-revision) }
