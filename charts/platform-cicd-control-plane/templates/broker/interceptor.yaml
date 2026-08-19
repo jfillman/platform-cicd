@@ -19,12 +19,12 @@
 # the EventListener CRD's admission webhook). TokenReview-verified caller identity is the
 # real trust boundary regardless - see docs/admin/chaining.md.
 {{- if .Values.selfManageNamespace }}
-# Real conflict: Helm's --create-namespace and this chart's own Namespace resource for
-# the SAME namespace are mutually exclusive in Helm v3.21.3 - --create-namespace produces
-# a namespace with no Helm release-tracking metadata, which this resource then can't
-# import. selfManageNamespace defaults true (kind-observe's platform-system is already
-# cleanly Helm-owned); a from-scratch install sets it false and relies on
-# hack/bootstrap.sh's --create-namespace instead.
+# Real conflict: Helm's --create-namespace (or ArgoCD's CreateNamespace=true
+# syncOption) and this chart's own Namespace resource for the SAME namespace are
+# mutually exclusive in Helm v3.21.3 - --create-namespace produces a namespace with no
+# Helm release-tracking metadata, which this resource then can't import.
+# selfManageNamespace defaults true (Helm-owned); a cluster whose ArgoCD Application
+# already sets CreateNamespace=true should set it false instead.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -101,9 +101,9 @@ spec:
       containers:
         - name: interceptor
           image: ghcr.io/jfillman/platform-cicd-token-review-interceptor:latest
-          # Pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh
-          # 4/6. Previously referenced a nonexistent ghcr.io/platform-cicd org and only
-          # ran via a stale kind-loaded image.
+          # Public image on ghcr.io, not kind-loaded. Previously referenced a
+          # nonexistent ghcr.io/platform-cicd org and only ran via a stale kind-loaded
+          # image.
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: http }]
           securityContext:

@@ -116,7 +116,7 @@ spec:
     # build-source/run-tests' emit-span, which only runs on success).
     - name: emit-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: FLOW_TRACEPARENT
           value: $(params.flow-traceparent)
@@ -150,7 +150,7 @@ spec:
     # result gets skipped entirely (see notify-slack.yaml), so it has to live here.
     - name: notify-slack
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       volumeMounts:
         - name: slack-webhook
           mountPath: /var/run/secrets/platform

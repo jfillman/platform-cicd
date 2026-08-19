@@ -29,7 +29,7 @@ spec:
           - { name: kind, value: stepaction }
           - { name: name, value: otel-stage-span-start }
           - { name: namespace, value: {{ .Release.Namespace }} }
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       params:
         - name: flow-traceparent
           value: $(params.flow-traceparent)

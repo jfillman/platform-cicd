@@ -65,13 +65,9 @@ docs/admin/        operator docs - architecture, installation, ADRs
 
 ## Getting started
 
-```
-./hack/bootstrap.sh
-# then onboard a pilot repo - see docs/user/install-guide.md
-```
-
-See [docs/admin/installation.md](docs/admin/installation.md) for the declarative
-(ArgoCD-managed) install path, which is what any new cluster should use going forward.
+Install declaratively via ArgoCD - see
+[docs/admin/installation.md](docs/admin/installation.md) for the full steps, then
+onboard a pilot repo via [docs/user/install-guide.md](docs/user/install-guide.md).
 
 ## Integrating with a larger platform
 

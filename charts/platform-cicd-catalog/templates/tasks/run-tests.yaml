@@ -32,7 +32,7 @@ spec:
   steps:
     - name: resolve-test-command
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
         - name: command
         - name: enabled
@@ -96,7 +96,7 @@ spec:
     # a failed unit-test gets no span - an honest, documented gap, not a silent one).
     - name: emit-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: FLOW_TRACEPARENT
           value: $(params.flow-traceparent)

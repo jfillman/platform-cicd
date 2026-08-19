@@ -85,7 +85,7 @@ spec:
           containers:
             - name: detect
               image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-              imagePullPolicy: IfNotPresent  # published to ghcr.io/jfillman, not kind-loaded - see hack/bootstrap.sh 4/6
+              imagePullPolicy: IfNotPresent  # published to ghcr.io/jfillman, not kind-loaded
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

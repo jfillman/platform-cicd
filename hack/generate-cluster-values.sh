@@ -1,30 +1,23 @@
 #!/usr/bin/env bash
-# hack/generate-cluster-values.sh <context> <cluster-name> [output-dir]
+# hack/generate-cluster-values.sh <context> <cluster-name> <output-dir>
 #
 # Cluster-agnostic values generation: replaces hand-typing a per-cluster values file
 # (openssl run by hand, kube-root-ca.crt copy-pasted, YAML assembled manually) with a
-# single script run. Produces <output-dir>/values-<context>.yaml.
-#
-# output-dir defaults to this repo's own hack/ - useful for a one-off manual run (e.g.
-# a fresh cluster with no gitops repo yet, consumed by hack/bootstrap.sh's VALUES_FILE
-# auto-discovery, see that script). For any cluster managed declaratively via ArgoCD,
-# pass the target gitops-cluster-<name> checkout instead, e.g.:
+# single script run. Produces <output-dir>/values-<context>.yaml, meant to land next
+# to the ArgoCD Application that consumes it via a multi-source $ref - e.g.:
 #   ./hack/generate-cluster-values.sh kind-dev kind-dev \
 #     ../gitops-cluster-dev/50-platform-cicd/platform-cicd-control-plane
-# so the generated file lands next to the Application that consumes it (via a
-# multi-source $ref, see that Application's own header) rather than inside
-# platform-cicd itself - platform-cicd carries no cluster-specific state this way,
-# staying installable standalone on any cluster.
+# platform-cicd carries no cluster-specific state this way, staying installable
+# standalone on any cluster.
 #
 # Only genuinely irreducible per-cluster material goes through this script: the
 # cluster's own API server root CA (read live, can't be derived) and a freshly,
 # independently generated Fulcio signing root (deliberately never copied between
-# clusters - each cluster gets its own trust root, docs/image-signing.md's documented
-# procedure, run here instead of by hand). clusterName/tenantsRepoUrl/
+# clusters - each cluster gets its own trust root, docs/admin/image-signing.md's
+# documented procedure, run here instead of by hand). clusterName/tenantsRepoUrl/
 # tenantOnboardingApplicationSetName are NOT emitted here - charts/platform-cicd-
-# control-plane/values.yaml derives those from clusterName by convention now (see that
-# file's own comments), except kind-observe's own explicit historical exception
-# (hack/values-kind-observe.yaml, pre-dates this script, not reproduced by it).
+# control-plane/values.yaml derives those from clusterName by convention (see that
+# file's own comments).
 #
 # The private key + passphrase this script generates are used ONLY to create the
 # fulcio-secret/fulcio-server-config Secrets directly on the target cluster (kubectl
@@ -42,9 +35,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CONTEXT="${1:?usage: hack/generate-cluster-values.sh <context> <cluster-name> [output-dir]}"
-CLUSTER_NAME="${2:?usage: hack/generate-cluster-values.sh <context> <cluster-name> [output-dir]}"
-OUTPUT_DIR="${3:-hack}"
+CONTEXT="${1:?usage: hack/generate-cluster-values.sh <context> <cluster-name> <output-dir>}"
+CLUSTER_NAME="${2:?usage: hack/generate-cluster-values.sh <context> <cluster-name> <output-dir>}"
+OUTPUT_DIR="${3:?usage: hack/generate-cluster-values.sh <context> <cluster-name> <output-dir>}"
 FORCE="${FORCE:-0}"
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
@@ -139,12 +132,8 @@ log "4/4 - writing ${OUTPUT_FILE} (public material only - clusterName + both CA 
   echo "# values-${CONTEXT}.yaml"
   echo "#"
   echo "# Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by platform-cicd's hack/generate-cluster-values.sh ${CONTEXT} ${CLUSTER_NAME}."
-  if [[ "${OUTPUT_DIR}" == "hack" ]]; then
-    echo "# Auto-discovered by hack/bootstrap.sh - no VALUES_FILE flag needed for this cluster."
-  else
-    echo "# Consumed by this cluster's ArgoCD Application for platform-cicd-control-plane via a"
-    echo "# multi-source \$ref - see that Application's own header."
-  fi
+  echo "# Consumed by this cluster's ArgoCD Application for platform-cicd-control-plane via a"
+  echo "# multi-source \$ref - see that Application's own header."
   echo "# Re-run the generator (not this file by hand) if the cluster's own API server CA ever"
   echo "# rotates; NEVER re-run it to regenerate the Fulcio root without FORCE=1 - see that"
   echo "# script's own header for why."
@@ -160,9 +149,5 @@ log "4/4 - writing ${OUTPUT_FILE} (public material only - clusterName + both CA 
 
 echo
 echo "Wrote ${OUTPUT_FILE}. Review it, then commit it - it carries no secret material."
-if [[ "${OUTPUT_DIR}" == "hack" ]]; then
-  echo "Next: CONTEXT=${CONTEXT} ./hack/bootstrap.sh (VALUES_FILE auto-discovered)."
-else
-  echo "Next: commit and push ${OUTPUT_FILE} in its own repo - the cluster's ArgoCD"
-  echo "Application will pick it up on next sync."
-fi
+echo "Next: commit and push ${OUTPUT_FILE} in its own repo - the cluster's ArgoCD"
+echo "Application will pick it up on next sync."

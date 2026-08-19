@@ -70,10 +70,9 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: exporter
-          # Real gap: this claimed to be registry-published but was never built/pushed by
-          # bootstrap.sh - it only worked on kind-observe via a manual, off-script
-          # kind-load. Now a real value defaulting to a genuinely published tag - see
-          # hack/bootstrap.sh's build+push step.
+          # Real gap, fixed: this claimed to be registry-published but was never
+          # actually built/pushed anywhere - it only worked via a manual, off-script
+          # kind-load. Now defaults to a genuinely published tag.
           image: {{ .Values.doraExporterImage }}
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: metrics }]

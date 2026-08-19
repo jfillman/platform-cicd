@@ -56,7 +56,7 @@ spec:
   steps:
     - name: resolve-build-script-path
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
         - name: build-script-path
         - name: cache-type
@@ -166,7 +166,7 @@ spec:
     # TaskRun timestamps still show that a failure happened, just not as a Tempo span.
     - name: emit-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: FLOW_TRACEPARENT
           value: $(params.flow-traceparent)

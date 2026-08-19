@@ -74,7 +74,7 @@ spec:
   steps:
     - name: resolve-build-config
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
         - name: dockerfile-path
         - name: image-ref
@@ -175,7 +175,7 @@ spec:
     # honest, documented gap as build-source.yaml/run-tests.yaml's own emit-span steps.
     - name: emit-image-ref-and-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: IMAGE_REF
           value: $(steps.resolve-build-config.results.image-ref)

@@ -1,10 +1,10 @@
 # hack/kind-config.yaml
 #
-# NOT used by hack/bootstrap.sh, which targets the existing shared kind-observe cluster
-# instead. Kept for standing up a dedicated, isolated cluster: disables kind's default
-# CNI (kindnet doesn't enforce NetworkPolicy) so Calico can be installed instead - a
-# hard prerequisite if this platform's NetworkPolicy layer should actually do anything.
-# See docs/admin/installation.md.
+# `kind create cluster --config hack/kind-config.yaml` - the "create a raw cluster"
+# step before installing ArgoCD and pointing it at a gitops-cluster-<name> repo (see
+# docs/admin/installation.md). Disables kind's default CNI (kindnet doesn't enforce
+# NetworkPolicy) so Calico can be installed instead - a hard prerequisite if this
+# platform's NetworkPolicy layer should actually do anything.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: platform-cicd

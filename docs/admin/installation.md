@@ -1,12 +1,7 @@
 # Installation
 
-platform-cicd installs onto any Kubernetes cluster in one of two ways. Pick based on
-whether the cluster is GitOps-managed already.
-
-## Option A: declarative, via ArgoCD (preferred for any new cluster)
-
-If the target cluster already runs ArgoCD (or is getting one), install this platform
-the same way every other cluster-config piece gets installed: a couple of ArgoCD
+platform-cicd installs onto any Kubernetes cluster declaratively, via ArgoCD - the
+same way every other cluster-config piece gets installed: a couple of ArgoCD
 `Application` manifests in that cluster's own `gitops-cluster-<name>` repo. See
 `gitops-cluster-dev/50-platform-cicd/` for a working reference - it wires up
 `tektoncd/operator` (Tekton Pipelines/Triggers/Chains/Dashboard/PaC in one namespace),
@@ -37,30 +32,17 @@ Steps for a brand-new cluster:
 4. Push. ArgoCD takes it from there.
 
 This keeps `platform-cicd` installable standalone on any cluster - it carries zero
-cluster-specific secrets or identity in its own repo.
-
-## Option B: imperative, via `hack/bootstrap.sh`
-
-For a cluster that isn't GitOps-managed, or as a one-off/local (`kind`) install:
-
-```
-./hack/bootstrap.sh
-```
-
-Idempotent, safe to re-run. Installs whatever's genuinely missing (Tekton
-Pipelines/Triggers/Pipelines-as-Code, External Secrets Operator, the shared catalog,
-the broker) and leaves everything else alone. Retarget with `CONTEXT`/
-`KIND_CLUSTER_NAME` env vars for a different cluster; a per-cluster values file at
-`hack/values-<context>.yaml` is auto-discovered if present (see
-`hack/generate-cluster-values.sh`, run with no third argument to write there instead
-of into a gitops repo).
+cluster-specific secrets or identity in its own repo. For local/`kind` development,
+`hack/kind-config.yaml` creates a raw, Calico-enabled cluster to point ArgoCD at -
+there's no separate imperative install path beyond that; get ArgoCD running, then
+follow the steps above.
 
 Grafana serves the platform's own dashboards (rendered as ConfigMaps by the
 control-plane chart, not a separate apply step). The Tekton Dashboard is the
 complementary low-level view - installed **read-only** deliberately, matching this
 platform's PaaS/RBAC posture.
 
-## Operational notes that apply either way
+## Operational notes
 
 - **NetworkPolicy needs a real CNI.** `default-deny`/`allow-from-same-namespace`
   manifests are silent no-ops on a CNI that doesn't enforce `NetworkPolicy` (e.g.

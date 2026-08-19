@@ -2,17 +2,17 @@
 # hack/bootstrap-upper-cluster.sh
 #
 # Bootstraps an "upper environment" cluster (staging/prod-tier, targeted via cicd.yaml's
-# cluster: field) with a pinned ArgoCD install. Separate from hack/bootstrap.sh (which
-# provisions the dev cluster) rather than a mode flag on it, since the two install
-# almost entirely disjoint things (Tekton/PaC/the broker vs. just ArgoCD).
+# cluster: field) with a pinned ArgoCD install. The dev cluster (which runs Tekton/PaC/
+# the broker, an almost entirely disjoint set of components) installs declaratively
+# instead - see docs/admin/installation.md.
 #
 # No ArgoCD Notifications controller - the release-outcome feedback loop is ArgoCD sync
 # hooks instead (PostSync/SyncFail Jobs, see catalog/lib/argocd-outcome-hook.sh):
 # Notifications fired on any completed sync, including pure selfHeal drift with no
 # release involved. See docs/admin/multi-cluster.md.
 #
-# Targets an EXISTING cluster context, like hack/bootstrap.sh - never runs `kind create
-# cluster`. Note: "kind-prod" (the first upper cluster) is named "prod" but currently
+# Targets an EXISTING cluster context - never runs `kind create cluster`. Note:
+# "kind-prod" (the first upper cluster) is named "prod" but currently
 # hosts the "staging" environment per cicd.yaml's env->cluster mapping - see
 # docs/admin/multi-cluster.md's terminology note. Idempotent, safe to re-run.
 
@@ -20,8 +20,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CONTEXT="${UPPER_CLUSTER_CONTEXT:-kind-prod}"
-ARGOCD_CHART_VERSION="10.3.2" # app version v3.5.0 - pinned, not "latest" (see hack/bootstrap.sh's
-                               # own version-pinning comments for why)
+ARGOCD_CHART_VERSION="10.3.2" # app version v3.5.0 - pinned deliberately, not "latest" -
+                               # an untracked "latest" install is how this platform lost
+                               # any record of which version was actually running before
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
 warn() { echo -e "\033[1;33mwarning: $*\033[0m" >&2; }
@@ -41,10 +42,10 @@ if ! kubectl config get-contexts -o name | grep -qx "${CONTEXT}"; then
   exit 1
 fi
 
-log "CNI check (informational, matches kind-observe's own posture - see hack/bootstrap.sh)"
+log "CNI check (informational)"
 if ! kubectl --context "${CONTEXT}" get pods -n kube-system -l k8s-app=calico-node --no-headers 2>/dev/null | grep -q .; then
-  warn "${CONTEXT} runs kindnet, not Calico - same as kind-observe, deliberately kept"
-  warn "consistent. See docs/admin/multi-cluster.md."
+  warn "${CONTEXT} runs kindnet, not Calico - NetworkPolicy is a silent no-op here."
+  warn "See docs/admin/multi-cluster.md."
 fi
 
 log "Cross-cluster reachability (informational, verified once live)"

@@ -7,8 +7,9 @@ description: >-
   ephemeral-env PR-namespace TTL sweep, the DORA exporter, self-hosted Fulcio, the Tekton
   Chains config patch, and the ExternalSecrets ClusterSecretStore bridge. One release for
   the whole platform. Genuinely third-party installs (Tekton core, Triggers,
-  Pipelines-as-Code, kube-prometheus-stack, External Secrets Operator itself, Rekor) stay
-  in hack/bootstrap.sh, not this chart - see docs/onboarding.md.
+  Pipelines-as-Code, kube-prometheus-stack, External Secrets Operator itself, Rekor) are
+  each their own ArgoCD Application on the target cluster, not this chart - see
+  docs/admin/installation.md.
 
   Deliberately pinned to the `platform-system` namespace (hardcoded in every template,
   not templated to .Release.Namespace): this is a true singleton, always installed once,

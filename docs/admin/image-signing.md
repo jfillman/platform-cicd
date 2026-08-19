@@ -117,7 +117,7 @@ recommended for production" per its own docs, an accepted tradeoff (see above).
 
 ## Tekton Chains configuration
 
-Not previously installed on this cluster at all - added to `hack/bootstrap.sh`
+Not previously installed on this cluster at all - installed as part of cluster bootstrap
 (`storage.googleapis.com/tekton-releases/chains/latest/release.yaml`, same convention as
 Pipelines/Triggers). Ships one Deployment (`tekton-chains-controller`), no separate
 webhook Deployment like Pipelines/Triggers/PaC have.
@@ -270,7 +270,7 @@ nearly every step in every pipeline, this broke signing for every real build.
 **Fix, applied in two parts:**
 
 1. **Root cause**: the toolbox image is now actually `docker push`ed to
-   `ghcr.io/jfillman/platform-cicd-toolbox` (`hack/bootstrap.sh` step 4/5) instead of
+   `ghcr.io/jfillman/platform-cicd-toolbox` (the toolbox publish step) instead of
    `kind load`ed - so its imageID is always a real, registry-qualified reference. This
    also simplifies onboarding a new toolbox version going forward: a normal push, no
    `docker save`/`ctr images import` dance. (A freshly-pushed GHCR package defaults to

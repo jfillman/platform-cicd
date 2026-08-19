@@ -51,7 +51,7 @@ spec:
   steps:
     - name: send-span
       image: ghcr.io/jfillman/platform-cicd-toolbox:latest
-      imagePullPolicy: IfNotPresent  # pushed to ghcr.io/jfillman (public), not kind-loaded - see hack/bootstrap.sh 4/6
+      imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318

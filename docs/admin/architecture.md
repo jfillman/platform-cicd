@@ -55,11 +55,11 @@ See [multi-cluster.md](multi-cluster.md) and ADR-0005.
 
 ## Cluster-agnostic bootstrap
 
-Any cluster's install is either a declarative ArgoCD `Application` (preferred) or the
-imperative `hack/bootstrap.sh` - both consume a per-cluster values file produced by
-`hack/generate-cluster-values.sh`, never hand-typed. Cluster-specific state (Fulcio
-trust root, cluster CA) lives in that cluster's own `gitops-cluster-<name>` repo, never
-inside `platform-cicd` itself. See [installation.md](installation.md) and ADR-0006.
+Every cluster installs the same way: a declarative ArgoCD `Application`, consuming a
+per-cluster values file produced by `hack/generate-cluster-values.sh`, never
+hand-typed. Cluster-specific state (Fulcio trust root, cluster CA) lives in that
+cluster's own `gitops-cluster-<name>` repo, never inside `platform-cicd` itself. See
+[installation.md](installation.md) and ADR-0006.
 
 ## Security model
 
