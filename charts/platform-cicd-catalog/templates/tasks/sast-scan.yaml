@@ -133,9 +133,10 @@ spec:
         fi
         source "${PLATFORM_LIB}/otel.sh"
         # outcome/span-start-time/span-end-time are Task-level results written by an
-        # earlier step (scan). A cross-step $(results.*) reference silently resolves to
-        # the literal placeholder string, so read /tekton/results/<name> directly instead
-        # (same workaround as build-image.yaml's emit-image-ref-result).
+        # earlier step (scan). A cross-step "results.NAME.path"-style reference
+        # silently resolves to the literal placeholder string, so read
+        # /tekton/results/<name> directly instead (same workaround as
+        # build-image.yaml's emit-image-ref-result).
         OUTCOME_VALUE="$(cat /tekton/results/outcome 2>/dev/null || echo unknown)"
         SPAN_START="$(cat /tekton/results/span-start-time 2>/dev/null || echo "")"
         SPAN_END="$(cat /tekton/results/span-end-time 2>/dev/null || echo "")"
