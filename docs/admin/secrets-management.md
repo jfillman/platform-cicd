@@ -52,7 +52,7 @@ lives and how every chart consumes it.
 
 ## Application-owned secrets: one secretsPath per Application, same project
 
-An Application's own secrets (a Slack webhook, SAST scan credentials, ...) - see
+An Application's own genuinely CI-specific secrets (SAST scan credentials, ...) - see
 [app-secrets.md](app-secrets.md) - use the SAME `platform-cicd-kind-dev` project, not a
 separate one, scoped to `/<type>/<appName>/` via a dedicated `ClusterSecretStore` per
 Application (control-plane's own `appSecretStores` values list). This replaced an
@@ -64,6 +64,13 @@ project gives the same per-app isolation without either problem, and without cou
 an app's CI secrets to it having been onboarded through idp's `NodeJSApplication` XR
 (deliberately NOT reusing idp's own per-(app,cluster) Infisical project for this - see
 `app-secret-stores.yaml`'s own header).
+
+**Exception: `slack-webhook-url`.** That one key is NOT platform-cicd's to own - it's
+sourced from the app's own idp-managed `<appName>-kind-dev` project instead, the same
+place `idp-application`'s own AI-triage Slack notifications already read it from. A
+real mistake in this migration's first pass required app owners to plant it twice, in
+two different projects - see [app-secrets.md](app-secrets.md)'s own section on this key
+for the fix and the reasoning.
 
 ## registry-credentials: disseminated via ClusterExternalSecret
 

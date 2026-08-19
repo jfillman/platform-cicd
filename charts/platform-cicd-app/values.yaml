@@ -80,7 +80,22 @@ pipelines: {}
 #                              # steps typically mount it under
 #   key: slack-webhook-url    # optional - the secret's actual name in Infisical, if
 #                              # different from `name` (defaults to `name`)
+#
+# slack-webhook-url is special-cased (see app-secrets-external-secret.yaml) - it does
+# NOT come from platform-cicd's own per-app secretsPath like every other entry here.
+# It's sourced from THIS APP'S OWN idp-managed Infisical project instead (the same
+# `<appName>-<cluster>` store, same `shared` environment, same key idp-application's
+# own notify-external-secret.yaml already reads for AI-triage Slack notifications) -
+# app owners manage their own Slack webhook once, in their own project, not twice.
 secrets: []
+
+# The dev cluster's name, matching idp-service-catalog's own SecretStore XRD naming
+# convention (<appName>-<cluster>) - only used by app-secrets-external-secret.yaml's
+# slack-webhook-url special case above, to compute that app-owned store's name. Not a
+# general secretStore reference (platform-cicd's own store is looked up via the
+# control-plane chart's own <type>-<appName>-secret-store convention, unrelated to
+# this value).
+devClusterName: kind-dev
 
 # Platform-wide constants every Application install shares (not per-app identity, so
 # kept outside platformIdentity). Defaults to this repo's own published image (real,

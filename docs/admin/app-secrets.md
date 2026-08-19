@@ -19,16 +19,19 @@ namespace that has a different actual purpose.
 
 Deliberately NOT idp-service-catalog's own per-(app,cluster) Infisical project for this
 same app (the one its `NodeJSApplication` XR provisions, `<appName>-kind-dev`): reusing
-it would couple an app's CI secrets (Slack webhook, SAST token) to that app having
-already been onboarded through idp, which isn't true for every platform-cicd tenant.
-The control plane's own project is a sibling, unrelated to whether idp onboarding has
-happened for this app.
+it would couple an app's CI secrets to that app having already been onboarded through
+idp, which isn't true for every platform-cicd tenant. The control plane's own project
+is a sibling, unrelated to whether idp onboarding has happened for this app.
+
+**`slack-webhook-url` is the one deliberate exception** - see its own section below.
+Every OTHER `secrets:` entry (SAST scan credentials, or whatever a future Task needs)
+follows the rule above: control-plane's own project, path-scoped per app.
 
 ```yaml
 secrets:
-  - name: slack-webhook-url      # key in the resulting app-secrets Kubernetes Secret,
+  - name: sast-scan-token        # key in the resulting app-secrets Kubernetes Secret,
                                    # and the secret's name in Infisical under this app's
-                                   # own secretsPath
+                                   # own secretsPath (control-plane's own project)
 ```
 
 No per-Application app-chart value names the backend any more (the old
@@ -130,19 +133,35 @@ A Secret volume mounts one file per data key, named after the key - this is exac
 what `notify-slack.yaml` already does for `slack-webhook-url`, sourced from
 `app-secrets`.
 
-## `slack-webhook-url`: what changed
+## `slack-webhook-url`: what changed, and why it's special-cased
 
 Previously (see [notifications.md](notifications.md)'s "The bug this fixes"): a manual,
 per-Application `kubectl create secret generic slack-webhook-url ...`, deliberately kept
 outside ESO. That mechanism, and the later dev-namespace-as-backend one that replaced
-it, are both gone - the backend is Infisical now.
+it, are both gone.
+
+**2026-08-19 correction**: the first version of the Infisical migration expected
+`slack-webhook-url` to be planted under control-plane's own per-app `secretsPath`, same
+as every other `secrets:` entry - a real mistake, caught after the fact. App owners
+already manage their own Slack webhook in their OWN Infisical project
+(idp-service-catalog's `<appName>-kind-dev`, the same store `idp-application`'s own
+`notify-external-secret.yaml` reads for AI-triage Slack notifications) - requiring it a
+second time, in a different project, would mean two copies of the same URL to keep in
+sync by hand. `app-secrets-external-secret.yaml` now special-cases this one key with a
+per-entry `sourceRef.storeRef` override (a real ESO feature, `ExternalSecretData.
+SourceRef` - the same mechanism idp-application's own `external-secret.yaml` already
+uses for its `shared: true` entries), reading it from that app-owned store instead of
+control-plane's own.
 
 To enable Slack notifications for an Application today:
 
 1. Add the Application to control-plane's `appSecretStores` list (one-time, if not
    already there) and push to `main` - the `platform-cicd-control-plane` ArgoCD
    Application has automated selfHeal sync, so it picks this up on its own; no manual
-   `helm upgrade` needed.
+   `helm upgrade` needed. Still required even if `slack-webhook-url` is the only entry
+   this Application ever declares - the `ExternalSecret`'s own `secretStoreRef` (its
+   default store, used by any entry that doesn't override it) has to resolve to
+   something real.
 2. Declare the secret in the Application's own `cicd.yaml`:
    ```yaml
    secrets:
@@ -152,10 +171,12 @@ To enable Slack notifications for an Application today:
        enabled: true
        channel: "#your-channel"
    ```
-3. Plant a `slack-webhook-url` key under this Application's own `/<type>/<appName>/`
-   path in the control plane's Infisical project (`platform-cicd-kind-dev`), holding a
-   real Slack incoming-webhook URL - via the Infisical UI/API, never through this chart
-   or committed to this repo.
+3. Plant `slack-webhook-url` in **this Application's own idp-managed Infisical
+   project** (`<appName>-kind-dev`, `shared` environment, root path) - not
+   control-plane's. If the app was onboarded through idp's `NodeJSApplication` XR, this
+   project already exists (idp-application's own AI-triage notifications may already
+   use this exact same key - check before adding a second value). Via the Infisical
+   UI/API, never through this chart or committed to this repo.
 
 Nothing else to apply - `notify-slack.yaml`'s volume mount is already wired into every
 pipeline via the existing, unconditional `notify` `finally` task.
