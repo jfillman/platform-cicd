@@ -3,48 +3,60 @@
 Lets an Application pull specific keys out of its own backend secret store into a
 Kubernetes Secret its pipelines can mount - `slack-webhook-url` today, and open-ended
 for whatever a future Task needs (SAST scan credentials was the second real case that
-motivated building this generically instead of one-off per secret, same as
-[secrets-management.md](secrets-management.md)'s `registry-credentials`).
+motivated building this generically instead of one-off per secret).
 
 ## Where the backend store lives
 
-**2026-08-19: migrated onto Infisical.** Each Application's own secrets now live under a
-dedicated `secretsPath` (`/<type>/<appName>/`) inside the control plane's OWN Infisical
-project (`platform-cicd-kind-dev` - see [secrets-management.md](secrets-management.md)),
-not in a hand-created `Secret` in that Application's own dev environment namespace
-(`<type>-<app-name>-dev`) the way this worked before. That namespace was CI/deploy
-infrastructure doing double duty as an ad hoc vault - real per-app isolation now comes
-from Infisical's own path scoping instead, with nothing app-specific added to a
-namespace that has a different actual purpose.
+**2026-08-19: every Application secret comes from that Application's own idp-managed
+Infisical project** - `<appName>-<devClusterName>` (`devClusterName` from
+control-plane's own values, today always `kind-dev`), the exact same project
+idp-service-catalog's `NodeJSApplication` XR provisions and `idp-application`'s own
+`external-secret.yaml`/`notify-external-secret.yaml` already read from. Not a
+platform-cicd-owned project, not path-scoped under one - an Application's secrets are
+that Application's own, managed once, in the one place idp already gives every
+onboarded app.
 
-Deliberately NOT idp-service-catalog's own per-(app,cluster) Infisical project for this
-same app (the one its `NodeJSApplication` XR provisions, `<appName>-kind-dev`): reusing
-it would couple an app's CI secrets to that app having already been onboarded through
-idp, which isn't true for every platform-cicd tenant. The control plane's own project
-is a sibling, unrelated to whether idp onboarding has happened for this app.
+**This corrects an earlier, wrong design** (shipped and reverted the same day): the
+first pass at this migration created a platform-cicd-owned `platform-cicd-kind-dev`
+Infisical project and expected every Application's secrets - including
+`slack-webhook-url`, already managed in the app's own project for
+`idp-application`'s AI-triage notifications - to be planted there too, under a
+`/<type>/<appName>/` path. That meant two copies of the same credential in two
+different places for anything idp-application also needed. Fixed by pointing the whole
+mechanism at the app's own project instead - see `app-secret-stores.yaml`'s own header
+for the full story.
 
-**`slack-webhook-url` is the one deliberate exception** - see its own section below.
-Every OTHER `secrets:` entry (SAST scan credentials, or whatever a future Task needs)
-follows the rule above: control-plane's own project, path-scoped per app.
+Before that, this worked off each Application's own `<type>-<app-name>-dev` namespace,
+treated as an ad hoc vault (a real `Secret` created there by hand) - CI/deploy
+infrastructure doing double duty as a secret backend. That's gone too.
 
 ```yaml
 secrets:
-  - name: sast-scan-token        # key in the resulting app-secrets Kubernetes Secret,
-                                   # and the secret's name in Infisical under this app's
-                                   # own secretsPath (control-plane's own project)
+  - name: slack-webhook-url      # key in the resulting app-secrets Kubernetes Secret,
+                                   # and the secret's own name in this app's Infisical
+                                   # project
 ```
+
+**A real, accepted coupling**: an Application's CI secrets now require that Application
+to have been onboarded through idp's `NodeJSApplication` XR (which is what actually
+provisions `<appName>-<devClusterName>`) - a platform-cicd tenant that predates or
+skips idp onboarding has no such project, so its `secrets:` entries simply stay
+not-ready (see "Why a ClusterSecretStore per Application" below for the graceful-degrade
+shape this takes, not a hard pipeline failure).
 
 No per-Application app-chart value names the backend any more (the old
 `appSecretStore.secretName` field is gone) - the backend is entirely determined by
-`platformIdentity.type`/`.appName`, which the app chart already requires.
+`platformIdentity.type`/`.appName` plus control-plane's `devClusterName`, computed the
+same deterministic way idp's own Composition computes its project slug.
 
 ## Why a ClusterSecretStore per Application, defined in the control-plane chart
 
-An Application's own secrets need a distinct `secretsScope.secretsPath` per Application
-(`/<type>/<appName>/`) - so this uses one `ClusterSecretStore` **per Application**
-(`ClusterSecretStore` is cluster-scoped, matching the shape the platform-wide
-`platform-secret-store` already uses; a namespaced `SecretStore` couldn't be templated
-per-app from a cluster-wide chart install the same way).
+Even though the backend is idp's own project, platform-cicd still renders its own
+`ClusterSecretStore` per Application rather than having the app chart's `ExternalSecret`
+reference idp's object (e.g. `checkout-api-kind-dev`) directly - a deliberate
+indirection: platform-cicd's own naming convention (`<type>-<appName>-secret-store`)
+stays stable and independent of idp's internal naming, and platform-cicd's chart never
+has to assume idp's naming scheme won't change.
 
 These are rendered by the **control-plane chart**, not the per-Application app chart -
 `charts/platform-cicd-control-plane/templates/secretstore/app-secret-stores.yaml`,
@@ -58,11 +70,13 @@ appSecretStores:
 ```
 
 Each entry renders one `ClusterSecretStore` named `<type>-<appName>-secret-store`,
-`secretsScope.secretsPath: /<type>/<appName>/` inside the control plane's own Infisical
-project - same `hostAPI`/`auth` as the platform-wide store, just a narrower scope.
-Adding a new Application here (and pushing to `main` - the control-plane chart's own
-ArgoCD Application has automated selfHeal sync, no manual `helm upgrade` needed) is a
-deliberate, manual, one-time-per-Application step.
+`provider.infisical` pointed at `<appName>-<devClusterName>`'s project/environment/
+credentials - mirroring that app's own idp-provisioned `ClusterSecretStore` field for
+field (confirmed live against a real one, e.g. checkout-api's own
+`checkout-api-kind-dev` store), not looked up via any live cross-reference to idp's own
+object. Adding a new Application here (and pushing to `main` - the control-plane
+chart's own ArgoCD Application has automated selfHeal sync, no manual `helm upgrade`
+needed) is a deliberate, manual, one-time-per-Application step.
 
 **Why here and not in the app chart**: a `ClusterSecretStore` is cluster-scoped - there
 is exactly one object per name, cluster-wide, and rendering it from a per-Application
@@ -78,7 +92,9 @@ identically on both sides from the same inputs both charts already require. An
 Application whose `secrets:` list is non-empty but that's missing from control-plane's
 `appSecretStores` list simply gets an `ExternalSecret` with nothing to sync from
 (a normal ESO error status, not a hard failure of the Application's pipelines - nothing
-mounts a missing key differently than an unconfigured one, see below).
+mounts a missing key differently than an unconfigured one, see below). Same graceful
+degrade if the Application hasn't been onboarded through idp yet either - the store
+just can't validate until it has.
 
 ## `cicd.yaml`
 
@@ -133,36 +149,15 @@ A Secret volume mounts one file per data key, named after the key - this is exac
 what `notify-slack.yaml` already does for `slack-webhook-url`, sourced from
 `app-secrets`.
 
-## `slack-webhook-url`: what changed, and why it's special-cased
+## Enabling Slack notifications for an Application
 
-Previously (see [notifications.md](notifications.md)'s "The bug this fixes"): a manual,
-per-Application `kubectl create secret generic slack-webhook-url ...`, deliberately kept
-outside ESO. That mechanism, and the later dev-namespace-as-backend one that replaced
-it, are both gone.
-
-**2026-08-19 correction**: the first version of the Infisical migration expected
-`slack-webhook-url` to be planted under control-plane's own per-app `secretsPath`, same
-as every other `secrets:` entry - a real mistake, caught after the fact. App owners
-already manage their own Slack webhook in their OWN Infisical project
-(idp-service-catalog's `<appName>-kind-dev`, the same store `idp-application`'s own
-`notify-external-secret.yaml` reads for AI-triage Slack notifications) - requiring it a
-second time, in a different project, would mean two copies of the same URL to keep in
-sync by hand. `app-secrets-external-secret.yaml` now special-cases this one key with a
-per-entry `sourceRef.storeRef` override (a real ESO feature, `ExternalSecretData.
-SourceRef` - the same mechanism idp-application's own `external-secret.yaml` already
-uses for its `shared: true` entries), reading it from that app-owned store instead of
-control-plane's own.
-
-To enable Slack notifications for an Application today:
-
-1. Add the Application to control-plane's `appSecretStores` list (one-time, if not
-   already there) and push to `main` - the `platform-cicd-control-plane` ArgoCD
-   Application has automated selfHeal sync, so it picks this up on its own; no manual
-   `helm upgrade` needed. Still required even if `slack-webhook-url` is the only entry
-   this Application ever declares - the `ExternalSecret`'s own `secretStoreRef` (its
-   default store, used by any entry that doesn't override it) has to resolve to
-   something real.
-2. Declare the secret in the Application's own `cicd.yaml`:
+1. Onboard the Application through idp's `NodeJSApplication` XR first, if it hasn't
+   been already - that's what actually provisions `<appName>-kind-dev`, the Infisical
+   project everything below reads from.
+2. Add the Application to control-plane's `appSecretStores` list (one-time, if not
+   already there) and push to `main` - automated selfHeal picks it up, no manual `helm
+   upgrade` needed.
+3. Declare the secret in the Application's own `cicd.yaml`:
    ```yaml
    secrets:
      - name: slack-webhook-url
@@ -171,12 +166,10 @@ To enable Slack notifications for an Application today:
        enabled: true
        channel: "#your-channel"
    ```
-3. Plant `slack-webhook-url` in **this Application's own idp-managed Infisical
-   project** (`<appName>-kind-dev`, `shared` environment, root path) - not
-   control-plane's. If the app was onboarded through idp's `NodeJSApplication` XR, this
-   project already exists (idp-application's own AI-triage notifications may already
-   use this exact same key - check before adding a second value). Via the Infisical
-   UI/API, never through this chart or committed to this repo.
+4. Plant `slack-webhook-url` in the Application's own Infisical project (`shared`
+   environment, root path) - via the Infisical UI/API, never through this chart or
+   committed to this repo. If `idp-application`'s own AI-triage Slack notifications are
+   already enabled for this app, this value already exists - nothing more to do.
 
 Nothing else to apply - `notify-slack.yaml`'s volume mount is already wired into every
 pipeline via the existing, unconditional `notify` `finally` task.
@@ -188,10 +181,11 @@ pipeline via the existing, unconditional `notify` `finally` task.
   confirming the `ClusterSecretStore`/`ExternalSecret` render correctly and the
   `ExternalSecret`'s `secretStoreRef.name` matches the `ClusterSecretStore`'s own
   `metadata.name` exactly.
-- Live: a real Infisical secret planted under a real Application's `secretsPath`,
-  confirming the resulting `app-secrets` Secret contains only the specific declared
-  key/value, correctly renamed per `secretKey`, via the `infisical` provider (not the
-  old `kubernetes` provider this replaced).
+- Live: control-plane's own `<type>-<appName>-secret-store` confirmed to validate
+  (`kubectl get clustersecretstore <name> -o jsonpath='{.status.conditions}'`) against
+  a real app's idp-managed project, and the resulting `app-secrets` Secret confirmed to
+  hold the same value already live in that app's own project - not a second, drifted
+  copy.
 - End-to-end Slack check: a real pipeline run for an Application with `secrets:
   [{name: slack-webhook-url}]` and `notifications.slack.enabled: true` configured,
   confirming a real message lands in the real Slack channel via the Infisical-synced

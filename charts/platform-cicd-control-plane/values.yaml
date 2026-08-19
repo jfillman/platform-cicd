@@ -143,7 +143,10 @@ secretStore:
   kind: ClusterSecretStore
   infisical:
     # This control plane's own Infisical project slug - see infisical-project.yaml's
-    # header for why it's a dedicated project, not a reused app project.
+    # header for why it's a dedicated project, not a reused app project. Only used for
+    # genuinely platform-wide material (registry-credentials, github-app-creds,
+    # relay tokens) - NOT app secrets any more, see appSecretStores/devClusterName
+    # below.
     projectSlug: platform-cicd-kind-dev
     # In-cluster Service DNS for idp-service-catalog's self-hosted Infisical install
     # (gitops-cluster-dev/10-crds-operators/infisical) - only correct when this chart
@@ -151,12 +154,20 @@ secretStore:
     hostAPI: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080/api
     credentialsSecretName: platform-cicd-infisical-creds
 
+# The dev cluster's name, matching idp-service-catalog's own SecretStore XRD naming
+# convention (<appName>-<cluster>) - used by app-secret-stores.yaml below to compute
+# each Application's own idp-managed Infisical project/credentials names. Must match
+# whatever idp's NodeJSApplication XR actually used for that Application's `cluster`
+# field (today, always kind-dev - this platform's CI stays on the dev cluster always).
+devClusterName: kind-dev
+
 # Per-Application secret stores (docs/admin/app-secrets.md) - a DIFFERENT mechanism from
 # secretStore above, not another entry in it: an Application's own secrets (Slack
-# webhook, SAST creds, ...) get their own ClusterSecretStore, scoped to a
-# secretsPath (/<type>/<appName>/) inside the control plane's OWN Infisical project
-# (secretStore.infisical.projectSlug above) - real per-app isolation via Infisical path
-# scoping, not a separate Infisical project or Kubernetes namespace per app.
+# webhook, SAST creds, ...) get their own ClusterSecretStore pointed at THAT
+# Application's own idp-managed Infisical project (<appName>-<devClusterName>) - never
+# platform-cicd's own project. 2026-08-19: corrected from an earlier, wrong design that
+# path-scoped these under platform-cicd's own project instead - see
+# app-secret-stores.yaml's own header for the full story.
 # ClusterSecretStore is cluster-scoped (no per-app templating possible at the app-chart
 # level the way a namespaced SecretStore would allow), so these are rendered HERE, once
 # per Application, from this list - not by the per-Application app chart itself.

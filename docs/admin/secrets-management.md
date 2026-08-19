@@ -50,27 +50,36 @@ Infisical directly (UI or API), never through this chart or committed to this re
 this changes nothing about who creates real credential material or how, only where it
 lives and how every chart consumes it.
 
-## Application-owned secrets: one secretsPath per Application, same project
+## Application-owned secrets: each app's own idp-managed project, never platform-cicd's
 
-An Application's own genuinely CI-specific secrets (SAST scan credentials, ...) - see
-[app-secrets.md](app-secrets.md) - use the SAME `platform-cicd-kind-dev` project, not a
-separate one, scoped to `/<type>/<appName>/` via a dedicated `ClusterSecretStore` per
-Application (control-plane's own `appSecretStores` values list). This replaced an
-earlier design where each Application's own `<type>-<appName>-dev` namespace was treated
-as its secret backend (a real `Secret` created there by hand) - that meant CI/deploy
-infrastructure doubled as an ad hoc vault, and every app's secrets before Infisical
-lived in a namespace with a completely different purpose. Path-scoping inside one
-project gives the same per-app isolation without either problem, and without coupling
-an app's CI secrets to it having been onboarded through idp's `NodeJSApplication` XR
-(deliberately NOT reusing idp's own per-(app,cluster) Infisical project for this - see
-`app-secret-stores.yaml`'s own header).
+An Application's own secrets (Slack webhook, SAST scan credentials, ...) - see
+[app-secrets.md](app-secrets.md) - come from THAT Application's own idp-managed
+Infisical project (`<appName>-<devClusterName>`, provisioned by idp's
+`NodeJSApplication` XR), via a dedicated `ClusterSecretStore` per Application
+(control-plane's own `appSecretStores` values list) that mirrors idp's own store for
+that app field for field. Never a platform-cicd-owned project - app secrets are the
+app owner's to manage, once, in the one place idp already gives every onboarded app.
 
-**Exception: `slack-webhook-url`.** That one key is NOT platform-cicd's to own - it's
-sourced from the app's own idp-managed `<appName>-kind-dev` project instead, the same
-place `idp-application`'s own AI-triage Slack notifications already read it from. A
-real mistake in this migration's first pass required app owners to plant it twice, in
-two different projects - see [app-secrets.md](app-secrets.md)'s own section on this key
-for the fix and the reasoning.
+**2026-08-19 correction, same day as the initial migration**: the first pass at this
+put every Application's secrets in a platform-cicd-owned `platform-cicd-kind-dev`
+project instead, path-scoped per app (`/<type>/<appName>/`) - a real design mistake,
+not a style choice. It meant `slack-webhook-url` specifically needed planting TWICE:
+once there, and once in the app's own project, where `idp-application`'s own AI-triage
+Slack notifications already read it from. Fixed by pointing the whole per-Application
+mechanism at the app's own project - see `app-secret-stores.yaml`'s own header for the
+full story. `platform-cicd-kind-dev` now holds only genuinely platform-wide material
+(`registry-credentials`, `github-app-creds`, relay tokens) - never any app's own
+secret.
+
+This does mean an Application's CI secrets require that Application to have been
+onboarded through idp's `NodeJSApplication` XR first (a real, accepted coupling, not
+true for every platform-cicd tenant today) - an app that hasn't just gets a
+not-ready `ClusterSecretStore`/`ExternalSecret`, the same graceful-degrade shape every
+other "not configured yet" case in this platform already tolerates.
+
+Before Infisical, this worked off each Application's own `<type>-<appName>-dev`
+namespace, treated as an ad hoc vault (a real `Secret` created there by hand) - CI/
+deploy infrastructure doubling as a secret backend. That's gone too.
 
 ## registry-credentials: disseminated via ClusterExternalSecret
 
