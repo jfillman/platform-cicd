@@ -12,36 +12,37 @@ of hand-reverting and re-applying.
 
 `charts/platform-cicd-catalog` wraps the same Task/Pipeline/StepAction YAML that always
 lived under `catalog/` (a "nearly free" conversion - every file was already flat,
-unparameterized, valid standalone YAML). Versioning comes from `Chart.yaml`'s own
-`version:` field plus `helm history`/`helm rollback` - free, no new infrastructure:
+unparameterized, valid standalone YAML). Every real cluster's `platform-cicd-catalog`
+Application tracks `main` with `selfHeal: true` (see
+`gitops-cluster-dev/50-platform-cicd/platform-cicd-catalog/application.yaml`) - a merge
+to `main` is a live production change, immediately. Rollback is `git revert` the merge
+commit, not `helm rollback` - matching [ADR-0004](adr/0004-gitops-only-release.md)'s
+"promotion is ordinary git history" principle rather than a side-channel release
+history only `helm` knows about.
 
-```
-helm rollback platform-cicd-catalog -n platform-catalog       # revert to the previous release
-helm rollback platform-cicd-catalog 3 -n platform-catalog     # revert to a specific revision
-helm history platform-cicd-catalog -n platform-catalog        # see what's been deployed, when
-```
-
-This is **Option A**: one live copy in `platform-catalog`, shared by every Application - a
-rollback affects everyone at once, there's no per-app pinning. That's a real
+This is **Option A**: one live copy in `platform-catalog`, shared by every Application -
+a revert affects everyone at once, there's no per-app pinning. That's a real
 limitation, accepted deliberately for now (see "Option B" below for the alternative and
 why it's not built yet).
 
 ## Testing a change before it reaches every Application
 
-Since the chart needs zero real templating, a **second install of the same chart into a
-second namespace** gives a genuine, live staging target with zero OCI-bundle machinery:
+Since the chart needs zero real templating, a **second, temporary ArgoCD Application
+tracking your feature branch instead of `main`** gives a genuine, live staging target
+with zero OCI-bundle machinery. Copy `platform-cicd-catalog/application.yaml`, and in
+the copy:
 
-```
-hack/promote-catalog.sh canary    # helm upgrade --install into platform-catalog-canary
-```
+- rename it (e.g. `platform-cicd-catalog-canary`)
+- set `spec.source.targetRevision` to your branch, not `main`
+- set `spec.destination.namespace` to `platform-catalog-canary`
+- drop `syncPolicy.automated` (sync by hand while iterating)
 
-Point one dedicated, always-on canary Application's `platformIdentity.catalogNamespace` (see
-the app chart's `values.yaml`) at `platform-catalog-canary` instead of the default
-`platform-catalog`, and run a real build→test→deploy through it. Once you're confident:
-
-```
-hack/promote-catalog.sh promote   # helm upgrade --install into platform-catalog (prod)
-```
+Apply that Application to the cluster, point one dedicated canary Application's
+`platformIdentity.catalogNamespace` (see the app chart's `values.yaml`) at
+`platform-catalog-canary` instead of the default `platform-catalog`, and run a real
+build→test→deploy through it. Once you're confident, merge your branch to `main` - the
+real `platform-cicd-catalog` Application's own `selfHeal` picks it up automatically, no
+separate promote step. Delete the temporary canary Application when done.
 
 ## What CI actually checks (and what it can't)
 
@@ -52,13 +53,12 @@ variable-collision class of bug hit live while building this chart - see that fi
 `{{ repo_url }}` escaping note), and a structural sanity check (every rendered resource
 has a name, an expected `kind`, no stray unrendered template syntax).
 
-What CI **cannot** do: `kind-observe` is a local cluster on the user's own machine with
-no public endpoint, so GitHub-hosted runners can't reach it for a real
-`kubectl apply --dry-run=server` or an actual canary pipeline run. That verification is
-real and still required before promoting - it just runs locally, via
-`hack/promote-catalog.sh`, where real cluster access exists. Don't treat a green CI run
-alone as "safe to promote" - it means the YAML is well-formed, not that a real pipeline
-still works.
+What CI **cannot** do: the platform's clusters are local, with no public endpoint, so
+GitHub-hosted runners can't reach them for a real `kubectl apply --dry-run=server` or an
+actual canary pipeline run. That verification is real and still required before
+merging - it's what the temporary canary Application above is for. Don't treat a green
+CI run alone as "safe to merge" - it means the YAML is well-formed, not that a real
+pipeline still works.
 
 ## Option B: Tekton bundle resolver (target state, not built yet)
 

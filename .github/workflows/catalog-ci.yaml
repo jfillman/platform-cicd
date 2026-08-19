@@ -1,12 +1,13 @@
 name: catalog-ci
 
-# First CI this repo has ever had (Phase 3 item 7 - see docs/catalog-versioning.md).
-# GitHub-hosted runners cannot reach kind-observe (a local cluster on the user's own
-# machine, no public endpoint) - so this workflow deliberately does NOT attempt the
-# "install to a canary namespace and run a real pipeline" verification step from the
-# plan. That step is real and still required before promoting a catalog change, but it
-# runs locally via hack/promote-catalog.sh, where real cluster access actually exists.
-# What this workflow DOES cover (no cluster needed): Helm lint, a full `helm template`
+# First CI this repo has ever had (see docs/admin/catalog-versioning.md).
+# GitHub-hosted runners cannot reach the platform's clusters (local kind clusters, no
+# public endpoint) - so this workflow deliberately does NOT attempt a real "install to
+# a canary namespace and run a real pipeline" verification. That step is real and
+# still required before merging a catalog change to main (which ArgoCD auto-syncs to
+# every real Application) - see catalog-versioning.md for how it's done via a
+# temporary canary Application instead. What this workflow DOES cover (no cluster
+# needed): Helm lint, a full `helm template`
 # render (catches YAML/Go-template syntax errors, the most common real mistake when
 # hand-editing Tekton Task/Pipeline YAML), and a structural sanity check confirming
 # every rendered Task/Pipeline/StepAction still has a name and the expected apiVersion.
