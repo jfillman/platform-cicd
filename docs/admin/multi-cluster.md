@@ -358,20 +358,24 @@ cleanly, baked directly into the release-outcome span's own name instead (a real
 field, no nested-frame rendering involved) - see this section's own "outcome span"
 naming, `release-outcome:<app>/<env> [<status>]`.
 
-## Deferred: relay-token distribution via External Secrets Operator
+## Relay-token distribution via External Secrets Operator (built 2026-08-19)
 
-Every app onboarded to a cluster-mapped env currently needs its own hand-provisioned
-`platform-outcome-relay-token` Secret (see `hack/bootstrap-upper-cluster.sh`) - the same
-shared per-cluster token value, copied by hand into every app's namespace on that
-cluster. Considered replacing this with the same ESO `kubernetes`-provider pattern
-`charts/platform-cicd-control-plane/templates/secretstore/` already uses elsewhere (one
-real Secret in a source namespace, a `ClusterSecretStore`, an `ExternalSecret` per app -
-would need ESO installed on the upper cluster too, which today only runs ArgoCD).
-**Deliberately not built this pass** - the user's own plan is to package this platform's
-k8s-app delivery as a proper Helm chart in a future step, at which point the
-`ExternalSecret` belongs there (rendered alongside the rest of that chart's own
-resources) rather than being generated ad hoc by `open-release-pr.yaml`. Revisit once
-that chart exists, not before.
+**Was deferred, now built** - the thing this was waiting on ("package this platform's
+k8s-app delivery as a proper Helm chart") is exactly what `idp-service-catalog`'s
+`idp-application` chart now is. Every app onboarded to a cluster-mapped env used to need
+its own hand-provisioned `platform-outcome-relay-token` Secret (`hack/
+bootstrap-upper-cluster.sh`'s old per-app step) - the same shared per-cluster token
+value, copied by hand into every app's namespace on that cluster.
+
+Now: the upper cluster (kind-prod) has its own Infisical-backed `platform-secret-store`
+(`gitops-cluster-kind-prod/10-crds-operators/external-secrets/`, mirroring
+platform-cicd's own on kind-dev - see [secrets-management.md](secrets-management.md)),
+and `idp-application`'s own `templates/release-tracking/
+relay-token-external-secret.yaml` syncs `platform-outcome-relay-token` from it
+automatically, gated on `releaseTracking` exactly like the hook Jobs/RBAC it
+accompanies. The token value still has to be planted into that cluster's own Infisical
+project by hand (once per cluster, not per app) - what's gone is the N-times-per-app
+manual Secret copy `hack/bootstrap-upper-cluster.sh` used to require.
 
 ## The DORA exporter (Phase F)
 
@@ -556,9 +560,10 @@ PR URL was known), the live Deployment on `kind-prod` carried all four
 
 Remaining, explicitly deferred: self-service onboarding tooling for additional
 tenants/clusters, real TLS/ingress hardening for the relay (same-host podman
-reachability is what's actually verified), a real second env/cluster beyond this one
-proof, and moving relay-token distribution onto External Secrets Operator (deferred
-until this app's k8s delivery is packaged as its own Helm chart - see above).
+reachability is what's actually verified), and a real second env/cluster beyond this one
+proof. Relay-token distribution onto External Secrets Operator - deferred at the time
+this section was written - is now built, see "Relay-token distribution via External
+Secrets Operator (built 2026-08-19)" above.
 
 **2026-08-12 follow-up** (see "The outcome span" above for the full design): closed a
 real gap found live - `release-outcome-notify` had never had a tracing task at all.
@@ -626,10 +631,9 @@ Deployment/RBAC/Service are all gated behind `if .Values.clusters`
 working path, on top of the hook-Job removal. Re-populated with a real `kind-prod` entry
 to fix both at once.
 
-**Still manual, unchanged**: `platform-outcome-relay-token` still needs hand-provisioning
-per app namespace on the upper cluster (`hack/bootstrap-upper-cluster.sh`'s own
-instructions) - the deferred External Secrets Operator distribution noted below hasn't
-been built.
+**2026-08-19 update**: `platform-outcome-relay-token` no longer needs hand-provisioning
+per app namespace - see "Relay-token distribution via External Secrets Operator (built
+2026-08-19)" above. At the time this section was written, it still did.
 
 **Live-verified end to end, 2026-08-17**, against the real `checkout-api` tenant on the
 real `kind-prod` cluster - not just `helm template`. A real commit to `checkout-api`

@@ -72,35 +72,20 @@ pipelines: {}
 # Stage presence is derived from `.Values.pipelines`; the older top-level `pipeline:`
 # array is no longer used.
 
-# Optional. Each entry pulls one key out of this Application's own backend secret store
-# into an ExternalSecret-synced app-secrets Kubernetes Secret (see
-# docs/admin/app-secrets.md). Empty by default - the SecretStore/ExternalSecret
-# templates only render when non-empty.
+# Optional. Each entry pulls one key out of this Application's own Infisical secretsPath
+# (see docs/admin/app-secrets.md) into an ExternalSecret-synced app-secrets Kubernetes
+# Secret. Empty by default - the ExternalSecret template only renders when non-empty.
 #
 # - name: SLACK_WEBHOOK_URL   # key inside the synced Secret's data, and env var name
 #                              # steps typically mount it under
-#   key: slack-webhook-url    # optional - the key's actual name in the backend Secret,
-#                              # if different from `name` (defaults to `name`)
+#   key: slack-webhook-url    # optional - the secret's actual name in Infisical, if
+#                              # different from `name` (defaults to `name`)
 secrets: []
-
-# Backend secret store location: a Kubernetes Secret in this Application's own dev
-# namespace (<type>-<app-name>-dev). The ClusterSecretStore pointed at that namespace is
-# rendered by the control-plane chart, not this one - this value only names the backend
-# Secret object this chart's ExternalSecret reads from. See docs/admin/app-secrets.md.
-appSecretStore:
-  secretName: app-secrets    # the one backend Secret in <type>-<app-name>-dev, holding every key any cicd.yaml declares under secrets:
 
 # Platform-wide constants every Application install shares (not per-app identity, so
 # kept outside platformIdentity). Defaults to this repo's own published image (real,
 # public, working) - override if you've built and published your own copy.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
-
-# Must match charts/platform-cicd-control-plane/values.yaml's secretStore.name/kind -
-# ClusterSecretStore is cluster-scoped, so this is a cross-chart reference by name. See
-# docs/admin/secrets-management.md.
-secretStore:
-  name: platform-secret-store
-  kind: ClusterSecretStore
 
 # Placeholder only - a real install MUST override every field here via
 # `-f platform-identity.yaml`. Left empty rather than a fake example so an accidental

@@ -8,39 +8,44 @@ motivated building this generically instead of one-off per secret, same as
 
 ## Where the backend store lives
 
-Each Application's own backend secret store is a real Kubernetes Secret living in that
-Application's **existing dev environment namespace** (`<type>-<app-name>-dev`) - no new
-namespace convention, reusing infrastructure that already exists for every Application.
-This is a deliberate, explicit choice (not an assumption this doc is guessing at): for
-now, before a real external vault exists, a plain `kubectl create secret` in the dev
-namespace is the backend, exactly the same "manual by design" pattern
-[secrets-management.md](secrets-management.md) already uses for the shared
-`platform-secrets` namespace.
+**2026-08-19: migrated onto Infisical.** Each Application's own secrets now live under a
+dedicated `secretsPath` (`/<type>/<appName>/`) inside the control plane's OWN Infisical
+project (`platform-cicd-kind-dev` - see [secrets-management.md](secrets-management.md)),
+not in a hand-created `Secret` in that Application's own dev environment namespace
+(`<type>-<app-name>-dev`) the way this worked before. That namespace was CI/deploy
+infrastructure doing double duty as an ad hoc vault - real per-app isolation now comes
+from Infisical's own path scoping instead, with nothing app-specific added to a
+namespace that has a different actual purpose.
+
+Deliberately NOT idp-service-catalog's own per-(app,cluster) Infisical project for this
+same app (the one its `NodeJSApplication` XR provisions, `<appName>-kind-dev`): reusing
+it would couple an app's CI secrets (Slack webhook, SAST token) to that app having
+already been onboarded through idp, which isn't true for every platform-cicd tenant.
+The control plane's own project is a sibling, unrelated to whether idp onboarding has
+happened for this app.
 
 ```yaml
-appSecretStore:
-  secretName: app-secrets    # the ONE backend Secret object in <type>-<app-name>-dev
+secrets:
+  - name: slack-webhook-url      # key in the resulting app-secrets Kubernetes Secret,
+                                   # and the secret's name in Infisical under this app's
+                                   # own secretsPath
 ```
 
-That's the only per-Application value the **app chart** needs - it names the backend
-Secret *object*, not its namespace (the namespace is always `<type>-<app-name>-dev`, a
-fixed formula, not configurable per Application).
+No per-Application app-chart value names the backend any more (the old
+`appSecretStore.secretName` field is gone) - the backend is entirely determined by
+`platformIdentity.type`/`.appName`, which the app chart already requires.
 
 ## Why a ClusterSecretStore per Application, defined in the control-plane chart
 
-[secrets-management.md](secrets-management.md)'s `platform-secrets` `ClusterSecretStore`
-is correct for `registry-credentials` because every Application genuinely shares one
-backend (one `ghcr.io/jfillman` registry) - one `ClusterSecretStore`, one fixed
-`remoteNamespace`, cluster-wide. An Application's own secrets need a *different*
-`remoteNamespace` per Application (`<type>-<app-name>-dev` varies by Application) - so
-this uses one `ClusterSecretStore` **per Application** instead
-(`ClusterSecretStore` is what the user asked for here, not a namespaced `SecretStore` -
-functionally similar, but cluster-scoped, matching the shape `platform-secrets` already
-uses).
+An Application's own secrets need a distinct `secretsScope.secretsPath` per Application
+(`/<type>/<appName>/`) - so this uses one `ClusterSecretStore` **per Application**
+(`ClusterSecretStore` is cluster-scoped, matching the shape the platform-wide
+`platform-secret-store` already uses; a namespaced `SecretStore` couldn't be templated
+per-app from a cluster-wide chart install the same way).
 
 These are rendered by the **control-plane chart**, not the per-Application app chart -
 `charts/platform-cicd-control-plane/templates/secretstore/app-secret-stores.yaml`,
-looping over a new `appSecretStores` values list:
+looping over the `appSecretStores` values list:
 
 ```yaml
 # charts/platform-cicd-control-plane/values.yaml
@@ -50,10 +55,11 @@ appSecretStores:
 ```
 
 Each entry renders one `ClusterSecretStore` named `<type>-<appName>-secret-store`,
-`remoteNamespace: <type>-<appName>-dev`. Adding a new Application here (and re-running
-`helm upgrade` on the control-plane chart) is a deliberate, manual, one-time-per-
-Application step - the same kind of manual step `platform-secrets` onboarding already
-is, not a new class of toil.
+`secretsScope.secretsPath: /<type>/<appName>/` inside the control plane's own Infisical
+project - same `hostAPI`/`auth` as the platform-wide store, just a narrower scope.
+Adding a new Application here (and pushing to `main` - the control-plane chart's own
+ArgoCD Application has automated selfHeal sync, no manual `helm upgrade` needed) is a
+deliberate, manual, one-time-per-Application step.
 
 **Why here and not in the app chart**: a `ClusterSecretStore` is cluster-scoped - there
 is exactly one object per name, cluster-wide, and rendering it from a per-Application
@@ -71,18 +77,13 @@ Application whose `secrets:` list is non-empty but that's missing from control-p
 (a normal ESO error status, not a hard failure of the Application's pipelines - nothing
 mounts a missing key differently than an unconfigured one, see below).
 
-No new RBAC needed either way: ESO's own installed `external-secrets-controller`
-`ClusterRole` already grants `get`/`list`/`watch` on Secrets with no namespace
-restriction (confirmed live via `kubectl get clusterrole external-secrets-controller -o
-yaml`) - a new `remoteNamespace` per entry costs nothing extra.
-
 ## `cicd.yaml`
 
 ```yaml
 secrets:
   - name: slack-webhook-url      # key in the resulting app-secrets Kubernetes Secret
   - name: sast-scan-token
-    key: sast-creds-token        # only needed when the backend key is named differently
+    key: sast-creds-token        # only needed when the Infisical secret's own name differs
 ```
 
 Each entry becomes one `data[]` entry in a single per-Application `ExternalSecret`
@@ -90,8 +91,11 @@ Each entry becomes one `data[]` entry in a single per-Application `ExternalSecre
 (`app-secrets`) - not one Secret per declared entry. A consuming Task always mounts the
 same Secret name regardless of how many keys an Application has declared; adding a new
 purpose is a `cicd.yaml` edit only, never a new volume/volumeMount anywhere. `key`
-defaults to `name` - set it only when the name you want exposed as differs from the
-name it actually has in the backend store.
+defaults to `name` - set it only when the secret's actual name in Infisical differs from
+the name you want exposed as. No `remoteRef.property` - ESO's `infisical` provider
+treats `property` as "extract a field from a structured/JSON secret value," not "which
+flat secret to read" (confirmed live by idp-service-catalog); every secret here is an
+ordinary flat value, so `key` alone is correct.
 
 The `ExternalSecret` renders **only** when `secrets:` is non-empty - an Application
 that never uses this feature gets no dangling resource.
@@ -123,17 +127,15 @@ steps:
 ```
 
 A Secret volume mounts one file per data key, named after the key - this is exactly
-what `notify-slack.yaml` already does for `slack-webhook-url`, now sourced from
-`app-secrets` instead of a hand-created, per-Application Secret.
+what `notify-slack.yaml` already does for `slack-webhook-url`, sourced from
+`app-secrets`.
 
 ## `slack-webhook-url`: what changed
 
 Previously (see [notifications.md](notifications.md)'s "The bug this fixes"): a manual,
 per-Application `kubectl create secret generic slack-webhook-url ...`, deliberately kept
-outside ESO - "not a full ESO SecretStore pipeline for one demo webhook." That tradeoff
-made sense with exactly one consumer. It stopped making sense once a second real
-consumer (SAST creds) needed the identical mechanism - building the general pipeline
-once now covers both, and every future case, for the same cost.
+outside ESO. That mechanism, and the later dev-namespace-as-backend one that replaced
+it, are both gone - the backend is Infisical now.
 
 To enable Slack notifications for an Application today:
 
@@ -150,16 +152,10 @@ To enable Slack notifications for an Application today:
        enabled: true
        channel: "#your-channel"
    ```
-3. Create/update the Application's backend Secret in its own dev namespace, with a
-   `slack-webhook-url` key holding a real Slack incoming-webhook URL:
-   ```
-   kubectl create secret generic app-secrets -n <type>-<app-name>-dev \
-     --from-literal=slack-webhook-url=<your real Slack incoming-webhook URL> \
-     --dry-run=client -o yaml | kubectl apply -f -
-   ```
-   (`--dry-run=client -o yaml | kubectl apply -f -` rather than a bare `kubectl create`
-   so re-running this to add a second key, e.g. `sast-scan-token` later, updates the
-   same Secret object instead of erroring on AlreadyExists.)
+3. Plant a `slack-webhook-url` key under this Application's own `/<type>/<appName>/`
+   path in the control plane's Infisical project (`platform-cicd-kind-dev`), holding a
+   real Slack incoming-webhook URL - via the Infisical UI/API, never through this chart
+   or committed to this repo.
 
 Nothing else to apply - `notify-slack.yaml`'s volume mount is already wired into every
 pipeline via the existing, unconditional `notify` `finally` task.
@@ -168,21 +164,14 @@ pipeline via the existing, unconditional `notify` `finally` task.
 
 - `helm template`/`helm lint` both the control-plane chart (with a real
   `appSecretStores` entry) and the app chart (with and without `secrets:` set),
-  confirming the `ClusterSecretStore`/`ExternalSecret` render correctly, the
+  confirming the `ClusterSecretStore`/`ExternalSecret` render correctly and the
   `ExternalSecret`'s `secretStoreRef.name` matches the `ClusterSecretStore`'s own
-  `metadata.name` exactly, and the `ExternalSecret` only renders when `secrets:` is
-  non-empty.
-- ESO's `kubernetes` provider `data[].remoteRef.property` (extracting ONE key from a
-  named remote Secret, as opposed to `registry-credentials`' whole-secret `dataFrom.
-  extract`) was verified against the real cluster, not assumed from ESO's docs: a real
-  backend Secret with multiple keys was created in a real Application's dev namespace,
-  the matching `ClusterSecretStore`/`ExternalSecret` deployed, and the resulting target
-  `app-secrets` Secret confirmed to contain only the specific declared key/value,
-  correctly renamed per `secretKey`.
-- RBAC check: confirmed live (`kubectl get clusterrole external-secrets-controller -o
-  yaml`) that ESO's installed ClusterRole already has unrestricted Secret access before
-  claiming "no new RBAC needed" rather than assuming it.
+  `metadata.name` exactly.
+- Live: a real Infisical secret planted under a real Application's `secretsPath`,
+  confirming the resulting `app-secrets` Secret contains only the specific declared
+  key/value, correctly renamed per `secretKey`, via the `infisical` provider (not the
+  old `kubernetes` provider this replaced).
 - End-to-end Slack check: a real pipeline run for an Application with `secrets:
   [{name: slack-webhook-url}]` and `notifications.slack.enabled: true` configured,
-  confirming a real message lands in the real Slack channel via the ESO-synced secret
-  (not the old manually-created one).
+  confirming a real message lands in the real Slack channel via the Infisical-synced
+  secret.

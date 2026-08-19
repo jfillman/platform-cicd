@@ -129,41 +129,46 @@ chains:
     artifacts.oci.storage: "oci"
     transparency.enabled: "false"
 
-# Phase 3 item 7: External Secrets Operator is platform infrastructure, not just a
-# bootstrap-time install - every chart in this platform should consume secret material
-# via ExternalSecret, not a hand-applied raw Secret, wherever a real backend can back it.
-# ESO itself has zero configured backends today. This ClusterSecretStore is the
-# pragmatic bridge: ESO's own built-in `kubernetes` provider, pointed at one dedicated,
-# narrowly-RBAC'd namespace the user alone writes real Secrets into via
-# `kubectl create secret` exactly as today (no chat-pasted credentials, no change to
-# that existing convention) - every ExternalSecret elsewhere just mirrors/syncs from
-# there. Deliberately not a real external vault; the actual backend (Vault, a cloud
-# secrets manager, or eventually community Infisical once Dream IDP exists) is a future,
-# separately-decided swap - this only needs to change here, in one values file, not in
-# every chart that consumes an ExternalSecret.
+# Phase 3 item 7 / Infisical migration: External Secrets Operator is platform
+# infrastructure, not just a bootstrap-time install - every chart in this platform
+# consumes secret material via ExternalSecret, not a hand-applied raw Secret. The real
+# backend is now self-hosted Infisical (via infisical-secretstore-operator, the same
+# mechanism idp-service-catalog's own apps use) - see
+# templates/secretstore/infisical-project.yaml/cluster-secret-store.yaml. Store
+# name/kind stay values (not hardcoded in every downstream chart) so a future backend
+# swap is still a one-file change here, same reasoning as before, just already landed
+# on Infisical instead of still deferring to it.
 secretStore:
   name: platform-secret-store
   kind: ClusterSecretStore
-  sourceNamespace: platform-secrets
+  infisical:
+    # This control plane's own Infisical project slug - see infisical-project.yaml's
+    # header for why it's a dedicated project, not a reused app project.
+    projectSlug: platform-cicd-kind-dev
+    # In-cluster Service DNS for idp-service-catalog's self-hosted Infisical install
+    # (gitops-cluster-dev/10-crds-operators/infisical) - only correct when this chart
+    # runs on the same cluster that hosts Infisical, see cluster-secret-store.yaml.
+    hostAPI: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080/api
+    credentialsSecretName: platform-cicd-infisical-creds
 
 # Per-Application secret stores (docs/admin/app-secrets.md) - a DIFFERENT mechanism from
 # secretStore above, not another entry in it: an Application's own secrets (Slack
-# webhook, SAST creds, ...) come from that ONE Application's own backend, not the
-# platform-wide shared namespace registry-credentials uses, so each needs its own
-# ClusterSecretStore with its own remoteNamespace. ClusterSecretStore is cluster-scoped
-# (no `spec.kubernetes.remoteNamespace` templating possible at the app-chart level the
-# way a namespaced SecretStore would allow), so these are rendered HERE, once per
-# Application, from this list - not by the per-Application app chart itself.
+# webhook, SAST creds, ...) get their own ClusterSecretStore, scoped to a
+# secretsPath (/<type>/<appName>/) inside the control plane's OWN Infisical project
+# (secretStore.infisical.projectSlug above) - real per-app isolation via Infisical path
+# scoping, not a separate Infisical project or Kubernetes namespace per app.
+# ClusterSecretStore is cluster-scoped (no per-app templating possible at the app-chart
+# level the way a namespaced SecretStore would allow), so these are rendered HERE, once
+# per Application, from this list - not by the per-Application app chart itself.
 #
-# remoteNamespace is always <type>-<appName>-dev - reusing the Application's own
-# existing dev environment namespace as its secret backend (no new namespace
-# convention), per the user's explicit direction. Each list entry becomes one
-# ClusterSecretStore named "<type>-<appName>-secret-store" -
+# Each list entry becomes one ClusterSecretStore named "<type>-<appName>-secret-store" -
 # charts/platform-cicd-app/templates/secrets/app-secrets-external-secret.yaml computes
 # and references that exact same name, so adding an app here and installing that app's
 # own chart with a matching `secrets:` list in its cicd.yaml are the only two steps
 # needed - no name to keep in sync by hand beyond type+appName, which both charts
-# already require anyway.
+# already require anyway. The app's actual secret values are planted under that
+# secretsPath in Infisical by hand (same "manual by design" posture as every other
+# credential's ultimate source in this platform), not in a dev-namespace Secret.
 #
 # Empty by default - this is cluster state (which real Applications are onboarded),
 # not chart source, so real entries live in each cluster's own gitops-cluster-<name>

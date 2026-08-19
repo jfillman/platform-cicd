@@ -115,13 +115,17 @@ a Helm values file, not the raw `deployment.yaml` this procedure describes seedi
 This is all one-time setup per app, same spirit as onboarding the app repo itself (see
 `docs/admin/onboarding-mechanics.md`) - not something a developer does per release.
 
-1. **Copy the GitHub App credentials** into `platform-system`, once per cluster, not
-   per Application (skip if already done):
-   ```
-   kubectl get secret pipelines-as-code-secret -n pipelines-as-code -o json \
-     | jq '{apiVersion, kind, type, data: {"github-application-id": .data["github-application-id"], "github-private-key": .data["github-private-key"]}, metadata: {name: "github-app-creds", namespace: "platform-system"}}' \
-     | kubectl apply -f -
-   ```
+1. **Plant the GitHub App credentials into Infisical**, once per cluster, not per
+   Application (skip if already done) - **2026-08-19: no longer a `kubectl` copy of
+   `pipelines-as-code-secret`.** `github-app-creds` in `platform-system` is now a real
+   `ExternalSecret` (`charts/platform-cicd-control-plane/templates/secretstore/
+   github-app-creds-external-secret.yaml`), synced from the control plane's own
+   Infisical project (`platform-cicd-kind-dev`) - see
+   [secrets-management.md](secrets-management.md). Read the GitHub App's id/private key
+   out of `pipelines-as-code-secret` once and plant them as `github-application-id`/
+   `github-private-key` keys in Infisical (via the UI/API, never through this chart or
+   committed to this repo); the `ExternalSecret` picks them up automatically from
+   there.
 
 2. **Create the `gitops-<app-name>` repo on GitHub** (e.g. `gitops-nodejs-demo-app`) and
    push `<app-name>/staging/deployment.yaml` + `service.yaml` (adapted from the app's own

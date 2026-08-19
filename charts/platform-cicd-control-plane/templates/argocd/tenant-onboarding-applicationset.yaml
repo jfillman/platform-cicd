@@ -116,3 +116,12 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+        # Lets the registry-credentials ClusterExternalSecret
+        # (control-plane's own templates/secretstore/
+        # registry-credentials-cluster-external-secret.yaml) select this namespace
+        # automatically - see that file's header. managedNamespaceMetadata only takes
+        # effect alongside CreateNamespace=true (ArgoCD re-applies it every sync, so a
+        # label added here later also lands on an already-existing namespace).
+        managedNamespaceMetadata:
+          labels:
+            platform.io/managed-secrets: "true"
