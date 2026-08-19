@@ -1,0 +1,62 @@
+# Example 9: Ephemeral preview environments per PR and per branch
+#
+# A DIFFERENT mechanism from the `pipelines:` flows in every other example - this is
+# driven by an ArgoCD ApplicationSet (a `pullRequest` generator and/or a branch-pattern
+# generator), not by a Tekton Pipeline stage. It spins up a full, real, temporary
+# deployment of your app per matching PR or branch, and tears it down automatically
+# after `ttl` with no manual cleanup. See ../features.md#ephemeral-environments and
+# ../../ephemeral-environments.md for the full mechanics.
+#
+# You still need a normal build flow (below) so there's an image for the ephemeral
+# environment to actually deploy - ephemeralEnvironments doesn't build anything itself,
+# it only decides whether/how long a preview deployment exists once an image is
+# available.
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+test:
+  suite: integration
+
+deploy:
+  lowerEnvironments: [dev]
+
+ephemeralEnvironments:
+  pullRequest:
+    enabled: true
+    labels: ["preview"]     # add this label to a PR on GitHub to get it a live,
+                             # dedicated environment - remove the label (or close/merge
+                             # the PR) and it tears down
+  branch:
+    enabled: true
+    patterns: ["preview/*"]  # any branch matching this glob also gets its own
+                              # environment, independent of any PR
+  ttl: 3d                    # torn down automatically 3 days after its LAST successful
+                              # deploy, not 3 days after creation - pushing new commits
+                              # resets the clock
+
+pipelines:
+  ci:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+        env: dev
+      - stage: deploy
+        env: dev
+
+  pr-check:
+    trigger:
+      source: git
+      event: pull_request
+      branch: main
+    steps:
+      - stage: build
+      # this build's image is what a PR-preview environment (above) actually deploys
+      # once you label the PR "preview"

@@ -1,38 +1,27 @@
 #!/usr/bin/env bash
 # hack/bootstrap-upper-cluster.sh
 #
-# Bootstraps an "upper environment" cluster (staging/prod-tier - anything release steps
-# can target via cicd.yaml's cluster: field, see docs/multi-cluster.md) with a pinned
-# ArgoCD install. Companion to hack/bootstrap.sh, which provisions the dev cluster
-# (kind-observe) - this script is deliberately separate rather than a mode flag on that
-# one, since the two clusters install almost entirely disjoint things (Tekton/PaC/the
-# broker vs. just ArgoCD) and conflating them would make both harder to read.
+# Bootstraps an "upper environment" cluster (staging/prod-tier, targeted via cicd.yaml's
+# cluster: field) with a pinned ArgoCD install. Separate from hack/bootstrap.sh (which
+# provisions the dev cluster) rather than a mode flag on it, since the two install
+# almost entirely disjoint things (Tekton/PaC/the broker vs. just ArgoCD).
 #
-# No ArgoCD Notifications controller here (an earlier version of this script enabled
-# and configured it) - the release-outcome feedback loop is now ArgoCD sync hooks
-# (PostSync/SyncFail Jobs, committed per-release by open-release-pr.yaml, see
-# catalog/lib/argocd-outcome-hook.sh) instead, not a Notifications subscription. See
-# docs/multi-cluster.md for why: Notifications fired on ANY completed sync, including
-# pure selfHeal drift-correction with zero release involved - confirmed live.
+# No ArgoCD Notifications controller - the release-outcome feedback loop is ArgoCD sync
+# hooks instead (PostSync/SyncFail Jobs, see catalog/lib/argocd-outcome-hook.sh):
+# Notifications fired on any completed sync, including pure selfHeal drift with no
+# release involved. See docs/admin/multi-cluster.md.
 #
-# Like hack/bootstrap.sh, this targets an EXISTING cluster context rather than creating
-# one - it does not run `kind create cluster`. The first upper cluster this platform
-# uses is "kind-prod" (a kind cluster literally named "prod", created ad hoc during
-# Phase 3 item 4's design exploration, 2026-08-03 - its NAME is "prod" but the
-# environment it currently hosts is "staging", per cicd.yaml's config-driven env->cluster
-# mapping; see docs/multi-cluster.md's terminology note). A second upper cluster is just
-# a second run of this script against a different context/values.
-#
-# Idempotent: safe to re-run.
+# Targets an EXISTING cluster context, like hack/bootstrap.sh - never runs `kind create
+# cluster`. Note: "kind-prod" (the first upper cluster) is named "prod" but currently
+# hosts the "staging" environment per cicd.yaml's env->cluster mapping - see
+# docs/admin/multi-cluster.md's terminology note. Idempotent, safe to re-run.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CONTEXT="${UPPER_CLUSTER_CONTEXT:-kind-prod}"
-ARGOCD_CHART_VERSION="10.3.2" # app version v3.5.0 - pinned deliberately, see hack/bootstrap.sh's
-                               # own PAC_VERSION/TEKTON_DASHBOARD_VERSION comments for why
-                               # ("latest" on a shared cluster is how kind-observe's ArgoCD ended
-                               # up with no recorded version anywhere - not repeating that here).
+ARGOCD_CHART_VERSION="10.3.2" # app version v3.5.0 - pinned, not "latest" (see hack/bootstrap.sh's
+                               # own version-pinning comments for why)
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
 warn() { echo -e "\033[1;33mwarning: $*\033[0m" >&2; }
@@ -54,20 +43,16 @@ fi
 
 log "CNI check (informational, matches kind-observe's own posture - see hack/bootstrap.sh)"
 if ! kubectl --context "${CONTEXT}" get pods -n kube-system -l k8s-app=calico-node --no-headers 2>/dev/null | grep -q .; then
-  warn "${CONTEXT} runs kindnet, not Calico - same as kind-observe. Deliberately not"
-  warn "introducing an inconsistent NetworkPolicy posture between the two clusters without"
-  warn "a reason to - see docs/multi-cluster.md."
+  warn "${CONTEXT} runs kindnet, not Calico - same as kind-observe, deliberately kept"
+  warn "consistent. See docs/admin/multi-cluster.md."
 fi
 
-log "Cross-cluster reachability (informational - verified once live, not re-checked every run)"
-echo "  Confirmed 2026-08-10: podman's kind provider puts every kind cluster's node"
-echo "  container on one shared 'kind' bridge network by default (unlike Docker Desktop's"
-echo "  kind provider, which gives each cluster its own network) - kind-observe and"
-echo "  kind-prod's node containers can already reach each other directly by container IP"
-echo "  with no extra 'podman network connect' step. See docs/multi-cluster.md for the"
-echo "  live verification (container-to-container curl against each other's :6443)."
-echo "  A NodePort Service on either cluster is reachable from the other's pods at"
-echo "  <node-container-ip>:<nodePort> on this same basis."
+log "Cross-cluster reachability (informational, verified once live)"
+echo "  podman's kind provider puts every kind cluster's node container on one shared"
+echo "  bridge network by default - kind-observe and kind-prod's nodes reach each other"
+echo "  directly by container IP, no 'podman network connect' needed. A NodePort Service"
+echo "  on either cluster is reachable from the other's pods on the same basis. See"
+echo "  docs/admin/multi-cluster.md."
 
 log "1/2 - ArgoCD (pinned chart ${ARGOCD_CHART_VERSION})"
 helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
@@ -82,7 +67,7 @@ helm upgrade --install argocd argo/argo-cd \
 log "app-of-apps root Application"
 echo "  Not yet applied by this script - per-tenant gitops repo's clusters/${CONTEXT}/"
 echo "  applications/ path needs a one-time root Application pointed at it. See"
-echo "  docs/multi-cluster.md's Phase D section; done by hand for the first tenant."
+echo "  docs/admin/multi-cluster.md's Phase D section; done by hand for the first tenant."
 
 log "Per-app outcome-relay secret (manual, per app onboarded to this cluster)"
 echo "  Each app's own namespace on ${CONTEXT} needs a platform-outcome-relay-token"
@@ -92,7 +77,7 @@ echo "  dev cluster. Create it once per app, e.g.:"
 echo "    kubectl --context ${CONTEXT} create secret generic platform-outcome-relay-token \\"
 echo "      -n <type>-<app-name>-<env> --from-literal=token=<value> \\"
 echo "      --dry-run=client -o yaml | kubectl --context ${CONTEXT} apply -f -"
-echo "  See docs/multi-cluster.md - never pasted through chat."
+echo "  See docs/admin/multi-cluster.md - never pasted through chat."
 
 log "2/2 - done"
 echo "ArgoCD UI: kubectl --context ${CONTEXT} -n argocd port-forward svc/argocd-server 8080:443"

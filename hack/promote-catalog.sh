@@ -1,22 +1,18 @@
 #!/usr/bin/env bash
 # hack/promote-catalog.sh
 #
-# The real, cluster-touching half of catalog versioning/testing (see
-# docs/catalog-versioning.md) - runs locally, not in CI, because kind-observe has no
-# public endpoint GitHub-hosted runners can reach (see .github/workflows/
-# catalog-ci.yaml's own header comment). CI covers lint/render/structural checks on
-# every PR; this script covers the "does a real pipeline still work" question CI can't
-# answer, using a second install of the SAME chart into a second namespace rather than
-# any OCI-bundle machinery - see docs/catalog-versioning.md's Option A/B discussion for
-# why this is deliberately the simple path for now.
+# The cluster-touching half of catalog versioning (see docs/admin/catalog-versioning.md)
+# - runs locally, not CI, since kind-observe has no public endpoint for GitHub-hosted
+# runners to reach. CI covers lint/render checks on every PR; this answers "does a real
+# pipeline still work", via a second install of the same chart into a second namespace.
 #
 # Usage:
 #   hack/promote-catalog.sh canary   - install/upgrade the canary release only
 #   hack/promote-catalog.sh promote  - install/upgrade the real production release
 #
-# Canary testing itself (pointing one dedicated Application's platformIdentity.catalogNamespace
-# at platform-catalog-canary and running a real build->test->deploy) is a manual step -
-# this script only handles the two Helm operations, not picking/running a canary Application.
+# Canary testing itself (pointing a dedicated Application's catalogNamespace at
+# platform-catalog-canary and running a real build->test->deploy) is a manual step -
+# this script only handles the two Helm operations.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

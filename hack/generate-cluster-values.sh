@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
-# hack/generate-cluster-values.sh <context> <cluster-name>
+# hack/generate-cluster-values.sh <context> <cluster-name> [output-dir]
 #
-# Cluster-agnostic values generation (2026-08-16, feedback_cluster_agnostic_idp memory):
-# replaces the hand-typed hack/values-kind-dev.yaml precedent (openssl run by hand,
-# kube-root-ca.crt copy-pasted, YAML assembled manually) with a single script run.
-# Produces hack/values-<context>.yaml, ready to commit and auto-discovered by
-# hack/bootstrap.sh (see that script's own VALUES_FILE auto-discovery comment) - no
-# separate flag needed on the next bootstrap run.
+# Cluster-agnostic values generation: replaces hand-typing a per-cluster values file
+# (openssl run by hand, kube-root-ca.crt copy-pasted, YAML assembled manually) with a
+# single script run. Produces <output-dir>/values-<context>.yaml.
+#
+# output-dir defaults to this repo's own hack/ - useful for a one-off manual run (e.g.
+# a fresh cluster with no gitops repo yet, consumed by hack/bootstrap.sh's VALUES_FILE
+# auto-discovery, see that script). For any cluster managed declaratively via ArgoCD,
+# pass the target gitops-cluster-<name> checkout instead, e.g.:
+#   ./hack/generate-cluster-values.sh kind-dev kind-dev \
+#     ../gitops-cluster-dev/50-platform-cicd/platform-cicd-control-plane
+# so the generated file lands next to the Application that consumes it (via a
+# multi-source $ref, see that Application's own header) rather than inside
+# platform-cicd itself - platform-cicd carries no cluster-specific state this way,
+# staying installable standalone on any cluster.
 #
 # Only genuinely irreducible per-cluster material goes through this script: the
 # cluster's own API server root CA (read live, can't be derived) and a freshly,
@@ -24,7 +32,7 @@
 # beyond a temp directory this script deletes on exit, matching every prior per-cluster
 # Fulcio bootstrap in this platform's history.
 #
-# Idempotent for the values file (safe to re-run - overwrites hack/values-<context>.yaml
+# Idempotent for the values file (safe to re-run - overwrites values-<context>.yaml
 # with the SAME cluster-CA content, byte-for-byte, since that's read live each time).
 # NOT idempotent for the Fulcio Secrets - re-running this against a cluster that already
 # has fulcio-secret/fulcio-server-config would mint a SECOND, different root CA and
@@ -34,8 +42,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CONTEXT="${1:?usage: hack/generate-cluster-values.sh <context> <cluster-name>}"
-CLUSTER_NAME="${2:?usage: hack/generate-cluster-values.sh <context> <cluster-name>}"
+CONTEXT="${1:?usage: hack/generate-cluster-values.sh <context> <cluster-name> [output-dir]}"
+CLUSTER_NAME="${2:?usage: hack/generate-cluster-values.sh <context> <cluster-name> [output-dir]}"
+OUTPUT_DIR="${3:-hack}"
 FORCE="${FORCE:-0}"
 
 log() { echo -e "\n\033[1;36m==> $*\033[0m"; }
@@ -122,12 +131,20 @@ kubectl --context "${CONTEXT}" create secret generic fulcio-server-config -n ful
   --from-file="${TMPDIR}/server.yaml" \
   --dry-run=client -o yaml | kubectl --context "${CONTEXT}" apply -f -
 
-log "4/4 - writing hack/values-${CONTEXT}.yaml (public material only - clusterName + both CA certs, no private key/passphrase)"
+OUTPUT_FILE="${OUTPUT_DIR}/values-${CONTEXT}.yaml"
+mkdir -p "${OUTPUT_DIR}"
+
+log "4/4 - writing ${OUTPUT_FILE} (public material only - clusterName + both CA certs, no private key/passphrase)"
 {
-  echo "# hack/values-${CONTEXT}.yaml"
+  echo "# values-${CONTEXT}.yaml"
   echo "#"
-  echo "# Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by hack/generate-cluster-values.sh ${CONTEXT} ${CLUSTER_NAME}."
-  echo "# Auto-discovered by hack/bootstrap.sh - no VALUES_FILE flag needed for this cluster."
+  echo "# Generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by platform-cicd's hack/generate-cluster-values.sh ${CONTEXT} ${CLUSTER_NAME}."
+  if [[ "${OUTPUT_DIR}" == "hack" ]]; then
+    echo "# Auto-discovered by hack/bootstrap.sh - no VALUES_FILE flag needed for this cluster."
+  else
+    echo "# Consumed by this cluster's ArgoCD Application for platform-cicd-control-plane via a"
+    echo "# multi-source \$ref - see that Application's own header."
+  fi
   echo "# Re-run the generator (not this file by hand) if the cluster's own API server CA ever"
   echo "# rotates; NEVER re-run it to regenerate the Fulcio root without FORCE=1 - see that"
   echo "# script's own header for why."
@@ -139,8 +156,13 @@ log "4/4 - writing hack/values-${CONTEXT}.yaml (public material only - clusterNa
   echo "${ISSUER_CA_CERT}" | sed 's/^/    /'
   echo "  rootCert: |"
   sed 's/^/    /' "${TMPDIR}/cert.pem"
-} > "hack/values-${CONTEXT}.yaml"
+} > "${OUTPUT_FILE}"
 
 echo
-echo "Wrote hack/values-${CONTEXT}.yaml. Review it, then commit it - it carries no secret material."
-echo "Next: CONTEXT=${CONTEXT} ./hack/bootstrap.sh (VALUES_FILE auto-discovered)."
+echo "Wrote ${OUTPUT_FILE}. Review it, then commit it - it carries no secret material."
+if [[ "${OUTPUT_DIR}" == "hack" ]]; then
+  echo "Next: CONTEXT=${CONTEXT} ./hack/bootstrap.sh (VALUES_FILE auto-discovered)."
+else
+  echo "Next: commit and push ${OUTPUT_FILE} in its own repo - the cluster's ArgoCD"
+  echo "Application will pick it up on next sync."
+fi

@@ -1,13 +1,10 @@
 # hack/kind-config.yaml
 #
-# NOT USED by hack/bootstrap.sh, which targets the existing shared kind-observe cluster
-# instead - see docs/bootstrap.md "Why kind-observe, not a fresh cluster". Kept as the
-# config for standing up a dedicated, isolated cluster if you ever want one instead of
-# sharing kind-observe: disables kind's default CNI (kindnet does NOT enforce
-# NetworkPolicy) so Calico can be installed in its place - a hard prerequisite for a
-# from-scratch cluster if you want this platform's NetworkPolicy defense-in-depth layer
-# to actually do anything (see docs/bootstrap.md's NetworkPolicy gap note for why
-# kind-observe itself doesn't have this).
+# NOT used by hack/bootstrap.sh, which targets the existing shared kind-observe cluster
+# instead. Kept for standing up a dedicated, isolated cluster: disables kind's default
+# CNI (kindnet doesn't enforce NetworkPolicy) so Calico can be installed instead - a
+# hard prerequisite if this platform's NetworkPolicy layer should actually do anything.
+# See docs/admin/installation.md.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: platform-cicd

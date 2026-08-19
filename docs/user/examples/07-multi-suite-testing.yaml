@@ -1,0 +1,47 @@
+# Example 7: Two test suites against the same build
+#
+# A single build can be exercised by more than one test step in the same flow - useful
+# when you want a fast smoke/unit-style suite to gate before running a slower, fuller
+# integration suite, without triggering two separate builds. Each `test` step needs its
+# own `suite` here specifically because they'd otherwise be indistinguishable (both
+# would inherit the same top-level test.suite and look identical).
+#
+# Flow shape:
+#
+#   push to main -> [build] -(artifact.published)-> [test:smoke] -(testcaserun.finished)->
+#                    [test:integration] -(testcaserun.finished)-> [deploy:dev]
+#
+# Confirmed live: flow-triggers.yaml's per-step-index Trigger naming correctly
+# disambiguates two steps that share the same stage name ("test" twice) - each gets its
+# own Trigger/TriggerBinding/TriggerTemplate object rather than colliding.
+apiVersion: platform/v1
+kind: PipelineConfig
+
+build:
+  agent: nodejs-20
+  script: ./build.sh
+
+test:
+  suite: integration   # the fallback/default - only actually used if a test step
+                        # omits its own `suite`, which neither one does below
+
+deploy:
+  lowerEnvironments: [dev]
+
+pipelines:
+  ci:
+    trigger:
+      source: git
+      event: push
+      branch: main
+    steps:
+      - stage: build
+      - stage: test
+        env: dev
+        suite: smoke        # overrides the top-level test.suite for this step -
+                             # your ./integration-test.sh receives TEST_SUITE=smoke
+      - stage: test
+        env: dev
+        suite: integration   # a second, independent test step - TEST_SUITE=integration
+      - stage: deploy
+        env: dev

@@ -11,17 +11,19 @@
 #
 # Idempotent: safe to re-run. Each step checks whether it's already done before acting.
 #
-# Retargetable via env vars (2026-08-15, standing up a second, independent instance of
-# this control plane on kind-dev for idp - see idp/docs/service-catalog-design.md §0's
-# NodeJSApplication CicdOnboarding note): defaults below reproduce today's kind-observe
-# behavior exactly, so a plain `./hack/bootstrap.sh` is unchanged. Override for another
-# cluster, e.g. `CONTEXT=kind-dev KIND_CLUSTER_NAME=dev ./hack/bootstrap.sh` - VALUES_FILE
-# no longer needs to be passed explicitly for a cluster that already has one (see
-# auto-discovery below); still overridable by hand for a one-off run. The chart-level
-# per-cluster values (Fulcio CA/root cert, tenantsRepoUrl) live in VALUES_FILE, not here -
-# see charts/platform-cicd-control-plane/values.yaml's own fulcio/tenantsRepoUrl comments
-# for why those specifically can't just be hardcoded per-cluster in the templates
-# themselves.
+# Retargetable via env vars for a brand-new cluster that isn't GitOps-managed yet, e.g.
+# `CONTEXT=<ctx> KIND_CLUSTER_NAME=<name> ./hack/bootstrap.sh` - defaults below
+# reproduce kind-observe's behavior exactly, so a plain `./hack/bootstrap.sh` is
+# unchanged. Once a cluster has its own ArgoCD Application for this chart (see e.g.
+# gitops-cluster-dev/50-platform-cicd/), that Application is the install path going
+# forward, not this script - this script stays useful for the one-time initial
+# install/upgrade path and for kind-observe, which remains deliberately imperative.
+# VALUES_FILE doesn't need to be passed explicitly for a cluster that already has one
+# (see auto-discovery below); still overridable by hand for a one-off run. The
+# chart-level per-cluster values (Fulcio CA/root cert, tenantsRepoUrl) live in
+# VALUES_FILE, not here - see charts/platform-cicd-control-plane/values.yaml's own
+# fulcio/tenantsRepoUrl comments for why those specifically can't just be hardcoded
+# per-cluster in the templates themselves.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
