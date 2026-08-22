@@ -37,6 +37,16 @@ spec:
       type: string
   workspaces:
     - name: source
+    # 2026-08-21: real gap, not a regression - clone-repo (the hub-resolved git-clone
+    # Task below) has never had credentials for checkout-api (a private repo): build/
+    # test are the only stages that use git-clone directly (deploy/release clone via
+    # the GitHub App token broker instead, see deploy.yaml's own header), and neither
+    # had ever actually been run end-to-end against a private repo before this was
+    # caught - `git-clone`'s own error names the fix: "Configure a basic-auth or
+    # ssh-directory workspace". Declaring it here is enough - no `.tekton/*.yaml`
+    # PipelineRun template needs to bind it: Pipelines-as-Code auto-injects a real
+    # credential (a pac-gitauth-* Secret, confirmed live) into any workspace literally
+    # named basic-auth that the PipelineRun's resolved Pipeline declares.
     - name: basic-auth
       description: "Secret volume for git basic auth (if needed)"
   # IMAGE_URL/IMAGE_DIGEST and CHAINS-GIT_URL/CHAINS-GIT_COMMIT are Tekton Chains' own
