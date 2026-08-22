@@ -147,6 +147,15 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    (webhook delivery, checks) may not already include these, since this App is now also
    doing git operations, not just receiving webhooks.
 
+   **Do this even if the repo is private, and don't assume installing the App on the
+   app repo already covers it** - a GitHub App installed with "selected repositories"
+   only reaches repos explicitly added to it, one at a time, independent of visibility.
+   Skipping this step for a private `gitops-<app-name>` repo makes
+   `deliver-onboarding-files`'s push fail; the broker's `/github-installation-token`
+   endpoint now surfaces this as an explicit "confirm the App is installed on `<repo>`"
+   error (`catalog/lib/github-app.sh`) rather than an opaque clone/push failure - found
+   live 2026-08-22 against `gitops-checkout-api`.
+
 4. **Nothing to do here anymore** - as long as `platformIdentity.gitopsRepoUrl` is set,
    `charts/platform-cicd-app/templates/pipelines-as-code/repository.yaml` renders the
    `gitops-<app-name>` PaC `Repository` CR automatically (same file that renders the app

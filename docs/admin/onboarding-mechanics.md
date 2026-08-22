@@ -27,6 +27,15 @@ cluster - see [installation.md](installation.md).
    gated on `platformIdentity.registerPipelinesAsCode`, default `true`) - not a separate
    manual step.
 
+   **If `cicd.yaml` will declare a `release` stage, the App also needs installing on the
+   `gitops-<app-name>` repo** ([release.md](release.md) step 3) - a second, easy-to-miss
+   repo, not covered by installing on the app repo alone. This bites private gitops
+   repos specifically: a GitHub App installed with "selected repositories" doesn't
+   automatically gain access to a new repo regardless of its visibility, and
+   `deliver-onboarding-files`'s push to that repo fails outright until the App is
+   explicitly added there. Confirmed live 2026-08-22 against a real private
+   `gitops-checkout-api` repo.
+
 2. **The developer adds `cicd.yaml`** to their repo root. The `tenant-onboarding`
    `ApplicationSet` reads it live from there - a push to `main` takes effect on
    ArgoCD's next sync, with no separate copy to keep up to date.
