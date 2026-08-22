@@ -37,6 +37,8 @@ spec:
       type: string
   workspaces:
     - name: source
+    - name: basic-auth
+      description: "Secret volume for git basic auth (if needed)"
   # IMAGE_URL/IMAGE_DIGEST and CHAINS-GIT_URL/CHAINS-GIT_COMMIT are Tekton Chains' own
   # documented "type hinting" result names (exact names, case-sensitive) that tell
   # Chains which image/commit a PipelineRun's provenance and signature belong to.
@@ -65,6 +67,7 @@ spec:
           - { name: version, value: "1.7.0" }
       workspaces:
         - { name: output, workspace: source }
+        - { name: basic-auth, workspace: basic-auth }
       params:
         - { name: url, value: $(params.git-url) }
         - { name: revision, value: $(params.git-revision) }
