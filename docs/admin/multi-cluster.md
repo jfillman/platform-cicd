@@ -635,6 +635,50 @@ to fix both at once.
 per app namespace - see "Relay-token distribution via External Secrets Operator (built
 2026-08-19)" above. At the time this section was written, it still did.
 
+**2026-08-22 update: relay generified, hook script now builds the CDEvent itself.**
+`argocd-outcome-relay` used to receive a flat, bespoke JSON request from the hook
+script and reshape it into a CDEvent in Go (~80 lines duplicating `catalog/lib/
+cdevents.sh`'s envelope shape, with no retry on the broker POST, unlike every other
+call site in this codebase). Flipped: `catalog/lib/argocd-outcome-hook.sh` now builds
+the full CDEvent envelope itself (own deterministic id, own outcome/status mapping
+from `PHASE`, `curl --retry 3 --retry-connrefused` matching `cdevent_send`'s
+resilience) and POSTs that as-is. The relay's job shrank to what its header comment
+always said the trust model required: authenticate the shared secret, then forward
+those exact bytes to the broker with its own SA token - no reshaping.
+
+One field is still checked, not blindly forwarded: `subject.content.cluster` must
+match the `<cluster>` the URL path (`/outcome/<cluster>`) authenticated against. Every
+other field remains a self-asserted claim by the hook script, same trust boundary as
+before - but cluster identity is exactly what the shared-secret lookup proves, so it's
+the one place a mismatch is rejected (400) rather than trusted at face value. This
+needed a new field threaded through: `releaseTracking.cluster`, set by
+`open-release-pr.yaml` from the same `${CLUSTER}` param it already resolves
+`outcomeRelayURL` from, consumed by `idp-service-catalog`'s `hooks.yaml` as a new
+`CLUSTER` env var on both hook Jobs.
+
+The direct relay -> dora-exporter HTTP forward (`forwardToDoraExporter`, Phase F) is
+**unchanged** by this pass - still a best-effort side call, not yet folded into
+`release-outcome-notify`'s Tekton Pipeline as a third task alongside `notify`/`span`.
+That's the natural next step (turns a silently-dropped-on-error metric update into a
+visible TaskRun failure, and gives dora-exporter a dev-cluster-side place to persist
+`dora-last-failure-time` for cluster-mapped apps - see "MTTR" in
+[dora-metrics.md](dora-metrics.md) for why that annotation can't be written today) -
+not done yet, tracked separately.
+
+**Deploy steps for this change, not yet done**: rebuild+push both
+`ghcr.io/jfillman/platform-cicd-toolbox` (bakes in the hook script) and
+`ghcr.io/jfillman/platform-cicd-argocd-outcome-relay` (both `:latest`, both
+`imagePullPolicy: IfNotPresent` - a stale node-cached image has bitten this exact
+relay before, see the "ghcr.io/jfillman" comment in `argocd-outcome-relay.yaml`, so a
+rollout restart of the `argocd-outcome-relay` Deployment is required after pushing,
+not just a re-apply); tag a new `idp-service-catalog` release and repoint
+`targetRevision` in every tenant-onboarding `ApplicationSet` that pins it
+(`gitops-cluster-dev`, `gitops-cluster-kind-prod`, and `gitops-cluster-template` for
+future clusters) - `idp-application`'s own `Chart.yaml` `version:` field is
+decorative here (confirmed via `git show <tag>:...Chart.yaml`, stayed `0.3.0` across
+36+ real tags) since these charts are consumed straight from a pinned git tag, not a
+packaged/published chart repo.
+
 **Live-verified end to end, 2026-08-17**, against the real `checkout-api` tenant on the
 real `kind-prod` cluster - not just `helm template`. A real commit to `checkout-api`
 (`main`) ran the full `build -> test -> deploy(dev) -> release(prod)` chain;

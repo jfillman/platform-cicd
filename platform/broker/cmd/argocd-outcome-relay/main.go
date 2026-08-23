@@ -1,7 +1,9 @@
 // Closes the loop on the release stage (docs/admin/multi-cluster.md): an upper-env
-// cluster's ArgoCD sync-hook Jobs (catalog/lib/argocd-outcome-hook.sh) POST here once a
-// release completes, and this service reshapes that into a CDEvent and forwards it to
-// the existing broker (see catalog/lib/cdevents.sh for the JSON shape mirrored here).
+// cluster's ArgoCD sync-hook Jobs (catalog/lib/argocd-outcome-hook.sh) POST a
+// ready-made CDEvent here once a release completes, and this service forwards it
+// unchanged to the existing broker - see catalog/lib/argocd-outcome-hook.sh for the
+// JSON shape (mirrors catalog/lib/cdevents.sh's, built there rather than here since
+// this service used to duplicate that shaping logic in Go).
 //
 // Auth is a shared secret per upstream cluster (POST /outcome/<cluster>, resolved live
 // via the cluster-registry ConfigMap), not the broker's own TokenReview - TokenReview
@@ -10,6 +12,14 @@
 // appName/env are accurate - acceptable because which apps can run a hook Job on
 // cluster X is already gated by the PR-review + branch-protection flow, so a
 // compromised cluster secret can spoof an outcome, not fabricate a release.
+//
+// One field IS still checked, not just passed through: subject.content.cluster must
+// match the <cluster> the URL path authenticated against. Every other field is a
+// self-asserted claim by the hook script (same trust boundary as before) - but
+// "which cluster is this" is exactly what the shared-secret lookup above already
+// proved, so silently trusting a different, self-asserted value there would let a
+// compromised app namespace on cluster X claim an outcome for cluster Y. Cheap
+// integrity check, not decoration.
 //
 // Earlier design fetched release data from GitHub via ArgoCD Notifications callbacks,
 // dropped because Notifications fired on any completed sync (including pure selfHeal
@@ -20,10 +30,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,8 +49,6 @@ const (
 	platformNamespace  = "platform-system"
 	registryConfigMap  = "cluster-registry"
 	brokerTokenPath    = "/var/run/secrets/platform/broker-token"
-	eventType          = "dev.cdevents.environment.deployed.0.1.0"
-	cdeventsVersion    = "0.4.1"
 	requestBodyMaxSize = 1 << 16 // a handful of short fields, never legitimately larger
 )
 
@@ -52,22 +57,20 @@ type registryEntry struct {
 	RelaySecretName string `json:"relaySecretName"`
 }
 
-// The body catalog/lib/argocd-outcome-hook.sh sends - every field baked in at commit
-// time by open-release-pr.yaml, nothing fetched live.
-type outcomeRequest struct {
-	AppNamespace  string `json:"appNamespace"`
-	AppName       string `json:"appName"`
-	Env           string `json:"env"`
-	Phase         string `json:"phase"` // Succeeded or Failed - which hook ran
-	Revision      string `json:"revision"`
-	GitURL        string `json:"gitUrl"`
-	GitRevision   string `json:"gitRevision"`
-	FlowStartTime string `json:"flowStartTime"`
-	FinishedAt    string `json:"finishedAt"` // set by the hook script (date -u) when it runs
-	PRUrl         string `json:"prUrl"`      // the GitOps PR this hook Job came from
-	ConfigJSONB64 string `json:"configJsonB64"`
-	ChainID       string `json:"chainId"`     // optional - apps onboarded before this field existed omit it
-	PRCreatedAt   string `json:"prCreatedAt"` // optional, same reasoning
+// Just enough of the hook script's CDEvent envelope to validate the claimed cluster
+// and to feed the best-effort dora-exporter forward below - this service otherwise
+// treats the body as opaque bytes it doesn't need to understand.
+type cdEventEnvelope struct {
+	Subject struct {
+		Content struct {
+			Cluster       string `json:"cluster"`
+			AppNamespace  string `json:"appNamespace"`
+			AppName       string `json:"appName"`
+			Phase         string `json:"phase"`
+			FinishedAt    string `json:"finishedAt"`
+			FlowStartTime string `json:"flowStartTime"`
+		} `json:"content"`
+	} `json:"subject"`
 }
 
 func main() {
@@ -120,18 +123,23 @@ func (h *handler) handleOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req outcomeRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, requestBodyMaxSize)).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request body: %v", err), http.StatusBadRequest)
+	body, err := io.ReadAll(io.LimitReader(r.Body, requestBodyMaxSize))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	if req.AppNamespace == "" || req.AppName == "" || req.Env == "" || req.Phase == "" {
-		http.Error(w, "appNamespace, appName, env, and phase are required", http.StatusBadRequest)
+	var env cdEventEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		http.Error(w, fmt.Sprintf("invalid CDEvent JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+	if env.Subject.Content.Cluster != cluster {
+		http.Error(w, fmt.Sprintf("event claims cluster %q, authenticated as %q", env.Subject.Content.Cluster, cluster), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.forwardToBroker(ctx, cluster, req); err != nil {
-		log.Printf("argocd-outcome-relay: forwarding to broker failed (cluster=%s app=%s/%s): %v", cluster, req.AppNamespace, req.AppName, err)
+	if err := h.forwardToBroker(ctx, body); err != nil {
+		log.Printf("argocd-outcome-relay: forwarding to broker failed (cluster=%s app=%s/%s): %v", cluster, env.Subject.Content.AppNamespace, env.Subject.Content.AppName, err)
 		http.Error(w, "failed to forward event", http.StatusBadGateway)
 		return
 	}
@@ -139,8 +147,8 @@ func (h *handler) handleOutcome(w http.ResponseWriter, r *http.Request) {
 	// Best-effort, not on the critical path - a direct call rather than a second
 	// broker round trip (docs/admin/multi-cluster.md).
 	if h.doraExporterURL != "" {
-		if err := h.forwardToDoraExporter(ctx, req); err != nil {
-			log.Printf("argocd-outcome-relay: dora-exporter forward failed (non-fatal, app=%s/%s): %v", req.AppNamespace, req.AppName, err)
+		if err := h.forwardToDoraExporter(ctx, env); err != nil {
+			log.Printf("argocd-outcome-relay: dora-exporter forward failed (non-fatal, app=%s/%s): %v", env.Subject.Content.AppNamespace, env.Subject.Content.AppName, err)
 		}
 	}
 
@@ -189,93 +197,13 @@ func (h *handler) authenticate(ctx context.Context, cluster, authHeader string) 
 	return nil
 }
 
-// forwardToBroker builds a CDEvent matching cdevents.sh's shape and POSTs it using this
-// pod's own projected SA token, verified by the broker's existing TokenReview
-// interceptor. Since this SA lives in platform-system, not the app's namespace,
-// extensions.app_namespace will read "platform-system" here - the consuming Trigger
-// matches on the event's claimed appNamespace field instead (see this file's header).
-func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outcomeRequest) error {
+// forwardToBroker POSTs the hook script's own CDEvent bytes to the broker unchanged,
+// swapping in this pod's own projected SA token (verified by the broker's existing
+// TokenReview interceptor) in place of the shared-secret auth this call arrived with.
+func (h *handler) forwardToBroker(ctx context.Context, body []byte) error {
 	tokenBytes, err := os.ReadFile(brokerTokenPath)
 	if err != nil {
 		return fmt.Errorf("reading broker token: %w", err)
-	}
-
-	source := fmt.Sprintf("/platform-cicd/%s/%s-%s-%s-outcome", req.AppNamespace, cluster, req.AppName, req.Env)
-	// Two vocabularies sent pre-computed, not derived from each other downstream:
-	// "outcome" is CDEvents' success/failure convention, "status" is the
-	// Succeeded/Failed vocabulary notify-slack.yaml expects. Tekton Triggers'
-	// $(tt.params.x) is plain string substitution with no ternary to derive one from
-	// the other in a TriggerTemplate.
-	outcome, status := "success", "Succeeded"
-	if req.Phase != "Succeeded" {
-		outcome, status = "failure", "Failed"
-	}
-	configJSON := "{}"
-	if req.ConfigJSONB64 != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(req.ConfigJSONB64); err == nil {
-			configJSON = string(decoded)
-		} else {
-			log.Printf("argocd-outcome-relay: configJsonB64 decode failed (app=%s/%s): %v", req.AppNamespace, req.AppName, err)
-		}
-	}
-
-	payload := map[string]interface{}{
-		"context": map[string]interface{}{
-			"version": cdeventsVersion,
-			// finishedAt is part of the id, not just source+eventType: context.source
-			// is a fixed string per app/env/cluster (no per-attempt uniqueness), so
-			// without finishedAt every distinct release outcome for the same app/env
-			// collided on the same id and only the first ever created a
-			// release-outcome-notify PipelineRun - later ones silently no-op'd as
-			// "already exists". A true redelivery of the same outcome still carries
-			// the same finishedAt, so idempotency is preserved.
-			"id":        deterministicID(source, eventType, req.FinishedAt),
-			"source":    source,
-			"type":      eventType,
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			// The original flow's chain-id, not a fresh one, so release-outcome-span.yaml
-			// can tag its own span with the same chain-id and stay findable alongside
-			// the rest of the flow's spans in Grafana. Empty for apps onboarded before
-			// this field existed.
-			"chainId": req.ChainID,
-		},
-		"subject": map[string]interface{}{
-			"id":     source,
-			"source": source,
-			"type":   "environment",
-			"content": map[string]interface{}{
-				"appNamespace":  req.AppNamespace,
-				"appName":       req.AppName,
-				"env":           req.Env,
-				"cluster":       cluster,
-				"phase":         req.Phase,
-				"outcome":       outcome,
-				"status":        status,
-				"revision":      req.Revision,
-				"gitUrl":        req.GitURL,
-				"gitRevision":   req.GitRevision,
-				"flowStartTime": req.FlowStartTime,
-				"finishedAt":    req.FinishedAt,
-				"prUrl":         req.PRUrl,
-				"configJson":    configJSON,
-				// The real start anchor for release-outcome-span.yaml's span - lead
-				// time is measured from PR-creation, not flowStartTime above. Empty
-				// for apps onboarded before this field existed.
-				"prCreatedAt": req.PRCreatedAt,
-			},
-		},
-		"customData": map[string]interface{}{
-			"platform": map[string]interface{}{
-				"traceparent":     "",
-				"flow_start_time": req.FlowStartTime,
-				"config_json":     "{}",
-			},
-		},
-		"customDataContentType": "application/json",
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshaling CDEvent: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.brokerURL, strings.NewReader(string(body)))
@@ -300,13 +228,13 @@ func (h *handler) forwardToBroker(ctx context.Context, cluster string, req outco
 // forwardToDoraExporter is a direct, best-effort HTTP call to the DORA exporter's
 // outcome endpoint, not routed through the broker/Tekton Trigger path - avoids
 // PipelineRun overhead for what's fundamentally a metrics update.
-func (h *handler) forwardToDoraExporter(ctx context.Context, req outcomeRequest) error {
+func (h *handler) forwardToDoraExporter(ctx context.Context, env cdEventEnvelope) error {
 	payload := map[string]string{
-		"appNamespace":  req.AppNamespace,
-		"appName":       req.AppName,
-		"phase":         req.Phase,
-		"finishedAt":    req.FinishedAt,
-		"flowStartTime": req.FlowStartTime,
+		"appNamespace":  env.Subject.Content.AppNamespace,
+		"appName":       env.Subject.Content.AppName,
+		"phase":         env.Subject.Content.Phase,
+		"finishedAt":    env.Subject.Content.FinishedAt,
+		"flowStartTime": env.Subject.Content.FlowStartTime,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -327,12 +255,4 @@ func (h *handler) forwardToDoraExporter(ctx context.Context, req outcomeRequest)
 		return fmt.Errorf("dora-exporter returned %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
-}
-
-// deterministicID mirrors cdevents.sh's scheme (sha256 truncated to 20 hex chars, to
-// fit Kubernetes' 63-char resource-name limit) so the id is stable across at-least-once
-// redelivery.
-func deterministicID(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, ":")))
-	return hex.EncodeToString(sum[:])[:20]
 }

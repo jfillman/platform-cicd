@@ -238,6 +238,7 @@ spec:
 
         yq -i -e "
           .releaseTracking.relayUrl = \"${registry_relay_url}\" |
+          .releaseTracking.cluster = \"${CLUSTER}\" |
           .releaseTracking.appNamespace = \"${APP_NAMESPACE}\" |
           .releaseTracking.gitUrl = \"${GIT_URL}\" |
           .releaseTracking.gitRevision = \"${GIT_REVISION}\" |

@@ -13,12 +13,22 @@
 #
 # PHASE is baked in per-hook-type (Succeeded/Failed) rather than discovered live -
 # which hook ran already tells us the outcome.
+#
+# This script builds the full CDEvents envelope itself (mirroring catalog/lib/
+# cdevents.sh's shape - not sourcing that file directly, since its cdevent_send
+# assumes an in-cluster broker-audience SA token this hook Job, running on a remote
+# cluster, doesn't have) and sends it to argocd-outcome-relay as-is. The relay's only
+# job is authenticating this call (shared secret, since TokenReview can't validate a
+# token from a different cluster's API server) and forwarding the same bytes on to the
+# broker with its own credentials - it no longer reshapes a flat request into a
+# CDEvent. See argocd-outcome-relay/main.go's header for the other side of this split.
 set -euo pipefail
 
 : "${RELAY_URL:?RELAY_URL must be set}"
 : "${APP_NAMESPACE:?APP_NAMESPACE must be set}"
 : "${APP_NAME:?APP_NAME must be set}"
 : "${ENV:?ENV must be set}"
+: "${CLUSTER:?CLUSTER must be set}"
 : "${PHASE:?PHASE must be set}"
 : "${POD_NAMESPACE:?POD_NAMESPACE must be set - downward API, set on the hook Job spec}"
 
@@ -33,28 +43,105 @@ set -euo pipefail
 token="$(kubectl get secret platform-outcome-relay-token -n "${POD_NAMESPACE}" -o jsonpath='{.data.token}' | base64 -d)"
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# Two vocabularies, both pre-computed here rather than left for a downstream consumer
+# to derive: "outcome" is CDEvents' success/failure convention, "status" is the
+# Succeeded/Failed vocabulary notify-slack.yaml expects. PHASE already tells us which
+# hook ran, so this is a plain case, not a live status read.
+outcome="failure"
+status="Failed"
+if [[ "${PHASE}" == "Succeeded" ]]; then
+  outcome="success"
+  status="Succeeded"
+fi
+
+event_type="dev.cdevents.environment.deployed.0.1.0"
+source="/platform-cicd/${APP_NAMESPACE}/${CLUSTER}-${APP_NAME}-${ENV}-outcome"
+
+# finishedAt is part of the id, not just source+eventType: source is a fixed string
+# per app/env/cluster (no per-attempt uniqueness), so without finishedAt every
+# distinct release outcome for the same app/env would collide on the same id and only
+# the first would ever create a release-outcome-notify PipelineRun - later ones would
+# silently no-op as "already exists". A true redelivery of the same outcome still
+# carries the same finishedAt, so idempotency is preserved. Same truncated-sha256
+# scheme as cdevents.sh's own cdevent_send, for the same 63-char resource-name-limit
+# reason.
+event_id="$(printf '%s' "${source}:${event_type}:${finished_at}" | sha256sum | cut -d' ' -f1 | cut -c1-20)"
+
+config_json="{}"
+if [[ -n "${CONFIG_JSON_B64:-}" ]]; then
+  decoded="$(printf '%s' "${CONFIG_JSON_B64}" | base64 -d 2>/dev/null || true)"
+  if jq -e . >/dev/null 2>&1 <<<"${decoded}"; then
+    config_json="${decoded}"
+  else
+    echo "[argocd-outcome-hook] warning: CONFIG_JSON_B64 did not decode to valid JSON, falling back to {}" >&2
+  fi
+fi
+
 # jq -n --arg, not string interpolation, so every field is safely JSON-encoded
 # regardless of content (same convention as cdevents.sh).
 payload="$(jq -n \
+  --arg id "${event_id}" \
+  --arg type "${event_type}" \
+  --arg source "${source}" \
+  --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg chainId "${CHAIN_ID:-}" \
   --arg appNamespace "${APP_NAMESPACE}" \
   --arg appName "${APP_NAME}" \
   --arg env "${ENV}" \
+  --arg cluster "${CLUSTER}" \
   --arg phase "${PHASE}" \
+  --arg outcome "${outcome}" \
+  --arg status "${status}" \
   --arg revision "${GITOPS_REVISION:-}" \
   --arg gitUrl "${GIT_URL:-}" \
   --arg gitRevision "${GIT_REVISION:-}" \
   --arg flowStartTime "${FLOW_START_TIME:-}" \
   --arg finishedAt "${finished_at}" \
   --arg prUrl "${PR_URL:-}" \
-  --arg configJsonB64 "${CONFIG_JSON_B64:-}" \
-  --arg chainId "${CHAIN_ID:-}" \
+  --argjson configJson "${config_json}" \
   --arg prCreatedAt "${PR_CREATED_AT:-}" \
-  '{appNamespace: $appNamespace, appName: $appName, env: $env, phase: $phase, revision: $revision, gitUrl: $gitUrl, gitRevision: $gitRevision, flowStartTime: $flowStartTime, finishedAt: $finishedAt, prUrl: $prUrl, configJsonB64: $configJsonB64, chainId: $chainId, prCreatedAt: $prCreatedAt}')"
+  '{
+    context: {
+      version: "0.4.1",
+      id: $id,
+      source: $source,
+      type: $type,
+      timestamp: $timestamp,
+      chainId: $chainId
+    },
+    subject: {
+      id: $source,
+      source: $source,
+      type: "environment",
+      content: {
+        appNamespace: $appNamespace,
+        appName: $appName,
+        env: $env,
+        cluster: $cluster,
+        phase: $phase,
+        outcome: $outcome,
+        status: $status,
+        revision: $revision,
+        gitUrl: $gitUrl,
+        gitRevision: $gitRevision,
+        flowStartTime: $flowStartTime,
+        finishedAt: $finishedAt,
+        prUrl: $prUrl,
+        configJson: ($configJson | tojson),
+        prCreatedAt: $prCreatedAt
+      }
+    },
+    customData: {
+      platform: { traceparent: "", flow_start_time: $flowStartTime, config_json: "{}" }
+    },
+    customDataContentType: "application/json"
+  }')"
 
-echo "[argocd-outcome-hook] app=${APP_NAME} env=${ENV} phase=${PHASE}: reporting to ${RELAY_URL}"
+echo "[argocd-outcome-hook] app=${APP_NAME} env=${ENV} cluster=${CLUSTER} phase=${PHASE}: reporting to ${RELAY_URL}"
 curl --fail --silent --show-error --max-time 15 \
+  --retry 3 --retry-connrefused \
   -X POST "${RELAY_URL}" \
   -H "Authorization: Bearer ${token}" \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/cloudevents+json" \
   -d "${payload}"
 echo
