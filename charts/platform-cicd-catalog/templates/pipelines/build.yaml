@@ -37,18 +37,6 @@ spec:
       type: string
   workspaces:
     - name: source
-    # 2026-08-21: real gap, not a regression - clone-repo (the hub-resolved git-clone
-    # Task below) has never had credentials for checkout-api (a private repo): build/
-    # test are the only stages that use git-clone directly (deploy/release clone via
-    # the GitHub App token broker instead, see deploy.yaml's own header), and neither
-    # had ever actually been run end-to-end against a private repo before this was
-    # caught - `git-clone`'s own error names the fix: "Configure a basic-auth or
-    # ssh-directory workspace". Declaring it here is enough - no `.tekton/*.yaml`
-    # PipelineRun template needs to bind it: Pipelines-as-Code auto-injects a real
-    # credential (a pac-gitauth-* Secret, confirmed live) into any workspace literally
-    # named basic-auth that the PipelineRun's resolved Pipeline declares.
-    - name: basic-auth
-      description: "Secret volume for git basic auth (if needed)"
   # IMAGE_URL/IMAGE_DIGEST and CHAINS-GIT_URL/CHAINS-GIT_COMMIT are Tekton Chains' own
   # documented "type hinting" result names (exact names, case-sensitive) that tell
   # Chains which image/commit a PipelineRun's provenance and signature belong to.
@@ -67,20 +55,28 @@ spec:
     - name: CHAINS-GIT_COMMIT
       value: $(tasks.clone-repo.results.commit)
   tasks:
+    # Switched off the hub-resolved git-clone Task (+ required basic-auth workspace,
+    # a real design mistake - see clone-repo-authenticated.yaml's own header, already
+    # applied to test.yaml the same week): a non-optional Pipeline workspace must be
+    # bound by every PipelineRun at admission time, but no onboarding-generated
+    # `.tekton/*.yaml` template ever bound `basic-auth`, so every build PipelineRun
+    # was rejected outright with InvalidWorkspaceBindings before it could even start -
+    # this is what actually broke every build, not just private-repo auth.
+    # clone-repo-authenticated mints its own token per run instead
+    # (catalog/lib/github-app.sh), same established pattern as test/deploy/release.
     - name: clone-repo
       taskRef:
-        resolver: hub
+        resolver: cluster
         params:
-          - { name: catalog, value: git-clone }
           - { name: kind, value: task }
-          - { name: name, value: git-clone }
-          - { name: version, value: "1.7.0" }
+          - { name: name, value: clone-repo-authenticated }
+          - { name: namespace, value: {{ .Release.Namespace }} }
       workspaces:
         - { name: output, workspace: source }
-        - { name: basic-auth, workspace: basic-auth }
       params:
-        - { name: url, value: $(params.git-url) }
-        - { name: revision, value: $(params.git-revision) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
+        - { name: app-name, value: $(params.app-name) }
 
     - name: validate-config
       runAfter: [clone-repo]

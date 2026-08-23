@@ -43,6 +43,15 @@ spec:
       type: string
   workspaces:
     - name: output
+  # url/commit - Tekton Chains' documented type-hint result names for a clone Task
+  # (see build.yaml's own CHAINS-GIT_URL/CHAINS-GIT_COMMIT pipeline results, which
+  # read these), same names the hub git-clone Task produces - needed so build.yaml
+  # can use this Task as a drop-in replacement.
+  results:
+    - name: url
+      description: The precise URL that was fetched by this Task.
+    - name: commit
+      description: The precise commit SHA that was fetched by this Task.
   # Audience-bound projected ServiceAccount token for the shared broker's GitHub
   # token-minting endpoint - same pattern as deploy-manifests.yaml's identical volume.
   volumes:
@@ -89,3 +98,6 @@ spec:
         git remote add origin "${clone_url}"
         git fetch --quiet --depth=1 origin "${GIT_REVISION}"
         git checkout --quiet FETCH_HEAD
+
+        echo -n "${GIT_URL}" | tee "$(results.url.path)"
+        git rev-parse FETCH_HEAD | tr -d '\n' | tee "$(results.commit.path)"
