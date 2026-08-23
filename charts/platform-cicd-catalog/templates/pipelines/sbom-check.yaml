@@ -57,6 +57,7 @@ spec:
           - { name: namespace, value: {{ .Release.Namespace }} }
       params:
         - { name: repo-url, value: $(params.repo-url) }
+        - { name: revision, value: $(params.revision) }
         - { name: pr-number, value: $(params.pr-number) }
         - { name: gate-name, value: sbom }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }

@@ -36,6 +36,10 @@ spec:
       type: string
       default: ""
       description: "The gitops repo's own URL - PaC's repo_url. Only used to post the PR comment in this Pipeline's finally block, so left optional/empty for any future non-PR trigger of this same stub Pipeline."
+    - name: revision
+      type: string
+      default: ""
+      description: "The gitops PR's head commit - PaC's revision. Only used as a fallback to resolve the real PR number when pr-number arrives unsubstituted (see comment-pr-check-result.yaml)."
     - name: pr-number
       type: string
       default: ""
@@ -62,6 +66,7 @@ spec:
           - { name: namespace, value: {{ .Release.Namespace }} }
       params:
         - { name: repo-url, value: $(params.repo-url) }
+        - { name: revision, value: $(params.revision) }
         - { name: pr-number, value: $(params.pr-number) }
         - { name: gate-name, value: $(params.gate-name) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }

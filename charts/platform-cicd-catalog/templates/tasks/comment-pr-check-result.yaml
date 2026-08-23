@@ -32,6 +32,10 @@ spec:
     - name: pr-number
       type: string
       description: "PaC's raw pull_request.number webhook body field - the check Pipelines don't otherwise carry a PR number, only repo-url/revision."
+    - name: revision
+      type: string
+      default: ""
+      description: "The gitops PR's head commit - PaC's `revision`. Fallback source for the real PR number when pr-number arrives unsubstituted (see script header on PaC's pull_request.number webhook var only resolving for genuine pull_request webhooks)."
     - name: gate-name
       type: string
       description: Any name from .Values.releaseGuardrails (docs/admin/release-guardrails.md) - must match the real `/retest <name>` PaC expects (docs/release.md).
@@ -64,6 +68,8 @@ spec:
           value: $(params.repo-url)
         - name: PR_NUMBER
           value: $(params.pr-number)
+        - name: REVISION
+          value: $(params.revision)
         - name: GATE_NAME
           value: $(params.gate-name)
         - name: PIPELINE_RUN_NAME
@@ -87,6 +93,29 @@ spec:
         owner="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
         repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
         token="$(github_app_installation_token "${owner}" "${repo}")"
+
+        # PaC's {{ "{{" }} body.pull_request.number {{ "}}" }} template var only resolves for a genuine
+        # `pull_request` webhook - a `/retest <gate>`/`/test <gate>` PR comment fires an
+        # `issue_comment` webhook instead, whose payload has no top-level `pull_request`
+        # field, so PaC leaves the raw, unsubstituted template string in place (confirmed
+        # live 2026-08-23: every retest-triggered check got that literal string as
+        # PR_NUMBER, breaking every curl URL below). Fall back to the Commits API, which
+        # finds the PR from the commit itself and works regardless of what triggered this
+        # run.
+        if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+          resolved=""
+          if [[ -n "${REVISION}" ]]; then
+            resolved="$(curl --fail --silent --show-error --max-time 10 \
+              -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${owner}/${repo}/commits/${REVISION}/pulls" \
+              | jq -r '.[0].number // empty')"
+          fi
+          if ! [[ "${resolved}" =~ ^[0-9]+$ ]]; then
+            echo "pr-number param wasn't a real PR number ('${PR_NUMBER}') and couldn't resolve one from revision '${REVISION}' either - skipping PR comment (the native GitHub Check already reports this gate's outcome)." >&2
+            exit 0
+          fi
+          PR_NUMBER="${resolved}"
+        fi
 
         if [[ "${STATUS}" == "Succeeded" || "${STATUS}" == "Completed" ]]; then
           # Best-effort: surface a Task result if one exists (only image-scan produces

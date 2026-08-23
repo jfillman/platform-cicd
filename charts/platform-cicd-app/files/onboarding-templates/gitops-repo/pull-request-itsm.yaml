@@ -27,6 +27,7 @@ spec:
   params:
     - { name: gate-name, value: itsm }
     - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: revision, value: "{{ revision }}" }
     - { name: pr-number, value: "{{ body.pull_request.number }}" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner
