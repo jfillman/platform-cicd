@@ -144,6 +144,55 @@ otel_task_span_send() {
   _otel_cli_send "${args[@]}"
 }
 
+# otel_log_send <body> <severity> <attrs-json-array>
+# Sends one stateless OTLP log record via a raw HTTP POST to the same collector every
+# span already targets (OTEL_EXPORTER_OTLP_ENDPOINT). otel-cli has no logs subcommand
+# (traces only - see https://github.com/equinix-labs/otel-cli), so this speaks the
+# collector's OTLP/HTTP JSON receiver directly instead of going through it.
+# <attrs-json-array> is a JSON array of {key, value:{stringValue: ...}} objects - build
+# it with jq at the call site, never string concatenation, so a value containing a quote
+# or newline (a PR title, an error message) can't break the payload. Same best-effort
+# philosophy as _otel_cli_send: retries a transient blip, but never fails the caller's
+# pipeline over an observability side-channel.
+otel_log_send() {
+  : "${OTEL_EXPORTER_OTLP_ENDPOINT:?OTEL_EXPORTER_OTLP_ENDPOINT must be set (in-cluster OTel Collector)}"
+  local body="$1" severity="$2" attrs_json="$3"
+  local now_ns
+  now_ns="$(date -u +%s%N)"
+  local payload
+  payload="$(jq -c -n \
+    --arg body "${body}" \
+    --arg severity "${severity}" \
+    --arg time "${now_ns}" \
+    --argjson attrs "${attrs_json}" \
+    '{
+      resourceLogs: [{
+        resource: { attributes: [{ key: "service.name", value: { stringValue: "platform-cicd" } }] },
+        scopeLogs: [{
+          logRecords: [{
+            timeUnixNano: $time,
+            severityText: $severity,
+            body: { stringValue: $body },
+            attributes: $attrs
+          }]
+        }]
+      }]
+    }')"
+
+  local attempt
+  for attempt in 1 2 3; do
+    if curl --fail --silent --show-error --max-time 5 \
+      -X POST "${OTEL_EXPORTER_OTLP_ENDPOINT}/v1/logs" \
+      -H "Content-Type: application/json" \
+      -d "${payload}" >/dev/null; then
+      return 0
+    fi
+    [[ "${attempt}" -lt 3 ]] && sleep 2
+  done
+  echo "otel_log_send failed after 3 attempts (collector unreachable or rejecting logs) - continuing, not failing the pipeline over lost log data" >&2
+  return 0
+}
+
 # otel_child_span <name> <flow-traceparent> <parent-span-id> <attrs> -- <command...>
 # Runs <command...> wrapped in one stateless child span via `otel-cli exec` - parenting
 # is explicit (--force-*-id), not inherited daemon/process state, so this works from

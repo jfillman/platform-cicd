@@ -12,7 +12,11 @@
 # `update-dora-metrics` calls dora-exporter's own /argocd-outcome endpoint (added
 # 2026-08-22, replacing a direct HTTP call argocd-outcome-relay used to make itself -
 # see update-dora-metrics.yaml's own header for why running it here instead fixed a
-# real MTTR gap, not just moved the call).
+# real MTTR gap, not just moved the call). `release-log` emits one structured record of
+# this release's full outcome - approvers, per-gate results, bypass - into the release
+# log (added 2026-08-23, see release-log-emit.yaml's own header and
+# docs/admin/release-log.md; cluster-mapped releases only, a known scope gap covered in
+# that doc).
 # No resolve-notify-config/clone/workspace needed here (unlike
 # deploy.yaml/release.yaml) - config-json arrives pre-resolved: open-release-pr.yaml
 # base64-encodes it into the PostSync/SyncFail hook Job's own CONFIG_JSON_B64 env var at
@@ -134,3 +138,26 @@ spec:
         - { name: status, value: $(params.status) }
         - { name: finished-at, value: $(params.finished-at) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
+
+    # See release-log-emit.yaml's own header for the enrichment this does and the
+    # cluster-mapped-only scope gap.
+    - name: release-log
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: release-log-emit }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: app-namespace, value: $(params.app-namespace) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: env, value: $(params.env) }
+        - { name: cluster, value: $(params.cluster) }
+        - { name: status, value: $(params.status) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
+        - { name: pr-url, value: $(params.pr-url) }
+        - { name: chain-id, value: $(params.chain-id) }
+        - { name: flow-start-time, value: $(params.flow-start-time) }
+        - { name: pr-created-at, value: $(params.pr-created-at) }
+        - { name: finished-at, value: $(params.finished-at) }

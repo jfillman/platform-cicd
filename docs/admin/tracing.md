@@ -92,7 +92,10 @@ whichever stage is genuinely last for a given flow closes the span, and only tha
 `release-outcome-notify.yaml` (fired once ArgoCD confirms a cluster-mapped release's
 sync outcome - see [multi-cluster.md](multi-cluster.md)'s "The outcome span") sends its
 own span (`catalog/tasks/release-outcome-span.yaml`), but **not** as a child of the
-original flow's trace. This is deliberate, and the reasoning is the mirror image of
+original flow's trace. The same PipelineRun also emits a structured release-log record
+(`release-log-emit.yaml`) - a different signal entirely (Loki, not Tempo), covering the
+durable "who approved, which gate concluded what, was it bypassed" detail a trace isn't
+meant to hold. See [release-log.md](release-log.md). This is deliberate, and the reasoning is the mirror image of
 "Which stage closes the flow-root span" above: the flow-root span is already closed -
 by whichever stage was terminal for that flow, typically `release`'s own `end-flow`
 `finally` task, at PR-*open* time - long before a human reviews, approves, and merges

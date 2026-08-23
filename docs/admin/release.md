@@ -25,6 +25,10 @@ deploy (dev) succeeds
   -> branch protection on the gitops repo requires every one of those checks + N human
      reviewers
 
+     Once ArgoCD confirms this release's own sync outcome, `release-outcome-notify.yaml`
+     also emits a structured release-log record (approvers, per-gate results, bypass) -
+     see [release-log.md](release-log.md).
+
      `provenance` verifies a `gitsign` signature on the actual APP-repo commit that
      triggered this release (see docs/commit-signing.md) - not this gitops PR's own
      commits, which are machine-generated and never signed. **This means the app-repo
