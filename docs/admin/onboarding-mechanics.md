@@ -129,3 +129,24 @@ running - nothing can self-heal from that state. Fixed by making
 added to a Pipeline a stale committed trigger file might invoke**: give it a derivable
 default, or every already-onboarded tenant needs one manual resync PipelineRun before
 the fix reaches it on its own.
+
+**A quieter sibling of the same bug, found live 2026-08-23**: `gitops-repo-url` was
+already optional (`default: ""`), so it never caused the hard deadlock above - but it
+had the same underlying gap, no derivable fallback, just a softer failure mode: a
+tenant whose committed trigger file ever got a wrong/stale value (found via a real
+tenant, `checkout-api`, whose `.tekton/onboarding-resync.yaml` was bootstrapped by
+copying a donor app's files and never got this one field corrected) silently skips
+gitops-repo delivery on *every* resync, forever, with only a log line
+(`"gitops repo: no gitops-repo-url param given (release stage not declared),
+skipping"`) as a clue - easy to misread as a real failure when it's actually a graceful,
+permanent no-op. Fixed the same way as `app-type`: `deliver-onboarding-files.yaml`'s
+`deliver-app-repo-files` step now derives `gitops-repo-url` from the
+`gitops-<app-name>` convention whenever it's empty AND `cicd.yaml` actually declares a
+release stage (checked across every flow's `steps`, not just each flow's first step -
+`release` is typically the *last* stage in a chain). Same self-heal shape as `app-type`:
+fixes the committed trigger file for *next* time, not the current run's own delivery -
+merge the resulting PR and push `cicd.yaml` once more to see gitops-repo delivery
+actually happen. **Same lesson applies more broadly**: any param here without a
+derivable fallback can go silently stale forever, not just hard-deadlock - worth a
+derivation whenever one's safely possible, not only when a missing param would fail
+admission outright.
