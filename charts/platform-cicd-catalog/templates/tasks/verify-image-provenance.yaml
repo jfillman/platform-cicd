@@ -345,4 +345,15 @@ spec:
 
         # Stage 3: policy evaluation against the already-verified, correctly-wrapped
         # provenance. Real pass/fail via ec's own exit code (--strict defaults true).
-        ec validate input "${wrapped_provenance_file}" --policy "${policy_file}" --output json
+        #
+        # --timeout 10m: found live 2026-08-23 that ec's own default (5m) was getting
+        # hit almost exactly - a real run failed with "eval_cancel_error: exceeded
+        # allowed execution time of 5m0s" even though cosign's own verification just
+        # above it had already succeeded ("Verified OK") - i.e. this is purely slow
+        # Rego policy evaluation, unrelated to the separate cert-expiry issue documented
+        # in docs/admin/release-guardrails.md. Doubling the budget is a mitigation based
+        # on the one data point available (it ran right up to the old cap, not wildly
+        # past it), not a proven fix - revisit if evaluation still times out at 10m; see
+        # this Task's own pipelineRun timeout budget (pull-request-policy-check.yaml)
+        # for the matching headroom this needs upstream.
+        ec validate input "${wrapped_provenance_file}" --policy "${policy_file}" --output json --timeout 10m

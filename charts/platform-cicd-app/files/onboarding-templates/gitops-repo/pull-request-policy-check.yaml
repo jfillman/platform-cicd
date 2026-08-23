@@ -6,6 +6,14 @@
 # app-namespace/app-name are static, substituted once at onboarding.
 #
 # pr-number - see pull-request-sast.yaml (feeds the finally-block PR comment).
+#
+# timeouts.tasks/finally split - see pull-request-sast.yaml's own header for why
+# (finally/comment-pr must never share a budget with the real check tasks). `tasks`
+# here is bigger than the other 8m-budget gates because verify-image-provenance.yaml's
+# own `ec validate` call now runs with a 10m internal timeout (see that file's own
+# 2026-08-23 header) - this must stay comfortably above that or Tekton's own infra
+# timeout would cut the task off before ec's more generous internal one even gets a
+# chance to.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -31,4 +39,6 @@ spec:
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:
-    pipeline: "10m"
+    tasks: "11m"
+    finally: "2m"
+    pipeline: "13m"

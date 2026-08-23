@@ -6,9 +6,14 @@
 # the intended final gate before merge. The actual dev-to-upper-registry image copy is
 # still a stub; only the ordering is real today.
 #
-# pipeline timeout is longer than the other gates' 10m default to leave headroom above
-# wait-for-release-guardrails' own default 480s (8m) poll timeout, plus the promote+
-# comment steps after it.
+# timeouts.tasks/finally split - see pull-request-sast.yaml's own header (2026-08-23)
+# for why finally/comment-pr must never share a budget with the real check tasks.
+# `tasks` here is bigger than every other gate's because it has to comfortably exceed
+# wait-for-release-guardrails' own default 1080s (18m) poll timeout - which itself has
+# to comfortably exceed the slowest sibling gate's own PipelineRun timeout (today
+# image-scan's 15m) - plus the trivial promote step after it. If image-scan's own
+# timeout ever changes, bump both wait-for-release-guardrails' timeout-seconds default
+# and this file's `tasks`/`pipeline` values to stay ahead of it.
 #
 # No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
 # pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
@@ -35,4 +40,6 @@ spec:
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:
-    pipeline: "12m"
+    tasks: "19m"
+    finally: "2m"
+    pipeline: "21m"

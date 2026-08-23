@@ -4,6 +4,14 @@
 #
 # No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
 # pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
+#
+# timeouts.tasks/finally split - see pull-request-sast.yaml's own header for why
+# (finally/comment-pr must never share a budget with the real check tasks). Given a
+# bigger total budget than the other gates (15m vs. 10m): found live 2026-08-23 that a
+# real Trivy scan can run well past 6 minutes and still not be done (image-scan-pod's
+# `scan` step was still executing, not stuck/hung, when a shared 10m budget cut it off
+# mid-run) - Trivy's own vulnerability-DB pull plus the scan itself is the long pole
+# here, not something this Task can shortcut.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -27,4 +35,6 @@ spec:
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:
-    pipeline: "10m"
+    tasks: "13m"
+    finally: "2m"
+    pipeline: "15m"

@@ -37,4 +37,8 @@ spec:
   taskRunTemplate:
     serviceAccountName: pipeline-runner
   timeouts:
+    # tasks/finally split - see pull-request-sast.yaml's own header (2026-08-23) for
+    # why finally/comment-pr must never share a budget with the real check tasks.
+    tasks: "8m"
+    finally: "2m"
     pipeline: "10m"

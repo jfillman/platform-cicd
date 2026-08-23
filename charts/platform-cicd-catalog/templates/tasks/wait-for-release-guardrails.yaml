@@ -36,8 +36,16 @@ spec:
       default: "15"
     - name: timeout-seconds
       type: string
-      default: "480"
-      description: Give up and fail closed if sibling gates haven't all finished within this long - keep comfortably under this Pipeline's own PipelineRun timeout (see image-promotion-check.yaml's onboarding template) to leave headroom for the promote+comment steps after this one.
+      default: "1080"
+      description: >-
+        Give up and fail closed if sibling gates haven't all finished within this long.
+        Must stay comfortably ABOVE the slowest sibling gate's own PipelineRun timeout
+        (today that's image-scan's 15m, see pull-request-image-scan.yaml's own
+        2026-08-23 header for why it needs that much) - image-promotion can't report a
+        real result before the slowest thing it's waiting on could possibly finish.
+        Also keep comfortably under this Pipeline's own `tasks` timeout (see
+        image-promotion-check.yaml's onboarding template) to leave headroom for the
+        promote+comment steps after this one.
   volumes:
     - name: github-token-broker-token
       projected:

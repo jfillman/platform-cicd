@@ -58,6 +58,36 @@ dedicated Pipeline that polls the GitHub Checks API for the rest. See
 latter is generic (Helm-rendered off `releaseGuardrails`, minus the calling gate itself)
 and reusable if a second such gate is ever needed.
 
+## Timeouts: always split `tasks`/`finally`, never a single `pipeline` budget alone
+
+**Found live 2026-08-23**: every onboarding template originally set only
+`timeouts.pipeline` (e.g. `10m`) - a single shared budget for the real check tasks *and*
+the `finally: comment-pr` step that reports the outcome. A check that ran merely slow
+(not wrong) could burn the whole budget, leaving `comment-pr` no time to even start -
+confirmed live: its pod sat `Pending`/`"containers with incomplete status"` for minutes,
+then got `TaskRunCancelled` the instant the PipelineRun's own timeout hit, so the PR
+never got a comment even though the underlying check itself had already produced a real
+(if slow, or in one case never-finished) result.
+
+Every onboarding template now sets `timeouts.tasks` and `timeouts.finally` explicitly
+(not just `pipeline`) so `finally`/`comment-pr` always gets its own reserved window,
+regardless of how long the real check tasks take:
+
+```yaml
+timeouts:
+  tasks: "8m"      # budget for the real check task(s)
+  finally: "2m"    # reserved, separate budget for comment-pr - never starved
+  pipeline: "10m"  # must be >= tasks + finally
+```
+
+A new gate's onboarding template must set all three, not just `pipeline` - copy the
+pattern from `pull-request-sast.yaml` (the default 8m/2m/10m split) or, if the real
+check genuinely needs more room (see `pull-request-image-scan.yaml`'s 13m/2m/15m for
+why Trivy scans got more), size `tasks` to what the check actually needs and keep
+`finally` at 2m. `image-promotion` is the one exception with its own larger numbers,
+since it has to out-wait every sibling gate's own timeout - see that onboarding
+template's own header for the exact chain of reasoning.
+
 ## Current gates
 
 | Gate | What it verifies | Status |
@@ -105,3 +135,58 @@ but never actually blocks a merge. Removing a gate without removing it from bran
 protection means every future release PR is permanently unmergeable (a required check
 that will never run again). Neither mismatch is caught automatically - update both
 together.
+
+## Known open issue: `sast` fails closed on essentially every real release
+
+**Found live 2026-08-23, not yet fixed - a platform decision, not a quick patch.** Two
+gates failed in the same test run for what first looked like the same reason; live
+evidence showed they're actually two different problems (see the `policy-check` fix
+just above for the other one - a slow-but-legitimate `ec validate` policy evaluation
+tripping its own 5-minute internal cap, now given more headroom).
+
+`sast`'s failure is different and NOT fixed by a bigger timeout.
+`verify-sast-attestation.yaml` re-verifies the Fulcio leaf certificate that Tekton
+Chains attached to the *build*-time attestation, at *release-PR* time - necessarily
+minutes later, since build->test->deploy->release all run first. This platform's Fulcio
+issues leaf certs with a **10-minute validity window** (confirmed live: `openssl x509
+-noout -dates` on the real cert used in the failed check, `notBefore`/`notAfter` exactly
+10 minutes apart), and deliberately runs with Rekor/tlog verification disabled
+(`transparency.enabled=false`, `--insecure-ignore-tlog=true` - see
+docs/provenance-policy.md). Without a tlog entry to anchor "this cert was valid *at
+signing time*", cosign has no choice but to check the cert against wall-clock *now* -
+and by release-PR-check time it's routinely already expired. Confirmed with `openssl
+verify`, not just cosign's own terse error: `error 10 at 0 depth lookup: certificate has
+expired`. (`verify-image-provenance.yaml`'s own cosign check does the same
+leaf-cert-against-now verification and is exposed to the identical risk - it happened to
+still be inside the 10-minute window on this particular run, "Verified OK" printed right
+before the unrelated `ec validate` timeout, but that's timing luck, not a guarantee.)
+
+This is **structural, not a resource-contention flake**: any release where more than
+~10 minutes elapse between the build stage and the release-PR check running (i.e.
+essentially all of them - test+deploy+release plus PR-check scheduling delay reliably
+exceeds 10 minutes) will fail `sast` closed, every time, regardless of cluster load, and
+`policy-check` is one slow evaluation away from the same fate. The `image-scan`/`sbom`
+gates aren't affected the same way - they scan/sign fresh at check time rather than
+re-verifying an old cert.
+
+Not fixed here because the real fixes are all bigger platform decisions than "reroute
+the guardrails," and one of them was already tried and deliberately shelved:
+
+- **Enable Rekor** (the sigstore-native fix - a tlog entry lets a later verification
+  check cert validity *at signing time* instead of *now*). Previously attempted and
+  abandoned after repeated live failures caused by this cluster's podman-VM instability,
+  not a design objection - see the prior Rekor-install session notes. Would need to be
+  re-attempted deliberately, not as a side effect of this work.
+- **Run a Timestamp Authority (RFC3161)** as a lighter-weight alternative to full Rekor -
+  cosign supports `--timestamp-server-url` for exactly this. Still new infrastructure to
+  build and operate, not yet evaluated.
+- **Do not** widen `--insecure-ignore-*` further to also ignore cert expiry - that
+  discards the one thing short-lived-cert verification is actually for (proving the key
+  that signed this wasn't already compromised/rotated away by the time anyone checks),
+  not a fix.
+
+Until one of these is decided and built, treat `sast`/`policy-check` failures on a real
+release PR as expected/known, not a signal something regressed - `/retest` will not help
+(the cert only gets *more* expired). Bypass sits behind existing break-glass tooling
+(`detect-bypass-merge.yaml`, docs/release.md's "Break-glass" section) if a real release
+needs to merge in the meantime.
