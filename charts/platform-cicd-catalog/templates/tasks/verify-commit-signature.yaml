@@ -1,6 +1,7 @@
 # catalog/tasks/verify-commit-signature.yaml
 #
-# The real (not stub) policy-check gate, Phase 3 item 2 - see docs/commit-signing.md for
+# The real (not stub) `provenance` gate (renamed from `policy-check` 2026-08-23, see
+# docs/admin/release-guardrails.md), Phase 3 item 2 - see docs/commit-signing.md for
 # the full design. Deliberately a dedicated Task, not a new branch inside the shared
 # governance-gate-stub.yaml/governance-check.yaml - sast/image-scan/sbom stay honestly
 # fake, and "which gates are real" stays answerable just by looking at which catalog Task
@@ -16,7 +17,7 @@
 #
 # Walks history back from REVISION for the trailers (git log --grep, not `git log -1` on
 # REVISION's own message) - 2026-08-12, real bug found live once every commit on a release
-# PR started getting independently checked (see pull-request-policy-check.yaml's own
+# PR started getting independently checked (see pull-request-provenance.yaml's own
 # history for why that changed): open-release-pr.yaml's SECOND commit ("Add
 # outcome-reporting hooks...") never carries these trailers, only its first commit
 # ("Release: promote...") does - both commits promote the exact same app commit, the

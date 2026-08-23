@@ -44,7 +44,7 @@ releaseGuardrails:
   - name: image-scan
     description: Vulnerability scan (Trivy) of the promoted image
     status: real
-  - name: policy-check
+  - name: provenance
     description: Commit signature (gitsign) + SLSA provenance (Conforma)
     status: real
   - name: sbom

@@ -1,6 +1,8 @@
-# The real policy-check gate: points at the dedicated policy-check Pipeline, which
-# verifies the app-repo commit's gitsign signature against this Application's
-# allowed-signers list. See docs/commit-signing.md.
+# The real `provenance` gate (renamed from `policy-check` 2026-08-23, `git mv`'d from
+# `pull-request-policy-check.yaml` - see docs/admin/release-guardrails.md for why):
+# points at the dedicated provenance-check Pipeline, which verifies the app-repo
+# commit's gitsign signature against this Application's allowed-signers list. See
+# docs/commit-signing.md.
 #
 # repo-url/revision are PaC's own template vars for this gitops repo's PR.
 # app-namespace/app-name are static, substituted once at onboarding.
@@ -17,7 +19,7 @@
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-  generateName: policy-check
+  generateName: provenance
   annotations:
     # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
     # and why has() guards the pull_request field.
@@ -28,7 +30,7 @@ spec:
     resolver: cluster
     params:
       - { name: kind, value: pipeline }
-      - { name: name, value: policy-check }
+      - { name: name, value: provenance-check }
       - { name: namespace, value: platform-catalog }
   params:
     - { name: repo-url, value: "{{ repo_url }}" }

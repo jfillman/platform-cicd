@@ -5,7 +5,7 @@
 # pushing directly to the default branch, and lets PaC's own webhook auth decide when this
 # Task runs (see files/onboarding-templates/app-repo/onboarding-resync.yaml).
 #
-# Not gitsign-gated: policy-check's gitsign verification only runs on the gitops repo's
+# Not gitsign-gated: the provenance gate's gitsign verification only runs on the gitops repo's
 # release PR, not on either repo's default branch, so this Task's machine commits don't
 # need to be signed.
 apiVersion: tekton.dev/v1

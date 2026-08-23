@@ -113,7 +113,7 @@ spec:
 
           # Gate-specific guidance - each check fails for a different reason, so "push a
           # new commit and retest" isn't right for all of them (sast/image-scan need a new
-          # build; policy-check's two sub-checks need different fixes; sbom is usually transient).
+          # build; provenance's two sub-checks need different fixes; sbom is usually transient).
           case "${GATE_NAME}" in
             sast)
               recommendation="This checks the SAST (Semgrep) result already recorded when the image was **built**, not a fresh scan - re-running this check alone can't change the outcome. Fix the findings in your source and push a new commit to trigger a fresh build; once that build's own sast-scan passes, this check will pass against the new image."
@@ -121,7 +121,7 @@ spec:
             image-scan)
               recommendation="This is a live Trivy re-scan of the actual image about to be promoted. Update the vulnerable dependencies and push a new commit to trigger a fresh build+release - re-running this check alone re-scans the same unchanged image."
               ;;
-            policy-check)
+            provenance)
               recommendation="If the error above mentions an empty allowlist: this app has no \`governance.allowedCommitSigners\` configured yet - a platform admin needs to populate it before any commit can pass. If it instead mentions certificate/attestation verification: this is a known platform-level issue (see docs/provenance-policy.md), not something fixable from this PR - contact platform admins."
               ;;
             sbom)

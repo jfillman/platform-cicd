@@ -8,7 +8,7 @@
 # for the full GitOps-PR-promotion design, ported from a real prior production pattern.
 #
 # Deliberately does NOT deploy anything itself, and does NOT run governance checks
-# inline - governance (sast/image-scan/policy-check/sbom) now runs as independent,
+# inline - governance (sast/image-scan/provenance/sbom) now runs as independent,
 # individually-required GitHub Checks triggered by the PR itself (see the gitops repo's
 # own .tekton/pull_request-*.yaml files, reusing the same governance-gate-stub Task).
 # ArgoCD is the only thing that ever touches that env's cluster for this tier, and only

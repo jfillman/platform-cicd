@@ -17,7 +17,7 @@ deploy (dev) succeeds
      open-release-pr.yaml) - this is where the automated part of the flow ends; the
      flow-root trace closes here (see docs/tracing.md)
   -> the release-guardrail GitHub Checks run on that PR, one per gate in
-     .Values.releaseGuardrails (sast/image-scan/policy-check/sbom real, itsm/qa/
+     .Values.releaseGuardrails (sast/image-scan/provenance/sbom real, itsm/qa/
      policy-validation/image-promotion still stubs - see
      [release-guardrails.md](release-guardrails.md)/[governance-stubs.md](governance-stubs.md)),
      each individually re-triggerable and independent of the others except
@@ -25,7 +25,7 @@ deploy (dev) succeeds
   -> branch protection on the gitops repo requires every one of those checks + N human
      reviewers
 
-     `policy-check` verifies a `gitsign` signature on the actual APP-repo commit that
+     `provenance` verifies a `gitsign` signature on the actual APP-repo commit that
      triggered this release (see docs/commit-signing.md) - not this gitops PR's own
      commits, which are machine-generated and never signed. **This means the app-repo
      commit that ends up promoted must itself be gitsign-signed, which a GitHub PR
@@ -181,7 +181,7 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    API - not IaC-managed by this platform, documented here so it isn't a tribal-
    knowledge step): require status checks matching every `name` currently in
    `.Values.releaseGuardrails` (`charts/platform-cicd-catalog/values.yaml` - today
-   `sast`, `image-scan`, `policy-check`, `sbom`, `itsm`, `qa`, `policy-validation`,
+   `sast`, `image-scan`, `provenance`, `sbom`, `itsm`, `qa`, `policy-validation`,
    `image-promotion`) to pass, and require **2 approving reviews**. Enable "Allow
    auto-merge" on the repo so a PR merges itself the moment checks + reviews are
    satisfied, without needing anyone to click Merge. This list changes whenever a gate
@@ -201,7 +201,7 @@ fully automatic (checks-gated only) the moment that setting changes.
 Every gitops-repo release PR carries one required GitHub Check per gate in
 `.Values.releaseGuardrails` (see the PR body itself, which now documents this directly -
 Phase 3 item 8.6, and [release-guardrails.md](release-guardrails.md) for the mechanism
-and current gate list). `sast`/`image-scan`/`policy-check`/`sbom` are real as of Phase 3
+and current gate list). `sast`/`image-scan`/`provenance`/`sbom` are real as of Phase 3
 items 8.4/8.5/item 2/item 8.7 (see that item's own "cosign `--ca-roots` deprecation"
 fallout note in [provenance-policy.md](provenance-policy.md) for a still-unresolved edge
 case, not a stub); `itsm`/`qa`/`policy-validation`/`image-promotion` are still stubs.
@@ -253,7 +253,7 @@ failing required check, and how it's made visible.
   fully-green merge produces no alert - this is deliberately quiet in the common case.
   Verified live against real GitHub data (not merely the code path): a real merged PR
   with all checks green correctly produced no alert; a real PR with a genuinely failing
-  `policy-check`, fed synthetically as `merged=true` (no actual bypass has happened yet
+  `provenance`, fed synthetically as `merged=true` (no actual bypass has happened yet
   on this repo), correctly detected it and posted a real, visible Slack message.
   **Still not fully verified** (a real PR close event with an actual bypass hasn't been
   exercised), but a real, related bug WAS found and fixed live 2026-08-12 while

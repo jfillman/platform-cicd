@@ -30,24 +30,38 @@ GitHub setting - see "Branch protection" below.
 ## Two shapes, depending on what the gate needs
 
 **A. Independent stub or real check (the common case)** - most gates (sast, image-scan,
-policy-check, sbom, itsm, qa, policy-validation) run in parallel off the same PR
+provenance, sbom, itsm, qa, policy-validation) run in parallel off the same PR
 webhook, with no dependency on each other's outcome:
 
-- **Stub**: add one onboarding template file,
+- **Stub, fully generic (least effort)**: add one onboarding template file,
   `charts/platform-cicd-app/files/onboarding-templates/gitops-repo/pull-request-<name>.yaml`,
   pointing at the existing shared `governance-check` Pipeline with `gate-name: <name>`
-  (copy `pull-request-itsm.yaml` as a starting point). That Pipeline already calls
-  `governance-gate-stub` (loud "no real check implemented yet" logging + a
-  `governance.stub=true` span + a `"stub"` result, never a silent pass) and posts a PR
-  comment. **No new Pipeline or Task needed** - this is the whole change, plus the
-  registry entry above.
-- **Real**: once real logic exists, give the gate its own dedicated Pipeline (see
-  `sbom-check.yaml` for the shape: one or more real Tasks, a `finally: comment-pr` block
-  identical to every other gate's), and repoint that gate's onboarding template file at
-  it instead of `governance-check`. Flip its `releaseGuardrails` entry to `status: real`.
-  Nothing about the onboarding template file's *shape* changes, only the `pipelineRef`
-  name and dropping `gate-name` (see `pull-request-sbom.yaml` vs. this doc's stub
-  example for the before/after).
+  (copy `pull-request-itsm.yaml` or `pull-request-policy-validation.yaml` as a starting
+  point). That Pipeline already calls `governance-gate-stub` (loud "no real check
+  implemented yet" logging + a `governance.stub=true` span + a `"stub"` result, never a
+  silent pass) and posts a PR comment. **No new Pipeline or Task needed** - this is the
+  whole change, plus the registry entry above. Good default when the gate's eventual
+  real shape isn't known yet.
+- **Stub, dedicated (scaffolded for graduation)**: if you already know roughly what the
+  gate will eventually need to check, give it its own Pipeline+Task *now*, still calling
+  `governance-stub` under the hood - see `qa-check.yaml`/`qa-gate.yaml` for the pattern.
+  Same honest stub behavior and `status: stub` as the fully-generic case (this is NOT the
+  "Real" case below - no stub marking gets removed), but graduating later is then a
+  single-file swap of the Task's own step body, instead of writing a new Pipeline+Task
+  and repointing the onboarding template all at once. Worth the extra two files when you
+  already know the gate's real params (e.g. `qa-gate.yaml` already threads through
+  `repo-url`/`revision`, unused by the stub step, ready for whatever real check ends up
+  needing them).
+- **Real**: once real logic exists, give the gate its own dedicated Pipeline if it
+  doesn't already have one (see `sbom-check.yaml` for the shape: one or more real Tasks,
+  a `finally: comment-pr` block identical to every other gate's), and repoint that
+  gate's onboarding template file at it instead of `governance-check`. Flip its
+  `releaseGuardrails` entry to `status: real`. Nothing about the onboarding template
+  file's *shape* changes, only the `pipelineRef` name and dropping `gate-name` (see
+  `pull-request-sbom.yaml` vs. this doc's stub example for the before/after). If the
+  gate was already scaffolded dedicated-stub-style, this step shrinks further: just
+  replace the Task's stub step with real logic, keeping its name/params/results
+  contract the same - no Pipeline or onboarding-template change at all.
 
 **B. A gate that depends on the others (currently just `image-promotion`)** - Tekton has
 no cross-PipelineRun `runAfter` (every gate is its own independently PaC-triggered
@@ -94,14 +108,14 @@ template's own header for the exact chain of reasoning.
 |---|---|---|
 | `sast` | Static analysis (Semgrep) of the promoted commit's source | real |
 | `image-scan` | Vulnerability scan (Trivy) of the promoted image | real |
-| `policy-check` | Commit signature (gitsign) + SLSA provenance (Conforma) | real |
+| `provenance` | Commit signature (gitsign) + SLSA provenance (Conforma) | real |
 | `sbom` | Software bill of materials | real |
 | `itsm` | ServiceNow Change Request | stub |
 | `qa` | Test-completion verification | stub |
 | `policy-validation` | Gatekeeper/Kyverno admission-policy validation of the rendered manifest | stub |
 | `image-promotion` | Promotes the image from the dev registry to this env's upper registry - runs last, dependent on every gate above | stub |
 
-`policy-check` and `policy-validation` are deliberately separate gates, not one - the
+`provenance` and `policy-validation` are deliberately separate gates, not one - the
 former is about the *commit*'s signer identity and the *image*'s provenance attestation
 (docs/commit-signing.md, docs/provenance-policy.md), the latter is about the *rendered
 manifest*'s compliance with cluster admission policy. Different failure modes, different
@@ -140,7 +154,7 @@ together.
 
 **Found live 2026-08-23, not yet fixed - a platform decision, not a quick patch.** Two
 gates failed in the same test run for what first looked like the same reason; live
-evidence showed they're actually two different problems (see the `policy-check` fix
+evidence showed they're actually two different problems (see the `provenance` fix
 just above for the other one - a slow-but-legitimate `ec validate` policy evaluation
 tripping its own 5-minute internal cap, now given more headroom).
 
@@ -165,7 +179,7 @@ This is **structural, not a resource-contention flake**: any release where more 
 ~10 minutes elapse between the build stage and the release-PR check running (i.e.
 essentially all of them - test+deploy+release plus PR-check scheduling delay reliably
 exceeds 10 minutes) will fail `sast` closed, every time, regardless of cluster load, and
-`policy-check` is one slow evaluation away from the same fate. The `image-scan`/`sbom`
+`provenance` is one slow evaluation away from the same fate. The `image-scan`/`sbom`
 gates aren't affected the same way - they scan/sign fresh at check time rather than
 re-verifying an old cert.
 
@@ -185,7 +199,7 @@ the guardrails," and one of them was already tried and deliberately shelved:
   that signed this wasn't already compromised/rotated away by the time anyone checks),
   not a fix.
 
-Until one of these is decided and built, treat `sast`/`policy-check` failures on a real
+Until one of these is decided and built, treat `sast`/`provenance` failures on a real
 release PR as expected/known, not a signal something regressed - `/retest` will not help
 (the cert only gets *more* expired). Bypass sits behind existing break-glass tooling
 (`detect-bypass-merge.yaml`, docs/release.md's "Break-glass" section) if a real release

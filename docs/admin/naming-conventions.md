@@ -50,8 +50,17 @@ confirmed by auditing all 26 Task names live before writing this doc. Keep it th
 ## Catalog Pipeline names
 
 Noun matching the stage or check it represents: `build`, `test`, `deploy`, `release`,
-`sast-check`, `image-scan-check`, `policy-check`, `sbom-check`, `governance-check`,
-`bypass-merge-check`, `onboarding-resync`. Already consistent.
+`sast-check`, `image-scan-check`, `provenance-check`, `sbom-check`, `qa-check`,
+`governance-check`, `image-promotion-check`, `bypass-merge-check`, `onboarding-resync`.
+
+**Not actually consistent until 2026-08-23**: this doc originally claimed the list above
+was "already consistent," but missed a real gap - `policy-check` was the *gate's own
+name*, not just its Pipeline's `-check` suffix (every other real gate's name, e.g.
+`sast`, has no suffix at all; its Pipeline adds `-check`). That made `policy-check` the
+only gate whose identity redundantly baked in "check" - and it didn't say what it
+actually verified (gitsign commit signatures + SLSA provenance). Renamed the gate to
+`provenance` (Pipeline: `provenance-check`, matching every other gate's pattern) - see
+docs/admin/release-guardrails.md.
 
 ## Step names within a Task - the real inconsistency, now fixed
 
@@ -91,24 +100,32 @@ verb-noun) for the step doing the actual work (`scan`, `build-and-push`,
 
 ## PipelineRun naming
 
-**`generateName` must always end in `-`.** This is the actual root cause of PipelineRun
-names like `sastgdn8r` instead of `sast-gdn8r` - confirmed live: the five gitops-repo
-governance-check trigger files (`sast`, `policy-check`, `image-scan`, `sbom`,
-`bypass-check`) were missing the trailing dash, while the app-repo side (`build-`,
-`pr-validate-`, `onboarding-resync-`) already had it right. **Fixed** - all eight
-`generateName` values in `charts/platform-cicd-app/files/onboarding-templates/` now end in `-`.
+**`generateName` must always end in `-`, except the gitops-repo governance-check trigger
+files, which must NOT.** Two real, live-confirmed findings layered on top of each other
+here - read both before touching either:
 
-**Confirmed live, and this is a genuine, unavoidable trade-off, not an oversight**:
-Pipelines-as-Code derives the GitHub Check context name directly from
-`metadata.generateName`, verbatim - no trailing-dash trimming (confirmed via a real test
-PR against `gitops-nodejs-demo-app`: adding the dash produced a real PipelineRun name
-like `sast-gdn8r`, but the check name became `sast-` too, not `sast`). No annotation to
-decouple the two was found after a real search of PaC's docs. Since the clean check name
-(`sast`, not `sast-`) is the explicitly stronger preference, the five gitops-repo
-governance-check files **keep their dash-free `generateName`** - the resulting
-`sastgdn8r`-style PipelineRun name is the accepted cost of the cleaner, more visible
-check name. Don't "fix" this again without a real mechanism to set the check name
-independently of `generateName` - reverting this exact change was itself the fix.
+1. Missing the trailing dash is the actual root cause of PipelineRun names like
+   `sastgdn8r` instead of `sast-gdn8r` - confirmed live: the five gitops-repo
+   governance-check trigger files that existed at the time (`sast`, `policy-check` -
+   since renamed `provenance`, `image-scan`, `sbom`, `bypass-check`) were missing the
+   trailing dash, while the app-repo side (`build-`, `pr-validate-`,
+   `onboarding-resync-`) already had it right. First fix: add the dash everywhere.
+2. **That first fix was then partially reverted, deliberately, once tested live**:
+   Pipelines-as-Code derives the GitHub Check context name directly from
+   `metadata.generateName`, verbatim - no trailing-dash trimming (confirmed via a real
+   test PR against `gitops-nodejs-demo-app`: adding the dash produced a real PipelineRun
+   name like `sast-gdn8r`, but the check name became `sast-` too, not `sast`). No
+   annotation to decouple the two was found after a real search of PaC's docs. Since the
+   clean check name (`sast`, not `sast-`) is the explicitly stronger preference, every
+   gitops-repo governance-check onboarding template (nine as of 2026-08-23, after
+   `itsm`/`qa`/`policy-validation`/`image-promotion` were added on top of the original
+   five - see docs/admin/release-guardrails.md) **keeps its dash-free `generateName`**
+   deliberately - the resulting `sastgdn8r`-style PipelineRun name is the accepted cost
+   of the cleaner, more visible check name. Every new gitops-repo onboarding template
+   added since has followed this (dash-free) convention, not the general app-repo-side
+   one. Don't "fix" this again without a real mechanism to set the check name
+   independently of `generateName` - reverting the original dash-everywhere fix, for
+   just these files, was itself the fix.
 
 Deterministic (non-`generateName`) PipelineRun names fired by the broker
 (`test-$(body.context.id)`, `deploy-...`, `release-...`) already use a real separator -
@@ -116,8 +133,9 @@ no change needed, already the correct pattern to match.
 
 ## GitHub Check / status context names
 
-Short, no trailing dash, matching the concept the file represents (`sast`,
-`policy-check`, `image-scan`, `sbom`, `bypass-check`). Confirmed-good, keep as-is.
+Short, no trailing dash, matching the concept the file represents (`sast`, `provenance`,
+`image-scan`, `sbom`, `qa`, `itsm`, `policy-validation`, `image-promotion`,
+`bypass-check`). Confirmed-good, keep as-is.
 
 ## Helm chart and file naming
 

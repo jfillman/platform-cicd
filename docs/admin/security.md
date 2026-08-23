@@ -48,7 +48,7 @@ which case your cluster is in before treating it as a security reference; see
   [ADR-0006](adr/0006-cluster-agnostic-bootstrap.md).
 - **Provenance/attestation**: SLSA-shaped provenance is generated and verified before
   promotion - see [provenance-policy.md](provenance-policy.md).
-- **Commit signing**: the `policy-check` governance gate verifies a `gitsign` signature
+- **Commit signing**: the `provenance` governance gate verifies a `gitsign` signature
   on the actual app-repo commit being promoted (not the machine-generated gitops PR
   commit) - see [commit-signing.md](commit-signing.md), including the merge-strategy
   gotcha that can silently break this.

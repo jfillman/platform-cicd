@@ -1,11 +1,17 @@
 # Provenance policy validation (Phase 3 item 2, sub-item 3 of SLSA/Sigstore/Tekton Chains)
 
-The last sub-item of SLSA/Sigstore/Tekton Chains: `policy-check` gets a second, genuinely
-independent real gate alongside `verify` (gitsign commit signatures, `docs/commit-signing.md`).
-`verify-provenance` checks the *promoted image's* own signature and SLSA provenance
-attestation (both produced by Tekton Chains, `docs/image-signing.md`) against Conforma's
-policy engine. See `charts/platform-cicd-catalog/templates/tasks/verify-image-provenance.yaml` and
-`charts/platform-cicd-catalog/templates/pipelines/policy-check.yaml`.
+The last sub-item of SLSA/Sigstore/Tekton Chains: the release-guardrail gate covering
+this doc's territory - named `policy-check` when the events below happened, renamed
+`provenance` on 2026-08-23 (see docs/admin/release-guardrails.md) - gets a second,
+genuinely independent real gate alongside `verify` (gitsign commit signatures,
+`docs/commit-signing.md`). `verify-provenance` checks the *promoted image's* own
+signature and SLSA provenance attestation (both produced by Tekton Chains,
+`docs/image-signing.md`) against Conforma's policy engine. See
+`charts/platform-cicd-catalog/templates/tasks/verify-image-provenance.yaml` and
+`charts/platform-cicd-catalog/templates/pipelines/provenance-check.yaml`. The rest of
+this doc's "confirmed live" sections were written before the rename and quote the
+GitHub Check/PipelineRun names as they were observed at the time (`policy-check`) -
+left as accurate historical record rather than rewritten.
 
 ## Scope decision: additive, not a replacement for gitsign
 
@@ -15,7 +21,7 @@ mechanism to check a *git commit's* signature, that's gitsign's job and already 
 Conforma could re-check, the Application's existing `allowed-commit-signers` ConfigMap
 continues to drive gitsign's check unchanged, and this sub-item adds a genuinely new gate:
 does the promoted **image** have a valid signature and SLSA provenance attestation,
-conforming to policy. `policy-check` ends up with two independent, real gates, neither
+conforming to policy. `provenance` ends up with two independent, real gates, neither
 `runAfter`s the other, both required. The same ConfigMap is exposed to Conforma as
 `ruleData` too - structurally "concatenated" per the original request - even though no
 current base-policy rule reads it, ready for a future rule to consume.
@@ -103,7 +109,7 @@ worth closing: the attestation's own signed statement already records the exact 
 digest inside the cryptographically-signed payload, so `verify-attestation`'s signature
 check alone already proves "this identity vouches for exactly this image digest."
 
-## How `policy-check` finds the app-repo commit and the promoted image
+## How `provenance` finds the app-repo commit and the promoted image
 
 Same trailer mechanism sub-item 1 already built for `verify` -
 `open-release-pr.yaml`'s commit carries `X-App-Repo`/`X-App-Commit` trailers - reused
@@ -242,7 +248,7 @@ needed) - the three `when:`-gated
 governance-stub tasks (`sast-scan`/`image-scan`/`generate-sbom`, all resolving to the same
 `governance-gate-stub` Task CRD) are deliberately excluded, since they're legitimately
 skipped whenever an Application's `cicd.yaml` disables that gate - including them would make
-`policy-check` fail for any Application that's turned SAST/image-scan/SBOM off, which isn't what
+`provenance` fail for any Application that's turned SAST/image-scan/SBOM off, which isn't what
 "the pipeline actually ran" should mean.
 
 ### Derived live from the real `build` Pipeline object, not hardcoded
@@ -488,9 +494,16 @@ was still valid, long after the cert itself has expired. Since this platform del
 deferred both Rekor and TSA (see above), a signature genuinely becomes unverifiable once
 its cert's short validity window passes - an honest, accepted consequence of that
 deferral, not a gap in `verify-image-provenance.yaml` itself. In practice this isn't an
-issue for the real automated flow (`policy-check` runs within seconds of the image being
+issue for the real automated flow (`provenance` runs within seconds of the image being
 signed, well inside the validity window) - it only surfaces when manually re-testing
 against a stale signature, as happened here.
+
+**2026-08-23 update: this assumption no longer holds, confirmed live - see
+docs/admin/release-guardrails.md's "Known open issue" section.** The release-PR check
+now genuinely runs minutes after signing (test+deploy+release all run first), not
+seconds, and Fulcio's leaf certs expire in exactly 10 minutes - `sast` (a different
+Task, same underlying problem) was caught failing closed on a real release PR for
+precisely this reason. Revisit this paragraph once that's resolved.
 
 ## A real, unrelated incident hit mid-testing: the cluster's disk filled to 100%
 

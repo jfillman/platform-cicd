@@ -1,11 +1,13 @@
-# STUB - see docs/admin/governance-stubs.md and docs/admin/release-guardrails.md.
-# References the shared governance-check Pipeline (gate-name: qa), which calls
-# governance-gate-stub - loud "no real check implemented yet" logging + a stub span,
-# never a silent pass (ADR-0003). Intended real behavior: verify the required test suite
-# actually ran and passed for the commit being promoted (mechanism TBD - likely reading
-# the test stage's own recorded outcome rather than re-running tests here). Swap for a
-# dedicated Pipeline once that's built - see governance-stubs.md's "Landing a real
-# implementation" section; nothing else about this file's shape needs to change.
+# STUB, but with its own dedicated Pipeline (unlike itsm/policy-validation, which still
+# share governance-check) - see docs/admin/governance-stubs.md and
+# docs/admin/release-guardrails.md. References the qa-check Pipeline, which calls
+# qa-gate.yaml, which itself still calls governance-gate-stub's shared machinery under
+# the hood - loud "no real check implemented yet" logging + a stub span, never a silent
+# pass (ADR-0003). Intended real behavior: verify the required test suite actually ran
+# and passed for the commit being promoted (mechanism TBD - likely reading the test
+# stage's own recorded outcome rather than re-running tests here). Landing that is now a
+# one-file change to qa-gate.yaml's own step - see that Task's own header for why it's
+# already shaped to receive it; nothing about this onboarding template needs to change.
 #
 # No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
 # pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
@@ -23,11 +25,11 @@ spec:
     resolver: cluster
     params:
       - { name: kind, value: pipeline }
-      - { name: name, value: governance-check }
+      - { name: name, value: qa-check }
       - { name: namespace, value: platform-catalog }
   params:
-    - { name: gate-name, value: qa }
     - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: revision, value: "{{ revision }}" }
     - { name: pr-number, value: "{{ body.pull_request.number }}" }
   taskRunTemplate:
     serviceAccountName: pipeline-runner

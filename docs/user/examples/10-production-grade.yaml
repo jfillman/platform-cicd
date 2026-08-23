@@ -74,10 +74,11 @@ pipelines:
       - stage: deploy
         env: staging
       - stage: release
-        env: staging   # promotes to the governed release path - 4 required GitHub
-                        # status checks (sast/image-scan/policy-check/sbom) plus your
-                        # gitops repo's own required-reviewer branch protection have
-                        # to pass before this can merge
+        env: staging   # promotes to the governed release path - the required GitHub
+                        # status checks in .Values.releaseGuardrails (sast/image-scan/
+                        # provenance/sbom today, see docs/admin/release-guardrails.md)
+                        # plus your gitops repo's own required-reviewer branch
+                        # protection have to pass before this can merge
 
   pr-check:
     trigger:

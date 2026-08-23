@@ -29,7 +29,7 @@ spec:
   params:
     - name: gate-name
       type: string
-      description: e.g. sast, image-scan, policy-check, sbom.
+      description: e.g. sast, image-scan, provenance, sbom.
     - name: flow-traceparent
       type: string
       default: ""

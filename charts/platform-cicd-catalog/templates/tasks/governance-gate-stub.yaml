@@ -6,7 +6,7 @@
 # governance-check.yaml (the shared, parameterized-by-gate-name Pipeline for an
 # independent stub gate) and from image-promotion-check.yaml's own `promote` step,
 # parameterized by gate-name either way. Originally also covered sast/image-scan/
-# policy-check/sbom before each was promoted to a dedicated, real Pipeline - see
+# provenance/sbom before each was promoted to a dedicated, real Pipeline - see
 # governance-stubs.md's "Landing a real implementation" section for that migration
 # path. See catalog/stepactions/governance-stub.yaml and docs/governance-stubs.md for
 # why this exists as a loud, explicit stub instead of silently doing nothing or (the

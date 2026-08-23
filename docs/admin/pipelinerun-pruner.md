@@ -73,7 +73,8 @@ job only ever deletes or does nothing).
   prediction - `platform-cicd-demo` went from up to dozens of completed runs per
   pipeline down to exactly 1 (the newest) per `(namespace, tekton.dev/pipeline)` group,
   for every one of `build`/`test`/`deploy`/`release`/`sast-check`/`image-scan-check`/
-  `policy-check`/`sbom-check`. Confirmed the 54 TaskRuns left behind all belong to one
+  `provenance-check` (named `policy-check` at the time)/`sbom-check`. Confirmed the 54
+  TaskRuns left behind all belong to one
   of those 8 retained PipelineRuns (zero orphans) - grouped by
   `tekton.dev/pipelineRun` label and cross-checked against `kubectl get pipelinerun`.
 - Total cluster pod count dropped from 235 to 109 as a direct result (this cluster's

@@ -1,7 +1,8 @@
 # catalog/tasks/verify-image-provenance.yaml
 #
-# Image-provenance half of the real policy-check gate (see verify-commit-signature.yaml for
-# the commit-signature half). Verifies the promoted image's cosign signature/SLSA provenance
+# Image-provenance half of the real `provenance` gate (renamed from `policy-check`
+# 2026-08-23, see docs/admin/release-guardrails.md - verify-commit-signature.yaml is the
+# commit-signature half). Verifies the promoted image's cosign signature/SLSA provenance
 # attestation (both produced by Tekton Chains), then evaluates it with Conforma against the
 # base policy plus this app's own policy data.
 #
@@ -354,6 +355,6 @@ spec:
         # in docs/admin/release-guardrails.md. Doubling the budget is a mitigation based
         # on the one data point available (it ran right up to the old cap, not wildly
         # past it), not a proven fix - revisit if evaluation still times out at 10m; see
-        # this Task's own pipelineRun timeout budget (pull-request-policy-check.yaml)
+        # this Task's own pipelineRun timeout budget (pull-request-provenance.yaml)
         # for the matching headroom this needs upstream.
         ec validate input "${wrapped_provenance_file}" --policy "${policy_file}" --output json --timeout 10m

@@ -10,8 +10,9 @@
 # allowed-commit-signers is a plain list of emails, not a regex - the Task builds
 # gitsign's --certificate-identity-regexp from it at runtime.
 #
-# Lives in the Application's own namespace so the same-namespace policy-check Task can
-# read it without cross-namespace RBAC.
+# Lives in the Application's own namespace so the same-namespace verify-commit-signature
+# Task (part of the release stage's `provenance` gate, renamed from `policy-check`
+# 2026-08-23) can read it without cross-namespace RBAC.
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -1,5 +1,5 @@
 # BOILERPLATE - real (not stub), shift-left redesign. See also
-# pull-request-image-scan.yaml, pull-request-policy-check.yaml, pull-request-sbom.yaml.
+# pull-request-image-scan.yaml, pull-request-provenance.yaml, pull-request-sbom.yaml.
 # References the dedicated sast-check Pipeline, which resolves the promoted image and
 # checks whether sast-scan passed at build time via its SLSA provenance attestation -
 # not a re-scan (re-scanning source at a fixed commit would be redundant).
