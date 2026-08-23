@@ -16,9 +16,14 @@ deploy (dev) succeeds
      <cluster>/<env>/values.yaml (charts/platform-cicd-catalog/templates/tasks/
      open-release-pr.yaml) - this is where the automated part of the flow ends; the
      flow-root trace closes here (see docs/tracing.md)
-  -> 4 independent GitHub Checks run on that PR (sast/image-scan/policy-check/sbom -
-     all still stubs, see docs/governance-stubs.md), each individually re-triggerable
-  -> branch protection on the gitops repo requires all 4 checks + N human reviewers
+  -> the release-guardrail GitHub Checks run on that PR, one per gate in
+     .Values.releaseGuardrails (sast/image-scan/policy-check/sbom real, itsm/qa/
+     policy-validation/image-promotion still stubs - see
+     [release-guardrails.md](release-guardrails.md)/[governance-stubs.md](governance-stubs.md)),
+     each individually re-triggerable and independent of the others except
+     `image-promotion`, which deliberately runs last and waits on the rest
+  -> branch protection on the gitops repo requires every one of those checks + N human
+     reviewers
 
      `policy-check` verifies a `gitsign` signature on the actual APP-repo commit that
      triggered this release (see docs/commit-signing.md) - not this gitops PR's own
@@ -132,15 +137,16 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    dev manifests) to it - this is the one part of the gitops repo's content the platform
    has no way to generate for you (it doesn't know your Deployment's shape).
 
-   The four governance-check `.tekton/` files (`pull-request-sast.yaml`/`-image-scan.yaml`/
-   `-sbom.yaml`/`-policy-check.yaml`, with `<APP_NAMESPACE>`/`<APP_NAME>` already
-   substituted) do **not** need to be hand-copied - `deliver-onboarding-files.yaml`'s
+   The release-guardrail `.tekton/` files (one `pull-request-<gate>.yaml` per gate in
+   `.Values.releaseGuardrails` - see [release-guardrails.md](release-guardrails.md),
+   with `<APP_NAMESPACE>`/`<APP_NAME>` already substituted where a given gate needs
+   them) do **not** need to be hand-copied - `deliver-onboarding-files.yaml`'s
    `deliver-gitops-repo-files` step delivers them via the same onboarding-resync PR
    mechanism that delivers the app repo's own `.tekton/` files (see
    [onboarding-mechanics.md](onboarding-mechanics.md) step 6), as long as `platformIdentity.gitopsRepoUrl` was
    given at install time and the `Repository` CR from step 4 below already exists. Confirmed
-   live: a fresh gitops repo with nothing but the two manifests above gets all four
-   governance files opened as a PR automatically on the next onboarding-resync run.
+   live: a fresh gitops repo with nothing but the two manifests above gets every
+   governance file opened as a PR automatically on the next onboarding-resync run.
 
 3. **Install the PaC GitHub App on the new repo.** While there, check its permissions
    include `Contents: Read & write` and `Pull requests: Read & write` - PaC's own needs
@@ -173,10 +179,14 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
 
 6. **Configure branch protection** on the gitops repo's `main` branch (GitHub UI or
    API - not IaC-managed by this platform, documented here so it isn't a tribal-
-   knowledge step): require status checks `sast`, `image-scan`, `policy-check`,
-   `sbom` to pass, and require **2 approving reviews**. Enable "Allow auto-merge" on
-   the repo so a PR merges itself the moment checks + reviews are satisfied, without
-   needing anyone to click Merge.
+   knowledge step): require status checks matching every `name` currently in
+   `.Values.releaseGuardrails` (`charts/platform-cicd-catalog/values.yaml` - today
+   `sast`, `image-scan`, `policy-check`, `sbom`, `itsm`, `qa`, `policy-validation`,
+   `image-promotion`) to pass, and require **2 approving reviews**. Enable "Allow
+   auto-merge" on the repo so a PR merges itself the moment checks + reviews are
+   satisfied, without needing anyone to click Merge. This list changes whenever a gate
+   is added/removed (see [release-guardrails.md](release-guardrails.md)'s "Branch
+   protection" section) - it is not kept in sync automatically.
 
 ## Evolving the approval requirement
 
@@ -188,15 +198,21 @@ fully automatic (checks-gated only) the moment that setting changes.
 
 ## Governance checks, re-triggering, and break-glass
 
-Every gitops-repo release PR carries four independent, required GitHub Checks -
-`sast`/`image-scan`/`policy-check`/`sbom` (see the PR body itself, which now documents
-this directly - Phase 3 item 8.6). `sast`/`image-scan`/`policy-check` are real as of
-Phase 3 items 8.4/8.5/item 2; `sbom` is still a stub pending item 8.7.
+Every gitops-repo release PR carries one required GitHub Check per gate in
+`.Values.releaseGuardrails` (see the PR body itself, which now documents this directly -
+Phase 3 item 8.6, and [release-guardrails.md](release-guardrails.md) for the mechanism
+and current gate list). `sast`/`image-scan`/`policy-check`/`sbom` are real as of Phase 3
+items 8.4/8.5/item 2/item 8.7 (see that item's own "cosign `--ca-roots` deprecation"
+fallout note in [provenance-policy.md](provenance-policy.md) for a still-unresolved edge
+case, not a stub); `itsm`/`qa`/`policy-validation`/`image-promotion` are still stubs.
+All except `image-promotion` run independently of each other; `image-promotion`
+deliberately waits on the rest (see that doc's "Two shapes" section).
 
 **Re-running a failed check**: comment `/retest <check-name>` on the PR (e.g. `/retest
-sast`) to re-run just that one, or `/retest` alone to re-run all four - PaC's own native
-comment mechanism, no platform code involved. Fix the underlying issue first if the
-failure is real; re-running only re-evaluates the check, it does not bypass it.
+sast`) to re-run just that one, or `/retest` alone to re-run every gate in
+`.Values.releaseGuardrails` - PaC's own native comment mechanism, no platform code
+involved. Fix the underlying issue first if the failure is real; re-running only
+re-evaluates the check, it does not bypass it.
 
 **Each check also posts its own real PR comment** on top of the GitHub Check PaC already
 reports natively (`catalog/tasks/comment-pr-check-result.yaml`, 2026-08-10) - failure
@@ -257,9 +273,10 @@ failing required check, and how it's made visible.
 ## Verification
 
 - Push to the app repo, let it flow through build->test->deploy->release for real.
-- A PR should appear on `gitops-<app-name>` with the correct image reference, and the
-  4 governance checks should show up **independently** in the PR's checks list (each
-  individually re-runnable, e.g. via `/retest sast` PR comment).
+- A PR should appear on `gitops-<app-name>` with the correct image reference, and every
+  governance check in `.Values.releaseGuardrails` should show up in the PR's checks list
+  (each individually re-runnable, e.g. via `/retest sast` PR comment) - all independent
+  of each other except `image-promotion`, which should only go green once the rest have.
 - Security check: confirm `/github-installation-token` genuinely rejects a request for
   a repo the caller's Application doesn't own (test from `platform-cicd-demo`'s SA
   requesting a different, unrelated `gitops-*` repo name - should get a 403).

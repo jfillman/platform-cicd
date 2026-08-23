@@ -186,12 +186,18 @@ spec:
         # sed pattern as notify-slack.yaml so the two never diverge.
         repo_short="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
         commit_short="${GIT_REVISION:0:12}"
-        # Explains what each of the four required GitHub Checks on this PR does and how
-        # to re-trigger a failing one via PaC's native `/retest <name>` comment. sbom is
-        # still a stub, stated plainly rather than glossed over (this platform's
-        # "stub-ness should be structurally loud" principle). Same printf+\n-escape
-        # technique as commit_message above, not a raw heredoc, for the same reason.
-        governance_text="$(printf '\n\n## Governance checks\n\n| Check | What it verifies | Status |\n|---|---|---|\n| `sast` | Static analysis (Semgrep) of the promoted commit'"'"'s source | real |\n| `image-scan` | Vulnerability scan (Trivy) of the promoted image | real |\n| `policy-check` | Commit signature (gitsign) + SLSA provenance (Conforma) | real |\n| `sbom` | Software bill of materials | not yet real - see docs/governance-stubs.md |\n\n**If a check fails**: comment `/retest <check-name>` on this PR to re-run just that one (e.g. `/retest sast`), or `/retest` alone to re-run all of them. Fix the underlying issue first if the failure is real - re-running does not bypass a check, it only re-evaluates it.')"
+        # Explains what each required GitHub Check on this PR does and how to re-trigger
+        # a failing one via PaC's native `/retest <name>` comment. The table rows below
+        # are Helm-rendered from .Values.releaseGuardrails (the single source of truth
+        # for the gate set, docs/admin/release-guardrails.md), not hand-listed here - a
+        # stub gate's Status column says so plainly rather than glossing over it (this
+        # platform's "stub-ness should be structurally loud" principle, ADR-0003). Same
+        # printf+\n-escape technique as commit_message above, not a raw heredoc - a raw
+        # heredoc at column 0 inside this already-indented `script: |` block previously
+        # broke the surrounding Task's own YAML by terminating the block scalar early
+        # (see docs/admin/multi-cluster.md's "Live end-to-end verification" section for
+        # the real, live-confirmed bug this technique was adopted to avoid).
+        governance_text="$(printf '\n\n## Governance checks\n\n| Check | What it verifies | Status |\n|---|---|---|\n{{ range .Values.releaseGuardrails }}| `{{ .name }}` | {{ .description | replace "'" "'\"'\"'" }} | {{ if eq .status "real" }}real{{ else }}not yet real - see docs/governance-stubs.md{{ end }} |\n{{ end }}\n**If a check fails**: comment `/retest <check-name>` on this PR to re-run just that one (e.g. `/retest sast`), or `/retest` alone to re-run all of them. Fix the underlying issue first if the failure is real - re-running does not bypass a check, it only re-evaluates it.')"
         pr_body_text="$(printf '**App**: %s\n**Env**: %s\n**Repo**: [%s](%s)\n**Commit**: [`%s`](%s/commit/%s)\n**Image**: `%s`\n\nMerging this PR triggers ArgoCD to sync it to %s. See docs/release.md.%s' \
           "${APP_NAME}" "${ENV}" "${repo_short}" "${GIT_URL}" "${commit_short}" "${GIT_URL}" "${GIT_REVISION}" "${IMAGE_REF}" "${ENV}" "${governance_text}")"
         pr_body="$(jq -n \

@@ -1,0 +1,40 @@
+# STUB - see docs/admin/governance-stubs.md and docs/admin/release-guardrails.md.
+# References the shared governance-check Pipeline (gate-name: policy-validation), which
+# calls governance-gate-stub - loud "no real check implemented yet" logging + a stub
+# span, never a silent pass (ADR-0003). Deliberately a different gate name from the
+# existing `policy-check` (commit signature + SLSA provenance, docs/commit-signing.md/
+# docs/provenance-policy.md) - this one is about admission-policy compliance of the
+# rendered deployment manifest itself (Gatekeeper/Kyverno constraints), a genuinely
+# separate concern. Intended real behavior: render this PR's promoted manifest and
+# evaluate it against the target cluster's configured ConstraintTemplates/Policies
+# (e.g. via `gator test`/`kyverno apply` against a local policy bundle, no live cluster
+# access needed). Swap for a dedicated Pipeline once that's built - see
+# governance-stubs.md's "Landing a real implementation" section; nothing else about this
+# file's shape needs to change.
+#
+# No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
+# pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: policy-validation
+  annotations:
+    # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
+    # and why has() guards the pull_request field.
+    pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && body.pull_request.base.ref == "main" && body.pull_request.head.ref.startsWith("release-")'
+    pipelinesascode.tekton.dev/max-keep-runs: "5"
+spec:
+  pipelineRef:
+    resolver: cluster
+    params:
+      - { name: kind, value: pipeline }
+      - { name: name, value: governance-check }
+      - { name: namespace, value: platform-catalog }
+  params:
+    - { name: gate-name, value: policy-validation }
+    - { name: repo-url, value: "{{ repo_url }}" }
+    - { name: pr-number, value: "{{ body.pull_request.number }}" }
+  taskRunTemplate:
+    serviceAccountName: pipeline-runner
+  timeouts:
+    pipeline: "10m"

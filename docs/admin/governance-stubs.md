@@ -3,10 +3,13 @@
 `sast`, `imageScan`, `policyCheck`, and `sbom` are real, enforcing gates today - see
 [features.md](../user/features.md#governance-gates---real-not-stubs) for what each one
 actually verifies (Semgrep, Trivy, gitsign commit-signature verification, cosign SBOM
-attestation). This doc covers the mechanism that got them there, and that any future
-gate should reuse: **a stub is never reported with the same confidence as a real
-check** - see ADR-0003 for why that matters enough to be a standing design rule, not
-just a one-time migration detail.
+attestation). `itsm`, `qa`, `policy-validation`, and `image-promotion` are newer stub
+gates, not yet real - see [release-guardrails.md](release-guardrails.md) for what each
+is intended to verify and the registry (`.Values.releaseGuardrails`) that drives the
+full current gate list. This doc covers the mechanism that got the first four there,
+and that any future gate should reuse: **a stub is never reported with the same
+confidence as a real check** - see ADR-0003 for why that matters enough to be a
+standing design rule, not just a one-time migration detail.
 
 ## How a stub stays honestly a stub
 

@@ -33,6 +33,7 @@ architecture.md wherever relevant.
 
 **Release & operations**
 - [release.md](release.md) - the GitOps promotion flow, step by step
+- [release-guardrails.md](release-guardrails.md) - adding/removing a release-PR gate
 - [catalog-versioning.md](catalog-versioning.md) - promoting shared catalog changes
 - [pipelinerun-pruner.md](pipelinerun-pruner.md) - PipelineRun history cleanup
 - [stalled-pipeline-detector.md](stalled-pipeline-detector.md) - stuck-flow alerting

@@ -23,3 +23,42 @@ toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 # tektoncd/operator's single-targetNamespace convention (see
 # gitops-cluster-dev/50-platform-cicd/tekton-operator/) - the sole install path now.
 tektonChainsNamespace: tekton-pipelines
+
+# Single source of truth for every guardrail gate enforced on a gitops-repo release PR
+# (docs/admin/release-guardrails.md). Adding or removing a gate here is only PART of the
+# change - it also needs its own catalog Pipeline (a dedicated one for a real gate, or
+# just a new .tekton/pull-request-<name>.yaml onboarding template pointing at the shared
+# `governance-check` Pipeline for a stub - see governance-check.yaml/governance-gate-
+# stub.yaml) plus a matching required-status-check entry in the gitops repo's own branch
+# protection (a manual GitHub setting, not platform IaC - see release.md). This list
+# itself only drives the two places that used to hardcode all four original gate names:
+# detect-bypass-merge.yaml's break-glass check and open-release-pr.yaml's PR-body table.
+# `status: real` vs `stub` controls only how each is described in that table - it has no
+# effect on enforcement (branch protection enforces every required check identically
+# regardless of stub-ness; see ADR-0003 for why a stub is still a real, structurally-loud
+# gate, just one whose check always reports "stub" rather than passing real judgment).
+releaseGuardrails:
+  - name: sast
+    description: Static analysis (Semgrep) of the promoted commit's source
+    status: real
+  - name: image-scan
+    description: Vulnerability scan (Trivy) of the promoted image
+    status: real
+  - name: policy-check
+    description: Commit signature (gitsign) + SLSA provenance (Conforma)
+    status: real
+  - name: sbom
+    description: Software bill of materials
+    status: real
+  - name: itsm
+    description: ServiceNow Change Request
+    status: stub
+  - name: qa
+    description: Test-completion verification
+    status: stub
+  - name: policy-validation
+    description: Gatekeeper/Kyverno admission-policy validation of the rendered manifest
+    status: stub
+  - name: image-promotion
+    description: Promotes the image from the dev registry to this env's upper registry - runs last, only once every other gate above has passed
+    status: stub
