@@ -42,11 +42,28 @@ spec:
       description: The gitops PR's head commit - PaC's `revision`.
   results:
     - name: image-ref
+  # Audience-bound projected ServiceAccount token for the shared broker's GitHub
+  # token-minting endpoint - same pattern as clone-repo-authenticated.yaml. The gitops
+  # repo this Task clones can be private, so a bare unauthenticated fetch isn't enough.
+  volumes:
+    - name: github-token-broker-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: github-token-broker-token
+              audience: github-installation-token
+              expirationSeconds: 600
   steps:
     - name: extract
       image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
+      volumeMounts:
+        - name: github-token-broker-token
+          mountPath: /var/run/secrets/platform
+          readOnly: true
       env:
+        - name: GITHUB_TOKEN_BROKER_URL
+          value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
         - name: REPO_URL
           value: $(params.repo-url)
         - name: REVISION
@@ -54,8 +71,15 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+        source "${PLATFORM_LIB}/github-app.sh"
+
+        gitops_owner="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        gitops_repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
+        gitops_token="$(github_app_installation_token "${gitops_owner}" "${gitops_repo}")"
+        gitops_clone_url="https://x-access-token:${gitops_token}@github.com/${gitops_owner}/${gitops_repo}.git"
+
         workdir="$(mktemp -d)"
-        git clone --quiet "${REPO_URL}" "${workdir}/gitops"
+        git clone --quiet "${gitops_clone_url}" "${workdir}/gitops"
         cd "${workdir}/gitops"
         git checkout --quiet "${REVISION}"
 

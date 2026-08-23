@@ -46,11 +46,30 @@ spec:
     - name: app-name
       type: string
       description: Used to find <app-name>-policy-config in this Application's own namespace (charts/platform-cicd-app/templates/governance/policy-config.yaml).
+  # Audience-bound projected ServiceAccount token for the shared broker's GitHub
+  # token-minting endpoint - same pattern as clone-repo-authenticated.yaml/
+  # comment-pr-check-result.yaml. Both the gitops repo and the app repo this Task
+  # clones can be private, so both clones need a real installation token, not a bare
+  # unauthenticated fetch.
+  volumes:
+    - name: github-token-broker-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: github-token-broker-token
+              audience: github-installation-token
+              expirationSeconds: 600
   steps:
     - name: verify
       image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
+      volumeMounts:
+        - name: github-token-broker-token
+          mountPath: /var/run/secrets/platform
+          readOnly: true
       env:
+        - name: GITHUB_TOKEN_BROKER_URL
+          value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
         - name: REPO_URL
           value: $(params.repo-url)
         - name: REVISION
@@ -62,9 +81,15 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+        source "${PLATFORM_LIB}/github-app.sh"
+
+        gitops_owner="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        gitops_repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
+        gitops_token="$(github_app_installation_token "${gitops_owner}" "${gitops_repo}")"
+        gitops_clone_url="https://x-access-token:${gitops_token}@github.com/${gitops_owner}/${gitops_repo}.git"
 
         workdir="$(mktemp -d)"
-        git clone --quiet "${REPO_URL}" "${workdir}/gitops"
+        git clone --quiet "${gitops_clone_url}" "${workdir}/gitops"
         cd "${workdir}/gitops"
         git checkout --quiet "${REVISION}"
 
@@ -84,12 +109,18 @@ spec:
         echo "Verifying ${app_repo}@${app_commit}"
 
         # Narrow, single-commit fetch - no PaC Repository CR/webhook needed on the app
-        # repo for this, same trust level clone-repo already has everywhere else in this
-        # platform (a plain, unauthenticated fetch of a public repo).
+        # repo for this. The app repo can be private same as the gitops repo, so this
+        # mints its own installation token rather than assuming a public, unauthenticated
+        # fetch works.
+        app_owner="$(echo "${app_repo}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
+        app_repo_name="$(echo "${app_repo}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
+        app_token="$(github_app_installation_token "${app_owner}" "${app_repo_name}")"
+        app_clone_url="https://x-access-token:${app_token}@github.com/${app_owner}/${app_repo_name}.git"
+
         cd "${workdir}"
         mkdir app && cd app
         git init --quiet
-        git fetch --quiet --depth 1 "${app_repo}" "${app_commit}"
+        git fetch --quiet --depth 1 "${app_clone_url}" "${app_commit}"
 
         # Application's allowed-signers list - plain emails, one per line, comments/blanks
         # ignored - turned into the --certificate-identity-regexp gitsign needs right
