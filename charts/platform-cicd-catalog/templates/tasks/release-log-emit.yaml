@@ -147,12 +147,18 @@ spec:
         # Same "checked by name, not blanket all-green" approach as
         # detect-bypass-merge.yaml, and the same releaseGuardrails single-source-of-truth
         # Helm range - a gate added/removed there needs no change here.
+        # Flat gate_<name> keys (dashes normalized to underscores), not a nested "gates"
+        # object - Grafana's "Extract fields" table transform (release-log.json) turns
+        # each top-level JSON key into its own column directly; a nested object would
+        # just render as one column holding a stringified sub-object instead of one
+        # column per gate.
         gates_json="{}"
         bypass="false"
         for gate in {{ range .Values.releaseGuardrails }}{{ .name }} {{ end }}; do
           conclusion="$(jq -r --arg name "Pipelines as Code CI / ${gate}" \
             '[.check_runs[] | select(.name == $name)][0].conclusion // "missing"' <<<"${checks_json}")"
-          gates_json="$(jq -nc --argjson gates "${gates_json}" --arg k "${gate}" --arg v "${conclusion}" \
+          gate_key="gate_$(echo "${gate}" | tr '-' '_')"
+          gates_json="$(jq -nc --argjson gates "${gates_json}" --arg k "${gate_key}" --arg v "${conclusion}" \
             '$gates + {($k): $v}')"
           if [[ "${conclusion}" != "success" && "${merged}" == "true" ]]; then
             bypass="true"
@@ -195,10 +201,9 @@ spec:
             status: $status, git_url: $gitUrl, git_revision: $gitRevision, chain_id: $chainId,
             flow_start_time: $flowStartTime, pr_created_at: $prCreatedAt, finished_at: $finishedAt,
             pr_url: $prUrl, pr_number: $prNumber, pr_title: $prTitle, merged_by: $mergedBy,
-            approvers: ($approversCsv | split(",") | map(select(length > 0))),
-            bypass: $bypass,
-            gates: $gates
-          }')"
+            approvers: ($approversCsv | split(",") | map(select(length > 0)) | join(", ")),
+            bypass: $bypass
+          } + $gates')"
 
         # Bounded-cardinality only: one value per app x env x outcome x bypass, never
         # per-release-unique - see the comment above.

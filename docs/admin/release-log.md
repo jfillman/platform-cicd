@@ -54,10 +54,14 @@ same as its siblings). On a confirmed outcome, it:
 4. Computes `bypass`: true iff the PR merged while any gate's check wasn't `success` -
    identical definition to `detect-bypass-merge.yaml`'s own break-glass detection.
 5. Emits one OTLP log record: a JSON object (app/env/cluster/status, git url/revision,
-   chain-id, every timestamp, PR url/number/title, merged-by, approvers, the full
-   per-gate conclusion map, bypass) as the log body, plus a small set of low-cardinality
+   chain-id, every timestamp, PR url/number/title, merged-by, approvers, one flat
+   `gate_<name>` key per entry in `.Values.releaseGuardrails` - e.g. `gate_sast`,
+   `gate_image_scan` - and bypass) as the log body, plus a small set of low-cardinality
    fields (`app_namespace`, `app_name`, `env`, `cluster`, `status`, `bypass`) as OTLP log
-   attributes.
+   attributes. Gate results are flat top-level keys, not a nested `gates` object -
+   Grafana's "Extract fields" table transform (see "Rendering it in Grafana" below) turns
+   each top-level JSON key into its own column directly; a nested object would just
+   render as one column holding a stringified sub-object.
 
 ## Real gap hit live: `otel_log_send` didn't exist in the running toolbox image
 
@@ -75,7 +79,7 @@ pushing, then explicitly evicting the stale image from the node
 (`crictl rmi ghcr.io/jfillman/platform-cicd-toolbox:latest` inside the node container -
 `IfNotPresent` won't re-pull on its own). A second real TaskRun, fed
 `gitops-checkout-api`'s actual PR #14, then succeeded and correctly reported real data
-(`bypass=true`, `approvers=none`, `gates.provenance=missing` - that last one is real too:
+(`bypass=true`, `approvers=none`, `gate_provenance=missing` - that last one is real too:
 PR #14 predates the `policy-check`->`provenance` gate rename, so its check-runs were
 posted under the old name and today's lookup for `provenance` correctly finds nothing,
 rather than silently matching the wrong check).
@@ -109,9 +113,45 @@ Live-verified combined query (2026-08-23, real cluster, real data - not a hypoth
   | json
 ```
 
-correctly returned the matching record with `pr_title`/`gates_sast`/etc. all present as
-extracted fields - the same query shape `charts/platform-cicd-control-plane/files/
-dashboards/release-log.json`'s table panel uses.
+correctly returned the matching record with `pr_title`/`gate_sast`/etc. all present as
+extracted fields - that's true of Loki's own raw HTTP API (`| json` auto-expands the
+body inline), but **not** of what a Grafana panel actually receives.
+
+## Rendering it in Grafana: real bugs found in the first cut of the dashboard
+
+The first version of `release-log.json` shipped broken - wrong columns, and a
+`labelTypes` column dumping raw JSON - caught only once actually rendered (headless
+Chromium via Playwright, not just deploying and assuming), not by any of the LogQL
+testing above. Two real, distinct bugs:
+
+1. **A Grafana panel's datasource query and Loki's raw HTTP API return different
+   shapes.** `/api/ds/query` against the exact same LogQL always returns a fixed
+   six-field frame - `labels`, `Time`, `Line`, `tsNs`, `labelTypes`, `id` - regardless of
+   `| json` in the query; the JSON body's keys are **not** auto-expanded into columns the
+   way they are in Loki's own `/loki/api/v1/query_range` response (confirmed by querying
+   `/api/ds/query` directly and inspecting the returned frame schema). `labelTypes` -
+   Grafana's own internal per-field type classification (indexed/structured-metadata/
+   parsed), never meant to be displayed - was rendering as a raw column because nothing
+   excluded it. Fixed by adding a real `extractFields` transformation (`source: "Line",
+   format: "json"`) as the first step, ahead of `organize`, so the body's keys actually
+   become dataframe fields before anything tries to reference them by name.
+2. **Renamed columns silently didn't rename.** A separate `{"id": "renameByName", ...}`
+   transformation is not how this platform's other dashboards do it (checked against
+   real precedent - `cicd-fleet-overview.json`, `cicd-performance.json`,
+   `cicd-governance.json` - before fixing, not guessed): `renameByName` is a key *inside*
+   `organize`'s own `options`, alongside `excludeByName`/`indexByName`, not a standalone
+   transform. The standalone version didn't error, it just silently did nothing.
+
+Also found via the same render: Grafana's Loki datasource is configured with a global
+`derivedFields` entry (`charts/platform-cicd-control-plane` observability stack) that
+injects its own `TraceID` field into every logs query - unrelated to this feature,
+excluded explicitly rather than left to leak into the table.
+
+**Verification method**: imported the dashboard JSON under a throwaway UID via
+`/api/dashboards/db`, rendered it with a headless browser, and read the real DOM (column
+headers, cell text) rather than trusting the query response shape or the transformation
+option names from memory - the same live-verification standard as the rest of this
+platform, just applied to a Grafana panel instead of a cluster resource.
 
 ## Known gap: cluster-mapped releases only
 

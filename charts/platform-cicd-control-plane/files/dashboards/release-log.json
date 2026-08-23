@@ -36,7 +36,7 @@
       "id": 1,
       "title": "Release log",
       "type": "table",
-      "description": "Structured metadata (app_namespace/app_name/env/cluster/status/bypass) is filtered directly via the template variables above, no parsing needed - everything else (approvers, per-gate results, PR detail) comes from the log body via `| json`. See docs/admin/release-log.md.",
+      "description": "Structured metadata (app/env/status/bypass) is filtered directly via the template variables above - the row detail (approvers, per-gate results, PR info) comes from the log body via an Extract fields (JSON) transform, not the raw Loki query response. See docs/admin/release-log.md.",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
@@ -48,14 +48,26 @@
       ],
       "transformations": [
         {
+          "id": "extractFields",
+          "options": { "source": "Line", "format": "json", "replace": false, "keepTime": false }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": false,
               "Line": true,
-              "id": true,
+              "labels": true,
+              "labelTypes": true,
               "tsNs": true,
-              "labels": true
+              "id": true,
+              "TraceID": true,
+              "gates": true,
+              "app_namespace": true,
+              "chain_id": true,
+              "flow_start_time": true,
+              "pr_created_at": true,
+              "finished_at": true,
+              "pr_number": true
             },
             "indexByName": {
               "Time": 0,
@@ -67,24 +79,48 @@
               "pr_title": 6,
               "merged_by": 7,
               "approvers": 8,
-              "gates": 9,
-              "pr_url": 10,
-              "git_revision": 11,
-              "chain_id": 12
+              "pr_url": 9,
+              "git_url": 10,
+              "git_revision": 11
+            },
+            "renameByName": {
+              "app_name": "App",
+              "env": "Environment",
+              "cluster": "Cluster",
+              "status": "Status",
+              "bypass": "Bypass",
+              "pr_title": "PR",
+              "merged_by": "Merged By",
+              "approvers": "Approvers",
+              "pr_url": "PR Link",
+              "git_url": "Repo",
+              "git_revision": "Commit",
+              "gate_sast": "Sast",
+              "gate_image_scan": "Image Scan",
+              "gate_provenance": "Provenance",
+              "gate_sbom": "Sbom",
+              "gate_itsm": "Itsm",
+              "gate_qa": "Qa",
+              "gate_policy_validation": "Policy Validation",
+              "gate_image_promotion": "Image Promotion"
             }
           }
         }
       ],
       "fieldConfig": {
+        "defaults": {
+          "custom": { "cellOptions": { "type": "auto" }, "width": 120 }
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "status" },
+            "matcher": { "id": "byName", "options": "Status" },
             "properties": [
               { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "transparent" } },
               {
                 "id": "mappings",
                 "value": [
-                  { "type": "value", "options": { "Succeeded": { "color": "#1E7E34", "text": "Succeeded" } } },
+                  { "type": "value", "options": { "Succeeded": { "color": "transparent", "text": "Succeeded" } } },
                   { "type": "value", "options": { "Failed": { "color": "#B91C1C", "text": "Failed" } } },
                   { "type": "value", "options": { "Error": { "color": "#B91C1C", "text": "Error" } } }
                 ]
@@ -92,21 +128,55 @@
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "bypass" },
+            "matcher": { "id": "byName", "options": "Bypass" },
             "properties": [
+              { "id": "custom.width", "value": 90 },
               { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "transparent" } },
               {
                 "id": "mappings",
                 "value": [
                   { "type": "value", "options": { "true": { "color": "#B91C1C", "text": "BYPASSED" } } },
-                  { "type": "value", "options": { "false": { "color": "#666666", "text": "" } } }
+                  { "type": "value", "options": { "false": { "color": "transparent", "text": "" } } }
                 ]
               }
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "pr_url" },
-            "properties": [{ "id": "custom.cellOptions", "value": { "type": "auto" } }]
+            "matcher": { "id": "byName", "options": "PR" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Approvers" },
+            "properties": [{ "id": "custom.width", "value": 160 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "PR Link" },
+            "properties": [
+              { "id": "custom.width", "value": 90 },
+              { "id": "links", "value": [{ "title": "Open PR", "url": "${__value.raw}", "targetBlank": true }] },
+              { "id": "mappings", "value": [{ "type": "regex", "options": { "pattern": "(.*)", "result": { "text": "Open ↗" } } }] }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "App" },
+            "properties": [{ "id": "custom.width", "value": 150 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Environment" },
+            "properties": [{ "id": "custom.width", "value": 100 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Cluster" },
+            "properties": [{ "id": "custom.width", "value": 100 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [{ "id": "custom.width", "value": 100 }]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "^(Sast|Image Scan|Provenance|Sbom|Itsm|Qa|Policy Validation|Image Promotion)$" },
+            "properties": [{ "id": "custom.width", "value": 110 }]
           }
         ]
       }
@@ -127,26 +197,76 @@
       ],
       "transformations": [
         {
+          "id": "extractFields",
+          "options": { "source": "Line", "format": "json", "replace": false, "keepTime": false }
+        },
+        {
           "id": "organize",
           "options": {
-            "excludeByName": { "Time": false, "Line": true, "id": true, "tsNs": true, "labels": true },
+            "excludeByName": {
+              "Line": true,
+              "labels": true,
+              "labelTypes": true,
+              "tsNs": true,
+              "id": true,
+              "TraceID": true,
+              "gates": true,
+              "app_namespace": true,
+              "cluster": true,
+              "status": true,
+              "bypass": true,
+              "chain_id": true,
+              "flow_start_time": true,
+              "pr_created_at": true,
+              "finished_at": true,
+              "pr_number": true,
+              "git_url": true,
+              "git_revision": true,
+              "approvers": true
+            },
             "indexByName": {
               "Time": 0,
               "app_name": 1,
               "env": 2,
               "merged_by": 3,
-              "gates": 4,
+              "pr_title": 4,
               "pr_url": 5
+            },
+            "renameByName": {
+              "app_name": "App",
+              "env": "Environment",
+              "merged_by": "Merged By",
+              "pr_title": "PR",
+              "pr_url": "PR Link",
+              "gate_sast": "Sast",
+              "gate_image_scan": "Image Scan",
+              "gate_provenance": "Provenance",
+              "gate_sbom": "Sbom",
+              "gate_itsm": "Itsm",
+              "gate_qa": "Qa",
+              "gate_policy_validation": "Policy Validation",
+              "gate_image_promotion": "Image Promotion"
             }
           }
         }
       ],
       "fieldConfig": {
-        "defaults": { "color": { "mode": "fixed", "fixedColor": "#B91C1C" } },
+        "defaults": {
+          "custom": { "cellOptions": { "type": "auto" }, "width": 110 },
+          "color": { "mode": "fixed", "fixedColor": "#B91C1C" }
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "pr_url" },
-            "properties": [{ "id": "custom.cellOptions", "value": { "type": "auto" } }]
+            "matcher": { "id": "byName", "options": "PR" },
+            "properties": [{ "id": "custom.width", "value": 280 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "PR Link" },
+            "properties": [
+              { "id": "custom.width", "value": 90 },
+              { "id": "links", "value": [{ "title": "Open PR", "url": "${__value.raw}", "targetBlank": true }] },
+              { "id": "mappings", "value": [{ "type": "regex", "options": { "pattern": "(.*)", "result": { "text": "Open ↗" } } }] }
+            ]
           }
         ]
       }
