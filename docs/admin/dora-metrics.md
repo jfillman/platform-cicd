@@ -206,6 +206,61 @@ anything a Go service couldn't, but because moving the call is what prompted not
 and gave a natural home to the code that did it. See `multi-cluster.md`'s
 "relay generified" section for the full reasoning on why the call moved.
 
+## Durable counters, not just in-memory ones (fixed 2026-08-22)
+
+Every metric this service exposes (`dora_deployments_total`, `dora_lead_time_seconds`,
+`dora_releases_total`, `dora_time_to_restore_seconds_experimental`) is an ordinary
+`client_golang` collector - it only ever lived in this process's own memory. Nothing
+behind it was durable except the MTTR fix above, and that only covers "last failure
+time," not the counters/histograms themselves. A routine pod replacement - a redeploy,
+a node drain, an image update - silently zeroed every app's entire history, for both
+input paths, with no error anywhere: Prometheus only ever scrapes whatever this process
+currently holds (pull, not push - see "Accessing the metrics and dashboard" below), so
+once the process restarts, there's nothing left to scrape but zero.
+
+**Found live, the same day as the MTTR fix above**: `checkout-api` had two real,
+ArgoCD-confirmed releases earlier that day, both correctly recorded by the
+then-running exporter pod - and both vanished from the dashboard the moment this
+Deployment rolled a new `ReplicaSet` (deploying the MTTR fix itself), because
+Prometheus's own scrape history for the *old* pod's `instance` label doesn't carry
+forward to a new pod with a new IP, and the new pod's in-memory counters started over
+at zero. Only the one release that happened to land *after* the restart showed up.
+
+Fixed the same way the MTTR gap above was fixed: a second ConfigMap this service owns,
+`dora-metrics-state` (`platform-system`, same `<appNamespace>.<appName>` key shape as
+`dora-cluster-mapped-state`), durably mirrors every counter increment and histogram
+observation for **both** input paths - not just the cluster-mapped one. Each value is a
+small JSON blob (`deployments`, `releasesSucceeded`, `releasesFailed`, plus a
+`leadTimeObservations`/`mttrObservations` array of raw historical values). The array
+shape, not just a running sum, is deliberate: `client_golang`'s `HistogramVec` has no
+public API to set a histogram's cumulative bucket/sum/count state directly, so the only
+way to reconstruct the exact same distribution after a restart is to persist every raw
+observation and replay it through `Observe()` again - `primeMetricsFromState`
+(`cmd/dora-exporter/main.go`) does exactly that, once at startup, for every app it
+finds, **before** the informer or the HTTP server can process a single live event (so a
+fresh event and a priming read can never race and double-count the same observation).
+Unbounded array growth is a real, accepted tradeoff - real release volume on this
+platform is a handful of events per app per day, nowhere near where a ConfigMap's 1MiB
+limit would become a concern.
+
+Same "no `data:` field at all" rendering as `dora-cluster-mapped-state` - see that
+ConfigMap's own comment (`charts/platform-cicd-control-plane/templates/dora-exporter/deployment.yaml`)
+for why declaring the field, even empty, would let a later sync prune every key this
+service's own PATCH calls have added since.
+
+Live-verified on `kind-dev`: posted a synthetic outcome at `/argocd-outcome`, confirmed
+it landed in both `/metrics` and `dora-metrics-state`, restarted the exporter pod
+(`kubectl rollout restart deployment dora-exporter`), and confirmed `/metrics` showed
+the full pre-restart counts intact - deployment count, release outcome, and the lead
+time histogram's exact sum/count - **before** any new event arrived, with the pod's own
+startup log (`rehydrated 1 deployment(s), 1 succeeded/0 failed release(s) from
+dora-metrics-state`) confirming the replay path actually ran. One real limitation this
+surfaced: rehydration only ever recovers what a *post-fix* exporter itself wrote to
+`dora-metrics-state` - `checkout-api`'s and `smoketest`'s in-memory counts from earlier
+2026-08-22 (recorded by the pre-fix binary, which never wrote to this ConfigMap) did not
+carry forward across the restart that deployed this fix. Going forward, every outcome is
+durable; the specific counts lost before this fix shipped are not recoverable.
+
 ## RBAC
 
 `dora-exporter`'s own ServiceAccount (in `platform-system`, matching where the other
@@ -220,8 +275,9 @@ genuinely narrower than the stalled-pipeline detector's necessarily cluster-scop
   "only annotations," so this identity can technically modify any field on any
   Application in `argocd` - narrow by namespace and resource type, not by field.
 - In `platform-system`: `get`+`patch` on `configmaps`, `resourceNames`-scoped to exactly
-  `dora-cluster-mapped-state` - the MTTR state store above. No `create`: the ConfigMap
-  is always pre-rendered by this same chart, so this identity never needs it.
+  `dora-cluster-mapped-state` (the MTTR state store above) and `dora-metrics-state` (the
+  durable counters store above) - nothing else. No `create`: both ConfigMaps are always
+  pre-rendered by this same chart, so this identity never needs it.
 
 `pipeline-runner` (each Application's own SA) additionally gets `get`+`patch` on exactly its
 own `<app-name>-staging` Application via `resourceNames` - nothing else, no other

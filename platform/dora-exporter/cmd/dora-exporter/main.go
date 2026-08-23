@@ -24,12 +24,30 @@
 // this cluster to patch (same "no direct API access to a remote cluster" principle as
 // everywhere else in this feature - see mark-release-pending.yaml), so it persists the
 // same information into a ConfigMap this service owns instead
-// (clusterMappedStateConfigMap, in this cluster's own platform-system namespace - see
+// (clusterMappedStateCM, in this cluster's own platform-system namespace - see
 // getClusterMappedLastFailure/patchClusterMappedLastFailure). Originally a known,
 // deliberate gap (MTTR simply didn't work for cluster-mapped apps) - closed once
 // /argocd-outcome moved from the relay's own direct HTTP call to a Tekton Task
 // (release-outcome-notify.yaml's update-dora-metrics) that already runs on THIS
 // cluster, same as everything else this service reads.
+//
+// Durable counters, not just in-memory ones (added after a live incident): the four
+// Prometheus metrics below (deploymentsTotal/leadTimeSeconds/releasesTotal/
+// timeToRestoreSecondsExperimental) are ordinary client_golang collectors - they only
+// ever lived in this process's memory, with nothing behind them but the informer replay
+// (path 1, and only for Applications still mid-flight when this process died) or
+// nothing at all (path 2). A routine pod replacement - a redeploy, a node drain, an
+// image update - zeroed every app's history with no warning: confirmed live 2026-08-22,
+// checkout-api had two real ArgoCD-confirmed releases earlier the same day, both
+// silently gone from the dashboard the moment this service's Deployment rolled a new
+// ReplicaSet, because Prometheus scrapes (pull, not push - see docs/dora-metrics.md)
+// only ever see whatever this process currently holds. Fixed the same way MTTR's own
+// cluster-mapped gap was fixed above: a second ConfigMap this service owns
+// (dora-metrics-state, primeMetricsFromState/persistMetricsState below) durably
+// mirrors every counter/histogram observation for BOTH paths, and gets replayed back
+// into the live Prometheus collectors once at startup, before either the informer or
+// the HTTP server can process a single live event - so a restart resumes from the last
+// recorded totals instead of zero.
 //
 // Correlation with a specific release attempt happens via the platform.io/dora-*
 // annotations the release Pipeline stamps directly onto the Application object
@@ -50,6 +68,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -80,6 +100,7 @@ const (
 	platformNamespace      = "platform-system"
 	doraTrackLabelSelector = "platform.io/dora-track=true"
 	clusterMappedStateCM   = "dora-cluster-mapped-state"
+	metricsStateCM         = "dora-metrics-state"
 )
 
 // Lead Time buckets are deliberately aligned to DORA's own published elite/high/medium/
@@ -124,6 +145,23 @@ func init() {
 	prometheus.MustRegister(deploymentsTotal, leadTimeSeconds, releasesTotal, timeToRestoreSecondsExperimental)
 }
 
+// appMetricsState is dora-metrics-state's per-app JSON value (keyed "<appNamespace>.
+// <appName>", same key shape appStateKey already uses for the cluster-mapped MTTR
+// ConfigMap). Counters are plain running totals; the observation slices exist because
+// client_golang's HistogramVec has no public API to set a histogram's cumulative
+// bucket/sum/count state directly - the only way to rebuild the exact same distribution
+// is to persist every raw observation and replay it through Observe() again at startup.
+// Unbounded growth is a real tradeoff of that choice, deliberately accepted here: real
+// release volume on this platform is a handful of events per app per day, nowhere near
+// where ConfigMap's 1MiB size limit would become a concern.
+type appMetricsState struct {
+	Deployments          int64     `json:"deployments"`
+	ReleasesSucceeded    int64     `json:"releasesSucceeded"`
+	ReleasesFailed       int64     `json:"releasesFailed"`
+	LeadTimeObservations []float64 `json:"leadTimeObservations,omitempty"`
+	MTTRObservations     []float64 `json:"mttrObservations,omitempty"`
+}
+
 func main() {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -134,12 +172,22 @@ func main() {
 		log.Fatalf("dynamic client: %v", err)
 	}
 	// Typed clientset, alongside the dynamic one above - only needed for the
-	// cluster-mapped path's ConfigMap state store (path 1's annotation patch-back
-	// already goes through dynClient, since Applications aren't a built-in type).
+	// ConfigMap-backed state stores (path 2's MTTR correlation, and both paths' durable
+	// metrics state) - path 1's annotation patch-back already goes through dynClient,
+	// since Applications aren't a built-in type.
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		log.Fatalf("clientset: %v", err)
 	}
+
+	srv := &server{clientset: clientset}
+
+	// Rehydrate every counter/histogram from dora-metrics-state before the informer or
+	// HTTP server can process a single live event, so a fresh event and a priming read
+	// can never race and double-count the same observation.
+	primeCtx, primeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	primeMetricsFromState(primeCtx, clientset)
+	primeCancel()
 
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynClient, 10*time.Minute, argocdNamespace,
@@ -152,7 +200,7 @@ func main() {
 		if !ok {
 			return
 		}
-		reconcile(context.Background(), dynClient, u)
+		reconcile(context.Background(), dynClient, srv, u)
 	}
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: handler,
@@ -171,8 +219,6 @@ func main() {
 	}
 	log.Println("dora-exporter: informer cache synced, watching applications.argoproj.io in argocd (platform.io/dora-track=true)")
 
-	srv := &server{clientset: clientset}
-
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -181,8 +227,62 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
+// primeMetricsFromState reads dora-metrics-state once at startup and replays every
+// persisted counter/observation back into the live Prometheus collectors - Add() for
+// the plain Counters, Observe() per historical value for the Histograms (the only way
+// to reconstruct their exact bucket/sum/count state, see appMetricsState's own
+// comment). A missing ConfigMap or an unparseable entry just means "nothing to
+// rehydrate for this app" - never fatal, since starting at zero (today's actual bug) is
+// already the fallback behavior this function exists to improve on, not something a
+// read failure should make worse by crashing the process.
+func primeMetricsFromState(ctx context.Context, clientset kubernetes.Interface) {
+	cm, err := clientset.CoreV1().ConfigMaps(platformNamespace).Get(ctx, metricsStateCM, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		log.Println("dora-exporter: no prior dora-metrics-state found, starting counters at zero")
+		return
+	}
+	if err != nil {
+		log.Printf("dora-exporter: reading %s failed, starting counters at zero: %v", metricsStateCM, err)
+		return
+	}
+
+	for key, raw := range cm.Data {
+		appNamespace, appName, ok := splitStateKey(key)
+		if !ok {
+			log.Printf("dora-exporter: %s: unrecognized key %q, skipping", metricsStateCM, key)
+			continue
+		}
+		var state appMetricsState
+		if err := json.Unmarshal([]byte(raw), &state); err != nil {
+			log.Printf("dora-exporter: %s/%s: corrupt %s entry, skipping: %v", appNamespace, appName, metricsStateCM, err)
+			continue
+		}
+
+		deploymentsTotal.WithLabelValues(appNamespace, appName).Add(float64(state.Deployments))
+		releasesTotal.WithLabelValues(appNamespace, appName, "succeeded").Add(float64(state.ReleasesSucceeded))
+		releasesTotal.WithLabelValues(appNamespace, appName, "failed").Add(float64(state.ReleasesFailed))
+		for _, v := range state.LeadTimeObservations {
+			leadTimeSeconds.WithLabelValues(appNamespace, appName).Observe(v)
+		}
+		for _, v := range state.MTTRObservations {
+			timeToRestoreSecondsExperimental.WithLabelValues(appNamespace, appName).Observe(v)
+		}
+		log.Printf("dora-exporter: %s/%s: rehydrated %d deployment(s), %d succeeded/%d failed release(s) from %s",
+			appNamespace, appName, state.Deployments, state.ReleasesSucceeded, state.ReleasesFailed, metricsStateCM)
+	}
+}
+
 type server struct {
 	clientset kubernetes.Interface
+
+	// stateMu serializes read-modify-write cycles against dora-metrics-state
+	// (persistMetricsState does a Get then a Patch, not a single atomic call - a
+	// concurrent pair of HTTP requests for the same app could otherwise race and lose
+	// an update). Deliberately a plain in-process mutex, not resourceVersion-based
+	// optimistic concurrency: this Deployment is always 1 replica (see deployment.yaml's
+	// own comment), so the only possible concurrent writers are goroutines inside this
+	// same process, which a mutex already fully serializes.
+	stateMu sync.Mutex
 }
 
 // argocdOutcomeRequest mirrors argocd-outcome-relay's own outcomeRequest shape (the
@@ -230,7 +330,7 @@ func (s *server) handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	key := clusterMappedStateKey(req.AppNamespace, req.AppName)
+	key := appStateKey(req.AppNamespace, req.AppName)
 	lastFailureTimeStr, err := s.getClusterMappedLastFailure(ctx, key)
 	if err != nil {
 		// Best-effort: a read failure here shouldn't block recording the other three
@@ -239,8 +339,9 @@ func (s *server) handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
 		log.Printf("dora-exporter: %s/%s: reading %s state failed (non-fatal, MTTR sample may be skipped): %v", req.AppNamespace, req.AppName, clusterMappedStateCM, err)
 	}
 
-	lastFailureCleared := recordOutcome(req.AppNamespace, req.AppName, req.Phase, finishedAt, req.FlowStartTime, lastFailureTimeStr)
-	if req.Phase == "Succeeded" && lastFailureCleared {
+	result := recordOutcome(req.AppNamespace, req.AppName, req.Phase, finishedAt, req.FlowStartTime, lastFailureTimeStr)
+	s.persistMetricsState(ctx, req.AppNamespace, req.AppName, req.Phase, result)
+	if req.Phase == "Succeeded" && result.LastFailureCleared {
 		if err := s.patchClusterMappedLastFailure(ctx, key, nil); err != nil {
 			log.Printf("dora-exporter: %s/%s: clearing %s state failed: %v", req.AppNamespace, req.AppName, clusterMappedStateCM, err)
 		}
@@ -255,11 +356,24 @@ func (s *server) handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// clusterMappedStateKey mirrors the DNS-1123 subdomain rules appName/appNamespace
-// already satisfy (both come from validated cicd.yaml/Kubernetes namespace names) - a
+// appStateKey mirrors the DNS-1123 subdomain rules appName/appNamespace already
+// satisfy (both come from validated cicd.yaml/Kubernetes namespace names) - a
 // ConfigMap data key just needs to be a valid key, "." is fine and reads naturally.
-func clusterMappedStateKey(appNamespace, appName string) string {
+// Shared by both of this service's ConfigMap-backed state stores (clusterMappedStateCM
+// and metricsStateCM), not just the cluster-mapped-specific one its name used to imply.
+func appStateKey(appNamespace, appName string) string {
 	return appNamespace + "." + appName
+}
+
+// splitStateKey reverses appStateKey's "ns.app" join. Kubernetes namespace names are
+// DNS-1123 labels and can't contain a dot, so the first dot always marks the boundary
+// regardless of what characters appName itself contains.
+func splitStateKey(key string) (appNamespace, appName string, ok bool) {
+	i := strings.IndexByte(key, '.')
+	if i < 0 {
+		return "", "", false
+	}
+	return key[:i], key[i+1:], true
 }
 
 // getClusterMappedLastFailure reads clusterMappedStateCM's own key for this app - a
@@ -278,11 +392,11 @@ func (s *server) getClusterMappedLastFailure(ctx context.Context, key string) (s
 
 // patchClusterMappedLastFailure sets (value non-nil) or clears (value nil) this app's
 // key via a JSON merge patch - additive/idempotent regardless of what else is in the
-// ConfigMap, same pattern as patchAnnotations below. clusterMappedStateCM itself is
-// rendered by the Helm chart with no `data:` field at all (not even `{}`) specifically
-// so a later `kubectl apply`/ArgoCD sync of that same manifest never has this field in
-// its own last-applied-configuration and so never prunes keys this service adds here -
-// see charts/platform-cicd-control-plane/templates/dora-exporter/deployment.yaml.
+// ConfigMap, same pattern as persistMetricsState below. clusterMappedStateCM itself is
+// rendered by the Helm chart with metadata only, deliberately no `data:` field at all
+// (not even `data: {}`) - see that manifest's own comment for why declaring the field,
+// even empty, would let a later `kubectl apply`/ArgoCD sync prune every key this
+// service's own PATCH calls have added since.
 func (s *server) patchClusterMappedLastFailure(ctx context.Context, key string, value *string) error {
 	var jsonValue interface{} = value
 	if value != nil {
@@ -297,13 +411,77 @@ func (s *server) patchClusterMappedLastFailure(ctx context.Context, key string, 
 	return err
 }
 
+// persistMetricsState mirrors the outcome recordOutcome just recorded in-memory into
+// dora-metrics-state, so primeMetricsFromState can rebuild the same live state after a
+// restart. Called from both input paths (reconcile for path 1, handleArgoCDOutcome for
+// path 2) - the durability gap this closes affected both equally, not just the
+// cluster-mapped one MTTR already had a fix for. Read-modify-write, not a blind patch
+// (each app's counters need the CURRENT persisted value to increment from) - see
+// stateMu's own comment for why that's safe without resourceVersion-based retries here.
+func (s *server) persistMetricsState(ctx context.Context, appNamespace, appName, phase string, result outcomeResult) {
+	if !isTerminalPhase(phase) {
+		return // nothing to persist - recordOutcome only ever mutates metrics for terminal phases
+	}
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	key := appStateKey(appNamespace, appName)
+	var state appMetricsState
+	cm, err := s.clientset.CoreV1().ConfigMaps(platformNamespace).Get(ctx, metricsStateCM, metav1.GetOptions{})
+	switch {
+	case k8serrors.IsNotFound(err):
+		// no prior state for anything yet - state stays zero-valued, same as a
+		// first-ever cold start
+	case err != nil:
+		log.Printf("dora-exporter: %s/%s: reading %s failed, metrics state not persisted: %v", appNamespace, appName, metricsStateCM, err)
+		return
+	default:
+		if raw, ok := cm.Data[key]; ok {
+			if err := json.Unmarshal([]byte(raw), &state); err != nil {
+				log.Printf("dora-exporter: %s/%s: corrupt %s entry, resetting persisted counters: %v", appNamespace, appName, metricsStateCM, err)
+				state = appMetricsState{}
+			}
+		}
+	}
+
+	switch phase {
+	case "Succeeded":
+		state.Deployments++
+		state.ReleasesSucceeded++
+		if result.HasLeadTime {
+			state.LeadTimeObservations = append(state.LeadTimeObservations, result.LeadTimeSeconds)
+		}
+		if result.HasMTTR {
+			state.MTTRObservations = append(state.MTTRObservations, result.MTTRSeconds)
+		}
+	case "Failed", "Error":
+		state.ReleasesFailed++
+	}
+
+	body, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("dora-exporter: %s/%s: marshaling %s state failed: %v", appNamespace, appName, metricsStateCM, err)
+		return
+	}
+	patch := map[string]interface{}{"data": map[string]interface{}{key: string(body)}}
+	patchBody, err := json.Marshal(patch)
+	if err != nil {
+		log.Printf("dora-exporter: %s/%s: marshaling %s patch failed: %v", appNamespace, appName, metricsStateCM, err)
+		return
+	}
+	if _, err := s.clientset.CoreV1().ConfigMaps(platformNamespace).Patch(ctx, metricsStateCM, types.MergePatchType, patchBody, metav1.PatchOptions{}); err != nil {
+		log.Printf("dora-exporter: %s/%s: persisting %s state failed: %v", appNamespace, appName, metricsStateCM, err)
+	}
+}
+
 // reconcile implements the annotation-based hand-off described in
 // catalog/tasks/mark-release-pending.yaml and docs/dora-metrics.md. It is safe to call
 // repeatedly for the same object state: once dora-pending is cleared (by this function's
 // own patch), the next informer event for that same change carries no dora-pending
 // annotation, so the early return below makes it a no-op - no separate dedup tracking
 // needed beyond the annotations themselves.
-func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructured.Unstructured) {
+func reconcile(ctx context.Context, dynClient dynamic.Interface, srv *server, app *unstructured.Unstructured) {
 	annos := app.GetAnnotations()
 	if annos[annoPending] != "true" {
 		return
@@ -346,12 +524,13 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructur
 	appName := annos[annoApp]
 
 	patch := map[string]interface{}{annoPending: nil} // JSON merge patch: null removes the key
-	lastFailureCleared := recordOutcome(appNamespace, appName, phase, finishedAt, annos[annoFlowStartTime], annos[annoLastFailureTime])
-	if phase == "Succeeded" && lastFailureCleared {
+	result := recordOutcome(appNamespace, appName, phase, finishedAt, annos[annoFlowStartTime], annos[annoLastFailureTime])
+	if phase == "Succeeded" && result.LastFailureCleared {
 		patch[annoLastFailureTime] = nil
 	} else if phase == "Failed" || phase == "Error" {
 		patch[annoLastFailureTime] = finishedAt.Format(time.RFC3339)
 	}
+	srv.persistMetricsState(ctx, appNamespace, appName, phase, result)
 	log.Printf("dora-exporter: %s/%s: confirmed %s via informer (same-cluster env)", app.GetNamespace(), app.GetName(), phase)
 
 	if err := patchAnnotations(ctx, dynClient, app.GetNamespace(), app.GetName(), patch); err != nil {
@@ -359,25 +538,39 @@ func reconcile(ctx context.Context, dynClient dynamic.Interface, app *unstructur
 	}
 }
 
+// outcomeResult reports exactly what recordOutcome observed, so persistMetricsState can
+// durably record the same values it just fed into the live Prometheus collectors -
+// rather than re-deriving them from the raw inputs a second time and risking the two
+// falling out of sync with each other.
+type outcomeResult struct {
+	LastFailureCleared bool
+	LeadTimeSeconds    float64
+	HasLeadTime        bool
+	MTTRSeconds        float64
+	HasMTTR            bool
+}
+
 // recordOutcome is the one piece of actual DORA business logic, shared by both input
 // paths described in this file's own header. lastFailureTimeStr is only ever non-empty
 // on the informer path (path 1) - path 2 always passes "", which simply means an
-// eventual success for a cluster-mapped app never produces an MTTR sample (returns
-// false so the informer-only caller knows there was nothing to clear) - a known,
-// deliberate gap (this file's header), not a silent one: there's no live Application
-// object on a remote cluster for this service to persist "last failure time" onto
-// between separate HTTP calls, and an in-memory map would be wrong the moment this
-// Deployment runs more than one replica or restarts - not worth that fragility for a
-// best-effort, already-`_experimental` metric. Returns whether a prior failure was
-// found and consumed (path 1 uses this to decide whether to clear its own annotation).
-func recordOutcome(appNamespace, appName, phase string, finishedAt time.Time, flowStartTimeStr, lastFailureTimeStr string) bool {
+// eventual success for a cluster-mapped app never produces an MTTR sample (HasMTTR
+// stays false) - a known, deliberate gap (this file's header), not a silent one:
+// there's no live Application object on a remote cluster for this service to persist
+// "last failure time" onto between separate HTTP calls, and an in-memory map would be
+// wrong the moment this Deployment runs more than one replica or restarts - not worth
+// that fragility for a best-effort, already-`_experimental` metric.
+func recordOutcome(appNamespace, appName, phase string, finishedAt time.Time, flowStartTimeStr, lastFailureTimeStr string) outcomeResult {
 	switch phase {
 	case "Succeeded":
 		releasesTotal.WithLabelValues(appNamespace, appName, "succeeded").Inc()
 		deploymentsTotal.WithLabelValues(appNamespace, appName).Inc()
 
+		var result outcomeResult
 		if flowStart, err := parseTime(flowStartTimeStr); err == nil {
-			leadTimeSeconds.WithLabelValues(appNamespace, appName).Observe(finishedAt.Sub(flowStart).Seconds())
+			leadTime := finishedAt.Sub(flowStart).Seconds()
+			leadTimeSeconds.WithLabelValues(appNamespace, appName).Observe(leadTime)
+			result.LeadTimeSeconds = leadTime
+			result.HasLeadTime = true
 		} else {
 			log.Printf("dora-exporter: %s/%s: unparseable flow-start-time %q, skipping lead-time sample", appNamespace, appName, flowStartTimeStr)
 		}
@@ -386,17 +579,19 @@ func recordOutcome(appNamespace, appName, phase string, finishedAt time.Time, fl
 			if lastFailure, err := parseTime(lastFailureTimeStr); err == nil {
 				if mttr := finishedAt.Sub(lastFailure).Seconds(); mttr > 0 {
 					timeToRestoreSecondsExperimental.WithLabelValues(appNamespace, appName).Observe(mttr)
+					result.MTTRSeconds = mttr
+					result.HasMTTR = true
 				}
 			}
-			return true
+			result.LastFailureCleared = true
 		}
-		return false
+		return result
 
 	case "Failed", "Error":
 		releasesTotal.WithLabelValues(appNamespace, appName, "failed").Inc()
-		return false
+		return outcomeResult{}
 	}
-	return false
+	return outcomeResult{}
 }
 
 func isTerminalPhase(phase string) bool {
