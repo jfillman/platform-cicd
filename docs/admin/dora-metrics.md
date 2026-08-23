@@ -160,27 +160,68 @@ best-effort/experimental, because "a manual-rollback-outside-the-pipeline blind 
 means this platform can't see a real incident or a manual fix applied outside a pipeline
 run. What it *can* see: the gap between a confirmed `Failed` release for an app and the
 *next* confirmed `Succeeded` one for that same app - a real, if approximate, "time to
-next green" proxy. Implemented via the `dora-last-failure-time` annotation: on a
-confirmed success, if that annotation is present, `finishedAt - dora-last-failure-time`
-is sampled into `dora_time_to_restore_seconds_experimental{app_namespace, app}` before the
-annotation is cleared. The `_experimental` suffix is deliberate and structural, not just
-a dashboard note - matches this platform's existing "make reduced-confidence data loud in
-the data itself, not just in code comments" precedent (the `governance.stub=true` span
-attribute from Phase 1). Buckets are sized for human-response-time scale, not deploy-time
-scale: `300` (5m), `1800` (30m), `3600` (1h), `14400` (4h), `86400` (1d), `604800` (1w).
+next green" proxy. On a confirmed success, if a prior failure is on record,
+`finishedAt - <last failure time>` is sampled into
+`dora_time_to_restore_seconds_experimental{app_namespace, app}` before that record is
+cleared. The `_experimental` suffix is deliberate and structural, not just a dashboard
+note - matches this platform's existing "make reduced-confidence data loud in the data
+itself, not just in code comments" precedent (the `governance.stub=true` span attribute
+from Phase 1). Buckets are sized for human-response-time scale, not deploy-time scale:
+`300` (5m), `1800` (30m), `3600` (1h), `14400` (4h), `86400` (1d), `604800` (1w).
+
+**Where "last failure time" is recorded differs by path** - see "MTTR for
+cluster-mapped envs" below for why, and for the real gap this closed 2026-08-22 (MTTR
+used to be dead for cluster-mapped apps entirely).
+
+## MTTR for cluster-mapped envs (fixed 2026-08-22)
+
+Path 2's `/argocd-outcome` handler used to pass an empty `lastFailureTimeStr` into
+`recordOutcome` unconditionally - MTTR was a known, dead gap for every cluster-mapped
+app (`checkout-api`/`kind-prod` included), because `dora-exporter` runs on the dev
+cluster and has no live API access to a remote cluster's `Application` object to patch
+a `dora-last-failure-time` annotation onto, the way path 1 does.
+
+Fixed not by getting remote API access (that would repeat the exact "dev-cluster-
+resident credential capable of touching an upper cluster" blast-radius shape this
+platform's broker/relay design has rejected everywhere else, see
+[multi-cluster.md](multi-cluster.md)) but by giving `dora-exporter` its own state store
+on the cluster it's *actually* running on: `dora-cluster-mapped-state`, a ConfigMap in
+`platform-system` it owns itself, keyed `<appNamespace>.<appName>`. On a confirmed
+`Failed`/`Error`, `handleArgoCDOutcome` patches that key to the finish time; on a
+confirmed `Succeeded`, it reads the key back (same `recordOutcome` MTTR-sampling logic
+path 1 already used), then clears it. Same JSON-merge-patch idempotency pattern as
+`patchAnnotations` below, just against a ConfigMap's `data` map instead of an
+Application's annotations.
+
+The ConfigMap itself is rendered by the Helm chart with metadata only, deliberately no
+`data:` field at all (not even `data: {}`) - see that manifest's own comment for why
+declaring the field, even empty, would let a later `kubectl apply`/ArgoCD sync prune
+every key `dora-exporter`'s own PATCH calls have added since.
+
+This only works because the call into `/argocd-outcome` now happens as a Tekton Task
+(`update-dora-metrics.yaml`, run from `release-outcome-notify`'s own PipelineRun) rather
+than a direct HTTP call from `argocd-outcome-relay` itself - not because a Task can do
+anything a Go service couldn't, but because moving the call is what prompted noticing
+`dora-exporter` already had everything it needed to close this gap on its own cluster,
+and gave a natural home to the code that did it. See `multi-cluster.md`'s
+"relay generified" section for the full reasoning on why the call moved.
 
 ## RBAC
 
 `dora-exporter`'s own ServiceAccount (in `platform-system`, matching where the other
-shared platform-level components live) gets a namespaced `Role` in `argocd` - not a
-`ClusterRole` - genuinely narrower than the stalled-pipeline detector's necessarily
-cluster-scoped RBAC, since every tracked Application lives in that single namespace
-regardless of which Application it belongs to: `get`/`list`/`watch`/`patch` on `applications.argoproj.io`. `patch`
-is the one deliberate widening beyond read-only, same honest framing as the stalled-
-pipeline detector's own dedup-label `patch` grant (`docs/stalled-pipeline-detector.md`):
-Kubernetes RBAC can't scope `patch` down to "only annotations," so this identity can
-technically modify any field on any Application in `argocd` - narrow by namespace and
-resource type, not by field.
+shared platform-level components live) gets two namespaced `Role`s, not `ClusterRole`s -
+genuinely narrower than the stalled-pipeline detector's necessarily cluster-scoped RBAC:
+
+- In `argocd`: `get`/`list`/`watch`/`patch` on `applications.argoproj.io`, since every
+  tracked Application lives in that single namespace regardless of which Application it
+  belongs to. `patch` is a deliberate widening beyond read-only, same honest framing as
+  the stalled-pipeline detector's own dedup-label `patch` grant
+  (`docs/stalled-pipeline-detector.md`): Kubernetes RBAC can't scope `patch` down to
+  "only annotations," so this identity can technically modify any field on any
+  Application in `argocd` - narrow by namespace and resource type, not by field.
+- In `platform-system`: `get`+`patch` on `configmaps`, `resourceNames`-scoped to exactly
+  `dora-cluster-mapped-state` - the MTTR state store above. No `create`: the ConfigMap
+  is always pre-rendered by this same chart, so this identity never needs it.
 
 `pipeline-runner` (each Application's own SA) additionally gets `get`+`patch` on exactly its
 own `<app-name>-staging` Application via `resourceNames` - nothing else, no other
@@ -232,7 +273,11 @@ Application's ArgoCD Application object, no other resource type.
   `pipeline-runner` still cannot touch any Application other than its own
   `<app-name>-staging`.
 - The above all cover the same-cluster path (Phase F's original scope). For the
-  cluster-mapped path (`forwardToDoraExporter`, fed by `argocd-outcome-relay`), see
-  `multi-cluster.md`'s "Live-verified end to end, 2026-08-17" section - a real
-  `checkout-api`/`kind-prod` release confirmed both `dora_deployments_total` and
-  `dora_releases_total{outcome="succeeded"|"failed"}` incrementing via that path too.
+  cluster-mapped path (`update-dora-metrics.yaml`'s Task, fed by
+  `argocd-outcome-relay` via the broker/Trigger), see `multi-cluster.md`'s
+  "Live-verified end to end, 2026-08-17" section - a real `checkout-api`/`kind-prod`
+  release confirmed both `dora_deployments_total` and
+  `dora_releases_total{outcome="succeeded"|"failed"}` incrementing via that path too
+  (predates the 2026-08-22 MTTR fix above; not yet re-verified live against the new
+  `update-dora-metrics` Task/ConfigMap path - see multi-cluster.md's own deploy-steps
+  note).

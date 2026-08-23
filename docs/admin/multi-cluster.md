@@ -656,28 +656,35 @@ needed a new field threaded through: `releaseTracking.cluster`, set by
 `outcomeRelayURL` from, consumed by `idp-service-catalog`'s `hooks.yaml` as a new
 `CLUSTER` env var on both hook Jobs.
 
-The direct relay -> dora-exporter HTTP forward (`forwardToDoraExporter`, Phase F) is
-**unchanged** by this pass - still a best-effort side call, not yet folded into
-`release-outcome-notify`'s Tekton Pipeline as a third task alongside `notify`/`span`.
-That's the natural next step (turns a silently-dropped-on-error metric update into a
-visible TaskRun failure, and gives dora-exporter a dev-cluster-side place to persist
-`dora-last-failure-time` for cluster-mapped apps - see "MTTR" in
-[dora-metrics.md](dora-metrics.md) for why that annotation can't be written today) -
-not done yet, tracked separately.
+**Also done in this same pass**: the relay's direct `forwardToDoraExporter` HTTP call
+(Phase F) is gone. `dora-exporter`'s `/argocd-outcome` endpoint is now called by a new
+Task, `update-dora-metrics.yaml`, run from `release-outcome-notify`'s own PipelineRun
+alongside `notify`/`span` - a failure there is now a real, visible TaskRun failure
+instead of a silently-logged-and-dropped side call. Doing this also closed the
+cluster-mapped MTTR gap: `dora-exporter` got its own state store on its own cluster
+(`dora-cluster-mapped-state` ConfigMap, `platform-system`) instead of needing API
+access to a remote cluster's Application object - see "MTTR for cluster-mapped envs"
+in [dora-metrics.md](dora-metrics.md) for the full mechanism.
 
-**Deploy steps for this change, not yet done**: rebuild+push both
-`ghcr.io/jfillman/platform-cicd-toolbox` (bakes in the hook script) and
-`ghcr.io/jfillman/platform-cicd-argocd-outcome-relay` (both `:latest`, both
-`imagePullPolicy: IfNotPresent` - a stale node-cached image has bitten this exact
-relay before, see the "ghcr.io/jfillman" comment in `argocd-outcome-relay.yaml`, so a
-rollout restart of the `argocd-outcome-relay` Deployment is required after pushing,
-not just a re-apply); tag a new `idp-service-catalog` release and repoint
-`targetRevision` in every tenant-onboarding `ApplicationSet` that pins it
-(`gitops-cluster-dev`, `gitops-cluster-kind-prod`, and `gitops-cluster-template` for
-future clusters) - `idp-application`'s own `Chart.yaml` `version:` field is
-decorative here (confirmed via `git show <tag>:...Chart.yaml`, stayed `0.3.0` across
-36+ real tags) since these charts are consumed straight from a pinned git tag, not a
-packaged/published chart repo.
+**Deploy steps for this change**: git-side is done - `platform-cicd`/`idp-service-
+catalog` (tagged `v0.3.37`) both committed+pushed, `targetRevision` repointed in every
+tenant-onboarding `ApplicationSet` that pins it (`gitops-cluster-dev`,
+`gitops-cluster-kind-prod`, and `gitops-cluster-template` for future clusters) -
+`idp-application`'s own `Chart.yaml` `version:` field is decorative here (confirmed via
+`git show <tag>:...Chart.yaml`, stayed `0.3.0` across 36+ real tags) since these charts
+are consumed straight from a pinned git tag, not a packaged/published chart repo.
+
+**Still not done**: rebuild+push three images - `ghcr.io/jfillman/platform-cicd-toolbox`
+(bakes in the hook script AND `update-dora-metrics.yaml`'s step image),
+`ghcr.io/jfillman/platform-cicd-argocd-outcome-relay`, and
+`ghcr.io/jfillman/dora-exporter` (all `:latest`, all `imagePullPolicy: IfNotPresent` -
+a stale node-cached image has bitten this exact relay before, see the
+"ghcr.io/jfillman" comment in `argocd-outcome-relay.yaml`) - and a rollout restart of
+the `argocd-outcome-relay` and `dora-exporter` Deployments afterward, not just a
+re-apply. Safe to do in any order or partially: the old hook script sends the old flat
+request shape the old relay still expects, and the old relay's own direct dora-exporter
+call still works against the old dora-exporter binary - nothing breaks until all three
+images are rebuilt, and nothing new activates until they are.
 
 **Live-verified end to end, 2026-08-17**, against the real `checkout-api` tenant on the
 real `kind-prod` cluster - not just `helm template`. A real commit to `checkout-api`

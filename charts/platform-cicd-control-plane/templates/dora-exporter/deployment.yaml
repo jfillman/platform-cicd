@@ -6,11 +6,14 @@
 # 1 replica, not 2 like the broker: acceptable-loss in-memory state (a brief re-sync gap
 # on restart, not incorrect data), not on the critical chaining path.
 #
-# RBAC is a namespaced Role (argocd namespace only), narrower than this platform's other
-# cluster-scoped components. patch is a deliberate widening beyond read-only, to clear
-# its own platform.io/dora-* tracking annotations - RBAC can't scope patch to
-# "annotations only", so this identity can technically modify any field on any
-# Application in argocd.
+# RBAC is two namespaced Roles, narrower than this platform's other cluster-scoped
+# components: one in argocd (Applications, for the same-cluster path's informer),
+# one in platform-system (get+patch on exactly the dora-cluster-mapped-state
+# ConfigMap below, for the cluster-mapped path's MTTR state - see that ConfigMap's own
+# comment). Both grant patch as a deliberate widening beyond read-only - RBAC can't
+# scope patch to "annotations only" or "this one data key only", so this identity can
+# technically modify any field on any Application in argocd, or any key in that one
+# ConfigMap.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -42,6 +45,61 @@ metadata:
     platform.io/subcomponent: "dora-exporter"
   namespace: argocd
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: dora-exporter }
+subjects:
+  - kind: ServiceAccount
+    name: dora-exporter
+    namespace: platform-system
+---
+# dora-cluster-mapped-state: this service's own MTTR state store for cluster-mapped
+# apps (docs/admin/dora-metrics.md, "MTTR for cluster-mapped envs") - it has no live
+# API access to a remote cluster's Application object to patch a last-failure-time
+# annotation onto (path 1's mechanism), so it persists the same thing here instead,
+# on THIS cluster, where it already has RBAC.
+#
+# Deliberately renders with NO `data:` field at all, not even `data: {}` - a
+# `kubectl apply`/ArgoCD 3-way-merge sync only prunes fields that were previously
+# present in its own last-applied-configuration. If this manifest ever declared
+# `data: {}`, a later sync would see "data desired: empty" and wipe every key this
+# service's own PATCH calls have added since. Never declaring the field at all means
+# it's simply never part of what this manifest manages, so out-of-band keys survive
+# indefinitely across ordinary syncs - same reasoning as this service's existing
+# annotation patch-back not fighting ArgoCD's own reconcile loop.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dora-cluster-mapped-state
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
+  namespace: platform-system
+---
+# get+patch only, resourceNames-scoped to exactly this one ConfigMap - no create,
+# matching this platform's "no wildcard verbs, enumerate resourceNames" RBAC
+# convention everywhere else (see e.g. argocd-outcome-relay's own Role). Never needs
+# create because the ConfigMap above is always pre-rendered by this same chart.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dora-exporter-state
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
+  namespace: platform-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["dora-cluster-mapped-state"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dora-exporter-state
+  labels:
+    {{- include "platform-cicd-control-plane.labels" . | nindent 4 }}
+    platform.io/subcomponent: "dora-exporter"
+  namespace: platform-system
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: dora-exporter-state }
 subjects:
   - kind: ServiceAccount
     name: dora-exporter

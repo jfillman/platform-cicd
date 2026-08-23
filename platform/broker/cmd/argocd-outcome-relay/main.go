@@ -57,18 +57,20 @@ type registryEntry struct {
 	RelaySecretName string `json:"relaySecretName"`
 }
 
-// Just enough of the hook script's CDEvent envelope to validate the claimed cluster
-// and to feed the best-effort dora-exporter forward below - this service otherwise
-// treats the body as opaque bytes it doesn't need to understand.
+// Just enough of the hook script's CDEvent envelope to validate the claimed cluster -
+// this service otherwise treats the body as opaque bytes it doesn't need to
+// understand. Used to mirror a dora-exporter forward too (see this file's git history,
+// 2026-08-22) - that call moved to update-dora-metrics.yaml, a Task in the same
+// release-outcome-notify Pipeline the broker event this relay forwards ends up
+// triggering, so this service no longer needs to parse Phase/FinishedAt/
+// FlowStartTime at all, only Cluster/AppNamespace/AppName (the last two purely for
+// log lines).
 type cdEventEnvelope struct {
 	Subject struct {
 		Content struct {
-			Cluster       string `json:"cluster"`
-			AppNamespace  string `json:"appNamespace"`
-			AppName       string `json:"appName"`
-			Phase         string `json:"phase"`
-			FinishedAt    string `json:"finishedAt"`
-			FlowStartTime string `json:"flowStartTime"`
+			Cluster      string `json:"cluster"`
+			AppNamespace string `json:"appNamespace"`
+			AppName      string `json:"appName"`
 		} `json:"content"`
 	} `json:"subject"`
 }
@@ -87,9 +89,8 @@ func main() {
 	if brokerURL == "" {
 		log.Fatal("CDEVENTS_BROKER_URL must be set")
 	}
-	doraExporterURL := os.Getenv("DORA_EXPORTER_URL") // optional - see forwardToDoraExporter, Phase F
 
-	h := &handler{clientset: clientset, brokerURL: brokerURL, doraExporterURL: doraExporterURL, httpClient: &http.Client{Timeout: 10 * time.Second}}
+	h := &handler{clientset: clientset, brokerURL: brokerURL, httpClient: &http.Client{Timeout: 10 * time.Second}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/outcome/", h.handleOutcome)
@@ -99,10 +100,9 @@ func main() {
 }
 
 type handler struct {
-	clientset       kubernetes.Interface
-	brokerURL       string
-	doraExporterURL string
-	httpClient      *http.Client
+	clientset  kubernetes.Interface
+	brokerURL  string
+	httpClient *http.Client
 }
 
 func (h *handler) handleOutcome(w http.ResponseWriter, r *http.Request) {
@@ -142,14 +142,6 @@ func (h *handler) handleOutcome(w http.ResponseWriter, r *http.Request) {
 		log.Printf("argocd-outcome-relay: forwarding to broker failed (cluster=%s app=%s/%s): %v", cluster, env.Subject.Content.AppNamespace, env.Subject.Content.AppName, err)
 		http.Error(w, "failed to forward event", http.StatusBadGateway)
 		return
-	}
-
-	// Best-effort, not on the critical path - a direct call rather than a second
-	// broker round trip (docs/admin/multi-cluster.md).
-	if h.doraExporterURL != "" {
-		if err := h.forwardToDoraExporter(ctx, env); err != nil {
-			log.Printf("argocd-outcome-relay: dora-exporter forward failed (non-fatal, app=%s/%s): %v", env.Subject.Content.AppNamespace, env.Subject.Content.AppName, err)
-		}
 	}
 
 	w.WriteHeader(http.StatusAccepted)
@@ -221,38 +213,6 @@ func (h *handler) forwardToBroker(ctx context.Context, body []byte) error {
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("broker returned %d: %s", resp.StatusCode, string(respBody))
-	}
-	return nil
-}
-
-// forwardToDoraExporter is a direct, best-effort HTTP call to the DORA exporter's
-// outcome endpoint, not routed through the broker/Tekton Trigger path - avoids
-// PipelineRun overhead for what's fundamentally a metrics update.
-func (h *handler) forwardToDoraExporter(ctx context.Context, env cdEventEnvelope) error {
-	payload := map[string]string{
-		"appNamespace":  env.Subject.Content.AppNamespace,
-		"appName":       env.Subject.Content.AppName,
-		"phase":         env.Subject.Content.Phase,
-		"finishedAt":    env.Subject.Content.FinishedAt,
-		"flowStartTime": env.Subject.Content.FlowStartTime,
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, h.doraExporterURL, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := h.httpClient.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("dora-exporter returned %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }

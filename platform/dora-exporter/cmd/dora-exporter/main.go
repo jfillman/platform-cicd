@@ -18,12 +18,18 @@
 //     still the right tool for them.
 //
 // Both paths funnel into the same recordOutcome() - the actual metric-recording logic
-// doesn't care which path it came from. What's genuinely different: path 1 can (and
-// does) patch a "last failure time" annotation back onto the live Application object
-// for later MTTR correlation; path 2 has no such object to patch (same "no direct API
-// access to a remote cluster" principle as everywhere else in this feature - see
-// mark-release-pending.yaml), so MTTR is a known, deliberate gap for cluster-mapped
-// apps in this pass, not silently dropped - see recordOutcome's own comment.
+// doesn't care which path it came from. What's genuinely different is WHERE each path
+// persists "last failure time" for MTTR correlation: path 1 patches an annotation back
+// onto the live Application object it's already watching; path 2 has no such object on
+// this cluster to patch (same "no direct API access to a remote cluster" principle as
+// everywhere else in this feature - see mark-release-pending.yaml), so it persists the
+// same information into a ConfigMap this service owns instead
+// (clusterMappedStateConfigMap, in this cluster's own platform-system namespace - see
+// getClusterMappedLastFailure/patchClusterMappedLastFailure). Originally a known,
+// deliberate gap (MTTR simply didn't work for cluster-mapped apps) - closed once
+// /argocd-outcome moved from the relay's own direct HTTP call to a Tekton Task
+// (release-outcome-notify.yaml's update-dora-metrics) that already runs on THIS
+// cluster, same as everything else this service reads.
 //
 // Correlation with a specific release attempt happens via the platform.io/dora-*
 // annotations the release Pipeline stamps directly onto the Application object
@@ -49,12 +55,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
@@ -69,7 +77,9 @@ const (
 	annoApp                = "platform.io/dora-app"
 	annoLastFailureTime    = "platform.io/dora-last-failure-time"
 	argocdNamespace        = "argocd"
+	platformNamespace      = "platform-system"
 	doraTrackLabelSelector = "platform.io/dora-track=true"
+	clusterMappedStateCM   = "dora-cluster-mapped-state"
 )
 
 // Lead Time buckets are deliberately aligned to DORA's own published elite/high/medium/
@@ -123,6 +133,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("dynamic client: %v", err)
 	}
+	// Typed clientset, alongside the dynamic one above - only needed for the
+	// cluster-mapped path's ConfigMap state store (path 1's annotation patch-back
+	// already goes through dynClient, since Applications aren't a built-in type).
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		log.Fatalf("clientset: %v", err)
+	}
 
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynClient, 10*time.Minute, argocdNamespace,
@@ -154,12 +171,18 @@ func main() {
 	}
 	log.Println("dora-exporter: informer cache synced, watching applications.argoproj.io in argocd (platform.io/dora-track=true)")
 
+	srv := &server{clientset: clientset}
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("/argocd-outcome", handleArgoCDOutcome)
+	mux.HandleFunc("/argocd-outcome", srv.handleArgoCDOutcome)
 	log.Println("dora-exporter: listening on :8080 (/metrics, /argocd-outcome)")
 	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+type server struct {
+	clientset kubernetes.Interface
 }
 
 // argocdOutcomeRequest mirrors argocd-outcome-relay's own outcomeRequest shape (the
@@ -173,14 +196,16 @@ type argocdOutcomeRequest struct {
 	FlowStartTime string `json:"flowStartTime"`
 }
 
-// handleArgoCDOutcome is path 2 from this file's own header - no informer, no
-// annotation patch-back (nothing to patch on a cluster this service has no API access
-// to), just the same terminal-phase metric recording the informer path already does.
-// Trusts its caller (argocd-outcome-relay, an in-cluster peer in platform-system) -
-// this endpoint isn't independently authenticated; the relay is the trust boundary
-// for this whole path, same as it is for the broker forward - see that service's own
-// header for the reasoning.
-func handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
+// handleArgoCDOutcome is path 2 from this file's own header - no Application-object
+// annotation patch-back (nothing on THIS cluster to patch), the same terminal-phase
+// metric recording the informer path already does, plus its own last-failure-time
+// bookkeeping against clusterMappedStateCM (this cluster's own ConfigMap, not a
+// remote object). Called by release-outcome-notify.yaml's update-dora-metrics Task
+// (runs on this cluster, same as everything else this service reads/writes) - not
+// authenticated independently; that Task only exists because a cluster-mapped
+// release's outcome already made it through argocd-outcome-relay's own auth once,
+// same trust boundary as before.
+func (s *server) handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -203,9 +228,73 @@ func handleArgoCDOutcome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unparseable finishedAt", http.StatusBadRequest)
 		return
 	}
-	recordOutcome(req.AppNamespace, req.AppName, req.Phase, finishedAt, req.FlowStartTime, "" /* no lastFailureTime source - see this file's header */)
+
+	ctx := r.Context()
+	key := clusterMappedStateKey(req.AppNamespace, req.AppName)
+	lastFailureTimeStr, err := s.getClusterMappedLastFailure(ctx, key)
+	if err != nil {
+		// Best-effort: a read failure here shouldn't block recording the other three
+		// metrics, it should just mean this particular MTTR sample is skipped (same
+		// as an unparseable lastFailureTimeStr already does inside recordOutcome).
+		log.Printf("dora-exporter: %s/%s: reading %s state failed (non-fatal, MTTR sample may be skipped): %v", req.AppNamespace, req.AppName, clusterMappedStateCM, err)
+	}
+
+	lastFailureCleared := recordOutcome(req.AppNamespace, req.AppName, req.Phase, finishedAt, req.FlowStartTime, lastFailureTimeStr)
+	if req.Phase == "Succeeded" && lastFailureCleared {
+		if err := s.patchClusterMappedLastFailure(ctx, key, nil); err != nil {
+			log.Printf("dora-exporter: %s/%s: clearing %s state failed: %v", req.AppNamespace, req.AppName, clusterMappedStateCM, err)
+		}
+	} else if req.Phase == "Failed" || req.Phase == "Error" {
+		finishedAtStr := finishedAt.Format(time.RFC3339)
+		if err := s.patchClusterMappedLastFailure(ctx, key, &finishedAtStr); err != nil {
+			log.Printf("dora-exporter: %s/%s: recording %s state failed: %v", req.AppNamespace, req.AppName, clusterMappedStateCM, err)
+		}
+	}
+
 	log.Printf("dora-exporter: %s/%s: recorded %s via /argocd-outcome (cluster-mapped env)", req.AppNamespace, req.AppName, req.Phase)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// clusterMappedStateKey mirrors the DNS-1123 subdomain rules appName/appNamespace
+// already satisfy (both come from validated cicd.yaml/Kubernetes namespace names) - a
+// ConfigMap data key just needs to be a valid key, "." is fine and reads naturally.
+func clusterMappedStateKey(appNamespace, appName string) string {
+	return appNamespace + "." + appName
+}
+
+// getClusterMappedLastFailure reads clusterMappedStateCM's own key for this app - a
+// missing ConfigMap or missing key both just mean "no prior failure on record", not an
+// error the caller needs to treat specially.
+func (s *server) getClusterMappedLastFailure(ctx context.Context, key string) (string, error) {
+	cm, err := s.clientset.CoreV1().ConfigMaps(platformNamespace).Get(ctx, clusterMappedStateCM, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return cm.Data[key], nil
+}
+
+// patchClusterMappedLastFailure sets (value non-nil) or clears (value nil) this app's
+// key via a JSON merge patch - additive/idempotent regardless of what else is in the
+// ConfigMap, same pattern as patchAnnotations below. clusterMappedStateCM itself is
+// rendered by the Helm chart with no `data:` field at all (not even `{}`) specifically
+// so a later `kubectl apply`/ArgoCD sync of that same manifest never has this field in
+// its own last-applied-configuration and so never prunes keys this service adds here -
+// see charts/platform-cicd-control-plane/templates/dora-exporter/deployment.yaml.
+func (s *server) patchClusterMappedLastFailure(ctx context.Context, key string, value *string) error {
+	var jsonValue interface{} = value
+	if value != nil {
+		jsonValue = *value
+	}
+	patch := map[string]interface{}{"data": map[string]interface{}{key: jsonValue}}
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	_, err = s.clientset.CoreV1().ConfigMaps(platformNamespace).Patch(ctx, clusterMappedStateCM, types.MergePatchType, body, metav1.PatchOptions{})
+	return err
 }
 
 // reconcile implements the annotation-based hand-off described in
