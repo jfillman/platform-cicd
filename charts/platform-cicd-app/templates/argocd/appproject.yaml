@@ -73,6 +73,8 @@ spec:
     # through the same shared chart the lower-env tier uses, not a raw Kustomize path
     # in the app's own repo - 2026-08-24).
     - {{ .Values.idpServiceCatalog.repoUrl }}
+    # charts/pr-preview-notify source - the PostSync PR-comment hook (2026-08-24).
+    - {{ .Values.platformCicdRepoUrl }}
   # Required by ArgoCD's ApplicationSet-in-any-namespace feature so the pr-envs
   # ApplicationSet (ephemeral-envs.yaml), which lives in this app's own -cicd namespace
   # rather than argocd-apps's own, can reference this project.

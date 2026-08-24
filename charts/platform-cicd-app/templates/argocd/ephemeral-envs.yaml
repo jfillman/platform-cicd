@@ -101,6 +101,28 @@ spec:
           ref: appsrc
           directory:
             exclude: "*"
+        # Source 2: a single PostSync hook Job (charts/pr-preview-notify) that posts/
+        # edits a PR comment once this exact Application syncs - see that chart's own
+        # header for why it's a separate chart (structural scoping: nothing outside
+        # this ApplicationSet template ever references it, so it can't fire for a
+        # regular env) rather than a conditional resource inside idp-application
+        # (shared by every tier) or a Tekton Task (runs before ArgoCD has even
+        # attempted to deploy, so it can't know whether the sync will succeed).
+        - repoURL: {{ .Values.platformCicdRepoUrl }}
+          targetRevision: main
+          path: charts/pr-preview-notify
+          helm:
+            valuesObject:
+              appName: {{ .Values.platformIdentity.appName }}
+              prNumber: "{{ "{{" }}.number{{ "}}" }}"
+              githubOwner: {{ .Values.platformIdentity.githubOwner }}
+              appRepoName: {{ .Values.platformIdentity.appName }}
+              namespace: "app-{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
+              argocdAppName: "{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
+              serviceName: {{ .Values.platformIdentity.appName }}
+              ingressBaseDomain: {{ .Values.platformIdentity.previewIngressBaseDomain | default "" | quote }}
+              argocdUIBaseURL: {{ .Values.platformIdentity.argocdUIBaseURL | default "" | quote }}
+              toolboxImage: {{ .Values.toolboxImage }}
       destination:
         server: https://kubernetes.default.svc
         namespace: "app-{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"

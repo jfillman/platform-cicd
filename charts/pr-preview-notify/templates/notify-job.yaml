@@ -1,0 +1,160 @@
+# templates/notify-job.yaml
+#
+# ArgoCD PostSync hook, not a Tekton Task - the build Pipeline that produces this PR's
+# image finishes long before ArgoCD has even attempted to deploy it, so it can't know
+# whether the environment actually came up. PostSync fires right after each successful
+# sync of the SAME per-PR Application this chart is sourced by, in its own destination
+# namespace - the correct "this environment is real now" signal.
+#
+# hook-delete-policy BeforeHookCreation,HookSucceeded: this fires on every sync (every
+# push to the PR), not just the first one - without HookSucceeded, completed Jobs would
+# accumulate in the PR namespace forever; without BeforeHookCreation, a fast second push
+# could try to create a same-named Job while the first is still around.
+#
+# No RBAC beyond the ServiceAccount itself - this Job never touches the Kubernetes API,
+# only the projected SA token (kubelet-issued, no API permission needed) and outbound
+# HTTP to the shared token broker + GitHub's API.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pr-preview-notify
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pr-preview-notify
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: pr-preview-notify
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: github-token-broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: github-token-broker-token
+                  audience: github-installation-token
+                  expirationSeconds: 600
+      containers:
+        - name: notify
+          image: {{ .Values.toolboxImage }}
+          imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: github-token-broker-token
+              mountPath: /var/run/secrets/platform
+              readOnly: true
+          env:
+            - name: GITHUB_TOKEN_BROKER_URL
+              value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
+            - name: GITHUB_OWNER
+              value: {{ .Values.githubOwner | quote }}
+            - name: APP_REPO_NAME
+              value: {{ .Values.appRepoName | quote }}
+            - name: APP_NAME
+              value: {{ .Values.appName | quote }}
+            - name: PR_NUMBER
+              value: {{ .Values.prNumber | quote }}
+            - name: NAMESPACE
+              value: {{ .Values.namespace | quote }}
+            - name: ARGOCD_APP_NAME
+              value: {{ .Values.argocdAppName | quote }}
+            - name: SERVICE_NAME
+              value: {{ .Values.serviceName | quote }}
+            - name: INGRESS_BASE_DOMAIN
+              value: {{ .Values.ingressBaseDomain | quote }}
+            - name: ARGOCD_UI_BASE_URL
+              value: {{ .Values.argocdUIBaseURL | quote }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              source "${PLATFORM_LIB}/github-app.sh"
+
+              token="$(github_app_installation_token "${GITHUB_OWNER}" "${APP_REPO_NAME}")"
+
+              if [[ -n "${ARGOCD_UI_BASE_URL}" ]]; then
+                argocd_link="[\`${ARGOCD_APP_NAME}\`](${ARGOCD_UI_BASE_URL}/applications/argocd-apps/${ARGOCD_APP_NAME})"
+              else
+                argocd_link="\`${ARGOCD_APP_NAME}\` (no ArgoCD UI ingress configured yet - \`kubectl port-forward -n argocd-apps svc/argocd-apps-server 8080:443\`, then https://localhost:8080/applications/argocd-apps/${ARGOCD_APP_NAME})"
+              fi
+
+              if [[ -n "${INGRESS_BASE_DOMAIN}" ]]; then
+                preview_url_line="**Preview URL:** https://${APP_NAME}-pr-${PR_NUMBER}.${INGRESS_BASE_DOMAIN}"
+              else
+                # No RBAC to look the real port up ourselves (deliberately - see this
+                # chart's own header) - the port varies by what a developer's own
+                # platform/pr-env.yaml declares, so ask them to check it with their own
+                # kubectl access rather than guessing/hardcoding a number here.
+                preview_url_line="**Preview URL:** not available yet - no ingress configured for ephemeral environments on this cluster. Access via:
+              \`\`\`
+              kubectl get svc -n ${NAMESPACE} ${SERVICE_NAME}   # check the port
+              kubectl port-forward -n ${NAMESPACE} svc/${SERVICE_NAME} 8080:<port>
+              \`\`\`"
+              fi
+
+              body="### 🚀 Preview environment ready
+
+              **Namespace:** \`${NAMESPACE}\`
+              **ArgoCD Application:** ${argocd_link}
+              ${preview_url_line}
+
+              Updates automatically on every push to this PR. Removed (namespace swept within 24h, not instantly - see docs/admin/ephemeral-environments.md) when the PR closes or the \`preview\` label is removed."
+
+              # Hidden marker (HTML comment, invisible in rendered markdown), same
+              # dedup-via-edit-in-place pattern as comment-pr-check-result.yaml - this
+              # Job re-runs on every push to the PR, not just the first one.
+              marker="<!-- platform-cicd:preview-env -->"
+              body="${marker}"$'\n'"${body}"
+
+              existing_comment_id="$(curl --fail --silent --show-error --max-time 10 \
+                -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/${PR_NUMBER}/comments?per_page=100" \
+                | jq -r --arg marker "${marker}" '[.[] | select(.body | startswith($marker))][0].id // empty')"
+
+              if [[ -n "${existing_comment_id}" ]]; then
+                curl --fail --silent --show-error --max-time 10 -o /dev/null \
+                  -X PATCH -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/comments/${existing_comment_id}" \
+                  -d "$(jq -n --arg body "${body}" '{body: $body}')"
+                echo "updated existing preview-env PR comment ${existing_comment_id}"
+              else
+                curl --fail --silent --show-error --max-time 10 -o /dev/null \
+                  -X POST -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/${PR_NUMBER}/comments" \
+                  -d "$(jq -n --arg body "${body}" '{body: $body}')"
+                echo "posted new preview-env PR comment"
+
+                # Self-heal the same race comment-pr-check-result.yaml's own header
+                # documents: collapse to the earliest (lowest id) survivor if two syncs
+                # both saw "no existing comment" before either posted.
+                dup_ids="$(curl --silent --show-error --max-time 10 \
+                  -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/${PR_NUMBER}/comments?per_page=100" \
+                  | jq -r --arg marker "${marker}" '[.[] | select(.body | startswith($marker))] | sort_by(.id) | .[1:][].id' \
+                  || true)"
+                while IFS= read -r dup_id; do
+                  [[ -z "${dup_id}" ]] && continue
+                  echo "collapsing duplicate preview-env comment ${dup_id}"
+                  curl --silent --show-error --max-time 10 -o /dev/null \
+                    -X DELETE -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/comments/${dup_id}" || true
+                done <<<"${dup_ids}"
+              fi
