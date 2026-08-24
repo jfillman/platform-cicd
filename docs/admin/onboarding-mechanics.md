@@ -64,22 +64,6 @@ cluster - see [installation.md](installation.md).
    is *computed* from `type`+`appName` as `<type>-<app-name>-cicd`, so it can't drift
    from convention (see [naming-conventions.md](naming-conventions.md)).
 
-   **If Testkube is installed on this cluster** (`50-platform-cicd/testkube/` in the
-   cluster's own `gitops-cluster-<name>` repo), same PR also adds this tenant's
-   `<type>-<app-name>-cicd` namespace to
-   `50-platform-cicd/testkube/values-kind-dev.yaml`'s `testkube-api.additionalNamespaces`
-   and `.executionNamespaces` lists (the latter with `generateAPIServerRBAC: true`,
-   `generateTestJobRBAC: true`, and `jobServiceAccountName: tests-job-<namespace>`
-   explicitly set on the new entry - confirmed live via `helm template` that the two
-   booleans do NOT default to `true` when omitted (skipping them silently renders zero
-   RBAC for that namespace), and that an omitted `jobServiceAccountName` renders a
-   ServiceAccount with an empty `metadata.name`, rejected by the API server outright).
-   Testkube enforces the namespace list
-   itself as a hard runtime allow-list in code (`kubeshop/testkube`
-   `pkg/testworkflows/executionworker/kubernetesworker/worker.go`: `"namespace %s not
-   supported"`) - there's no wildcard/dynamic-discovery option, so a tenant whose
-   namespace is missing from this list gets every TestWorkflow execution hard-rejected.
-
    `platformIdentity` isn't a key `schemas/cicd.schema.json` permits -
    `additionalProperties: false` rejects any `cicd.yaml` that tries to define it. This
    is enforced structurally, not just by convention: the `ApplicationSet`'s Helm
