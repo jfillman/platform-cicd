@@ -155,6 +155,18 @@ re-syncs on a timer - it doesn't rotate the underlying credential itself.
 Excluded from this migration, deliberately: `fulcio-secret`/`fulcio-server-config`
 (fresh, per-cluster-generated root key material by design -
 `hack/generate-cluster-values.sh` - not something "synced from a backend" makes sense
-for) and PaC's own `pipelines-as-code-secret` (a third-party install's own Secret,
-outside this platform's chart boundary - `github-app-creds`, this platform's own copy,
-is what moved to Infisical, see [release.md](release.md)).
+for).
+
+**2026-08-23: `pipelines-as-code-secret` is no longer excluded.** It's still PaC's own
+third-party Secret, outside this platform's *chart* boundary - but after kind-dev's full
+etcd-WAL-corruption rebuild required hand-recreating it from scratch, the "outside our
+chart" argument didn't justify the repeated manual-recreate-on-every-cluster-rebuild
+cost, especially since the values it needs (`github-application-id`/`github-private-key`)
+already sit in `platform-cicd-kind-dev`'s Infisical project for `github-app-creds`'s
+sake. Now a second, independent `ExternalSecret` synced from the same Infisical keys,
+living in PaC's own install boundary instead of this chart:
+`gitops-cluster-dev/50-platform-cicd/tekton-operator/
+pipelines-as-code-secret-external-secret.yaml` (targets `tekton-pipelines`, not
+`pipelines-as-code` - see that file's own header for why). `github-app-creds` is
+unaffected - still a separate copy, still what token-review-interceptor consumes; the
+two `ExternalSecret`s just happen to read the same source values now.

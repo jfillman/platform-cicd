@@ -7,12 +7,15 @@
 # GitHub App installation tokens for release - see docs/release.md). No access to
 # PipelineRuns/Secrets/Repository writes in any Application namespace.
 #
-# github-app-creds is a copy of pipelines-as-code-secret's two fields, needed because
-# Secrets are namespace-scoped and this pod lives in platform-system. Create it by hand
-# (never paste key material through chat):
-#   kubectl get secret pipelines-as-code-secret -n pipelines-as-code -o json \
-#     | jq '{apiVersion, kind, type, data: {"github-application-id": .data["github-application-id"], "github-private-key": .data["github-private-key"]}, metadata: {name: "github-app-creds", namespace: "platform-system"}}' \
-#     | kubectl apply -f -
+# github-app-creds holds the same two fields as PaC's own pipelines-as-code-secret,
+# needed as an independent copy because Secrets are namespace-scoped and this pod lives
+# in platform-system while PaC's own Secret lives in tekton-pipelines (not
+# pipelines-as-code - see gitops-cluster-dev's pipelines-as-code-vendored.yaml).
+# 2026-08-19/2026-08-23: no manual kubectl copy anymore - both are independent
+# ExternalSecrets synced from the same two Infisical keys (github-application-id/
+# github-private-key), see secretstore/github-app-creds-external-secret.yaml (this
+# chart) and gitops-cluster-dev/50-platform-cicd/tekton-operator/
+# pipelines-as-code-secret-external-secret.yaml. See docs/admin/secrets-management.md.
 #
 # Plain HTTP, not HTTPS: a cert-manager self-signed-CA cert (Tekton's usual pattern) was
 # tried and hit a hard wall getting the CA into the sink pod's trust store (blocked by

@@ -131,10 +131,19 @@ This is all one-time setup per app, same spirit as onboarding the app repo itsel
    github-app-creds-external-secret.yaml`), synced from the control plane's own
    Infisical project (`platform-cicd-kind-dev`) - see
    [secrets-management.md](secrets-management.md). Read the GitHub App's id/private key
-   out of `pipelines-as-code-secret` once and plant them as `github-application-id`/
-   `github-private-key` keys in Infisical (via the UI/API, never through this chart or
-   committed to this repo); the `ExternalSecret` picks them up automatically from
-   there.
+   off the GitHub App itself (App settings page - the `.pem` you download when
+   generating a private key, plus the App ID shown there) and plant them as
+   `github-application-id`/`github-private-key` keys in Infisical (via the UI/API, never
+   through this chart or committed to this repo); the `ExternalSecret` picks them up
+   automatically from there.
+
+   **2026-08-23: `pipelines-as-code-secret` itself is now also synced from these same
+   two Infisical keys**, no longer a one-time manual source to copy out of -
+   `gitops-cluster-dev/50-platform-cicd/tekton-operator/
+   pipelines-as-code-secret-external-secret.yaml`, see
+   [secrets-management.md](secrets-management.md)'s "What this deliberately is not"
+   section. A cluster rebuild no longer needs either Secret hand-recreated - just this
+   one Infisical plant, once per cluster.
 
 2. **Create the `gitops-<app-name>` repo on GitHub** (e.g. `gitops-nodejs-demo-app`) and
    push `<app-name>/staging/deployment.yaml` + `service.yaml` (adapted from the app's own
