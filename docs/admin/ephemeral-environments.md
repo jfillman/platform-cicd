@@ -1,13 +1,21 @@
 # PR-based ephemeral environments
 
 Any PR against `nodejs-demo-app` labeled `preview` gets a real, running, isolated
-environment - its own namespace, its own `Deployment`/`Service`, running the exact image
-that PR's own build produced - torn down automatically when the PR closes or the label
-is removed. This is modeled on a real prior production pattern (ArgoCD ApplicationSet's
-`pullRequest` generator, `gitops-main/charts/cd-pipelines-user/templates/appset-
-ephemeral-envs-pr.yaml`, analyzed live), keeping the generator mechanism itself (it was
-sound) while fixing two things that mechanism's supporting pieces got wrong in
-production - see "What's different from the old system" below.
+environment - its own namespace, a full `idp-application`-chart-rendered workload
+(`Rollout`/`Service`/`ServiceAccount`/`NetworkPolicy`/`ServiceMonitor`/`RolloutWatch`),
+running the exact image that PR's own build produced - torn down within the TTL sweep's
+window after the PR closes or the label is removed. This is modeled on a real prior
+production pattern (ArgoCD ApplicationSet's `pullRequest` generator, `gitops-main/charts/
+cd-pipelines-user/templates/appset-ephemeral-envs-pr.yaml`, analyzed live), keeping the
+generator mechanism itself (it was sound) while fixing two things that mechanism's
+supporting pieces got wrong in production - see "What's different from the old system"
+below.
+
+**2026-08-24: moved off a raw Kustomize base (`k8s/ephemeral/`) onto the same
+`idp-service-catalog` `idp-application` chart every other tier (release, lower-env)
+deploys through** - see "Flow" and "Deploying through idp-application, not raw Kustomize"
+below for the current mechanism. Sections describing the old Kustomize-specific
+mechanics have been removed; check this file's own git history if you need them.
 
 ## Flow
 
@@ -15,36 +23,94 @@ production - see "What's different from the old system" below.
 developer adds the `preview` label to a PR on nodejs-demo-app
   -> within ~180s, ArgoCD's ApplicationSet pullRequest generator (polling GitHub,
      label-gated) picks it up
-  -> generates an Application named nodejs-demo-app-pr-<number>, sourced from
-     nodejs-demo-app's own k8s/ephemeral/ Kustomize base at that PR's head SHA
-  -> kustomize.nameSuffix ("-<number>") and kustomize.images (pointed at that PR's
-     already-built, uniquely-tagged image) are applied at generation time - nothing in
-     the repo needs per-PR editing
-  -> Application syncs into platform-cicd-demo-pr-<number>, a namespace that is itself
-     one of the synced resources (see "Why the namespace is tracked, not
-     CreateNamespace=true" below)
-  -> developer: kubectl port-forward -n platform-cicd-demo-pr-<number> svc/nodejs-demo-app <port>:80
+  -> generates an Application named nodejs-demo-app-pr-<number>, with two sources:
+     idp-service-catalog's idp-application chart (envName/rollout.image stamped per-PR
+     via valuesObject) plus a ref-only source into nodejs-demo-app's own repo, pinned to
+     that PR's head SHA, for platform/pr-env.yaml's values
+  -> a separate, dedicated pull_request-triggered flow (cicd.yaml's own pipelines: entry
+     for it) builds and pushes that PR's image, tagged with a bare 12-char sha (not the
+     normal <version>-<short-sha> scheme - see "Image tagging: sha-only for PR builds"
+     below) - nothing in the repo needs per-PR editing beyond that one cicd.yaml entry,
+     added once at onboarding
+  -> Application syncs into app-nodejs-demo-app-pr-<number>, created via
+     CreateNamespace=true (see "Namespace cleanup: TTL sweep, not cascade-delete" below -
+     this is a deliberate change from the old Kustomize-based design)
+  -> developer: kubectl port-forward -n app-nodejs-demo-app-pr-<number> svc/nodejs-demo-app <port>:80
   -> PR closed, or `preview` label removed
   -> generator stops returning that PR -> ArgoCD deletes the generated Application ->
-     resources-finalizer.argocd.argoproj.io cascade-deletes everything it tracks,
-     including the namespace
+     resources-finalizer.argocd.argoproj.io cascade-deletes everything it tracks (the
+     Rollout/Service/etc, NOT the namespace itself) -> the namespace sits empty until the
+     TTL sweep removes it (up to 24h later)
 ```
 
-## Why the namespace is tracked, not `CreateNamespace=true`
+## Deploying through idp-application, not raw Kustomize
 
-Verified live against this cluster before trusting it for real PRs: a throwaway
-`Application` with `syncPolicy.syncOptions: [CreateNamespace=true]` and the
-`resources-finalizer.argocd.argoproj.io` finalizer, on deletion, correctly cascade-
-deleted its `Deployment`/`Service` but left the auto-created namespace `Active` forever
-- `CreateNamespace=true` is a sync-time convenience, not something that adds the
-namespace to the Application's own tracked-resource set. This is the exact bug the old
-system hit (see below) and never fixed.
+Originally this ApplicationSet sourced straight from the app repo's own `k8s/ephemeral/`
+Kustomize base (`namespace.yaml`/`deployment.yaml`/`service.yaml`/`kustomization.yaml`).
+Replaced 2026-08-24 with the same two-source `idp-application`-chart pattern the
+lower-env tier's own `lower-envs-applicationset.yaml` uses, so a PR preview environment
+behaves like every other tier instead of a bespoke, Kustomize-only path:
 
-The fix, also verified live: include the `Namespace` as an actual manifest in the synced
-source (`k8s/ephemeral/namespace.yaml` in `nodejs-demo-app`) so it becomes a real tracked
-resource. A second live test with this in place confirmed the finalizer then deletes the
-namespace along with everything else. `k8s/ephemeral/namespace.yaml`'s own comments
-carry this same explanation for anyone editing it later.
+- **Source 0**: `idp-service-catalog`'s `charts/idp-application`, pinned version, with a
+  `helm.valuesObject` stamping `appName`/`cluster`/`envName` (`pr-<number>`) and
+  `rollout.image.{repository,tag}` per-PR - these three fields can't be overridden by a
+  developer's own values file, since `valuesObject` wins over `valueFiles`.
+- **Source 1**: a `directory`-only, `ref: appsrc` source into the app's own repo, pinned
+  to that PR's `head_sha` (not `main`), so `platform/pr-env.yaml` (see below) is read
+  from the PR branch itself - editing that file inside a PR customizes that PR's own
+  preview environment.
+
+**`platform/pr-env.yaml`, not `platform/envs/pr.yaml`.** The lower-env tier's own
+`lower-envs-applicationset.yaml` already watches `platform/envs/*.yaml` (a `git: files:`
+generator) for the dev-tier lower env - a file at `platform/envs/pr.yaml` would also
+match that glob and spawn a bogus static `pr` lower env on top of this feature's real
+per-PR-numbered ones. `platform/pr-env.yaml`, one level up, avoids the collision. This is
+a single, static file per app (unlike `platform/envs/<name>.yaml`, one file per lower
+env) - a PR number isn't a fixed filename, so per-PR identity is stamped by the
+ApplicationSet's own `valuesObject` instead of by which file matched.
+
+`k8s/ephemeral/` is gone entirely from onboarded app repos - `platform/pr-env.yaml`
+replaces it.
+
+## Image tagging: sha-only for PR builds
+
+`build-image.yaml` (the shared catalog Task every flow's build stage uses) normally tags
+`<image-repo>:<version-from-package.json-or-pom.xml>-<7-char-sha>`. ArgoCD's
+`pullRequest` generator has no way to read a PR's `package.json` at manifest-generation
+time - it only exposes `.number`/`.head_sha`/labels - so it can't predict that tag, only
+a tag derived from `.head_sha` alone.
+
+Fixed with a new `pr-tag-only` param, threaded `build-image.yaml` <- `build.yaml` <-
+`deliver-onboarding-files.yaml`'s generator: for a `pull_request`-triggered flow (the
+same case that already appends `-pr` to the image repo), the generator also sets
+`pr-tag-only: "true"`, and `build-image.yaml` tags the image as a bare 12-char sha with
+no version prefix - exactly what `ephemeral-envs.yaml`'s ApplicationSet computes
+independently via `{{ trunc 12 .head_sha }}`.
+
+**A working PR image requires a `pull_request`-triggered flow to exist at all** - see
+"Onboarding" step 1 below. Nothing generates one automatically; `cicd.yaml`'s `pipelines:`
+map needs an explicit entry with `trigger.event: pull_request`.
+
+## Namespace cleanup: TTL sweep, not cascade-delete
+
+Real, deliberate trade-off, not an oversight: `idp-application`, like the lower-env
+tier, never renders a `Namespace` object of its own - it relies on
+`syncOptions: [CreateNamespace=true]`. `CreateNamespace=true` is a sync-time convenience,
+not something that adds the namespace to the Application's own tracked-resource set, so
+`resources-finalizer.argocd.argoproj.io`'s cascade-delete removes the
+`Rollout`/`Service`/etc. it actually tracks but leaves the now-empty namespace behind -
+confirmed live, and the exact bug the old cd-pipelines system hit (see below) and never
+fixed.
+
+Accepted here instead of reverting to a tracked `Namespace` object (which the shared
+`idp-application` chart doesn't support): `ephemeral-envs.yaml`'s
+`managedNamespaceMetadata` stamps `platform.io/ephemeral-env: "true"` on every PR
+namespace it creates, so `pr-namespace-ttl-sweep-cronjob.yaml`'s existing 24h sweep (see
+below) becomes the real cleanup path for the empty namespace left behind, not just a
+backstop for a stuck finalizer. Means a closed PR's namespace can sit empty for up to
+24h rather than disappearing the instant the PR closes - a real, visible difference from
+the old design, judged worth it for standardizing on the same chart every other tier
+uses.
 
 ## What's different from the old system
 
@@ -69,11 +135,10 @@ risk - fixed here rather than repeated:
   (see below - this used to be a cross-namespace grant into `argocd`, moved same-namespace
   once the ApplicationSet itself moved there too).
 
-Also different: images are tagged per-PR-per-SHA already (`charts/platform-cicd-catalog/templates/tasks/build-image.yaml`
-truncates to 12 characters - confirmed live, no fix was actually needed here despite the
-plan initially assuming otherwise), so the ApplicationSet template's `kustomize.images`
-points at a real, already-pushed image via `{{ trunc 12 .head_sha }}`, not a shared
-mutable tag or a GitHub-Actions-workflow-file-commit trick like the old system used.
+Also different: images are tagged per-PR-per-SHA (see "Image tagging: sha-only for PR
+builds" above), so the ApplicationSet template's `rollout.image.tag` valuesObject
+override points at a real, already-pushed image, not a shared mutable tag or a
+GitHub-Actions-workflow-file-commit trick like the old system used.
 
 ## Credential for the ApplicationSet generator
 
@@ -130,48 +195,26 @@ the app-repo name directly instead of requiring the `gitops-` prefix. Verified l
 token request succeeds, the existing gitops-repo path still works unchanged, and a
 request for an unrelated repo still gets rejected.
 
-## TTL backstop
+## TTL backstop (now the real cleanup path, not just a backstop)
 
 `pr-namespace-ttl-sweep-cronjob.yaml` is a single shared, platform-level CronJob (applied
 once, not per Application) in `platform-system`, running every 30 minutes: lists every
 namespace labeled `platform.io/ephemeral-env=true` across all Applications and deletes any
-older than `TTL_HOURS` (24) by `metadata.creationTimestamp`. This exists purely as a
-backstop to the finalizer, which is verified live above - a namespace surviving 24h
-despite that is far more likely to be something stuck than a still-legitimately-open PR,
-so no live GitHub check is needed here, just age + the label. RBAC is cluster-scoped by
-necessity (`Namespace` has no namespaced form) but deliberately narrow:
-`list`/`get`/`delete` on `namespaces` only.
+older than `TTL_HOURS` (24) by `metadata.creationTimestamp`. Originally built purely as a
+backstop to the finalizer (a namespace surviving 24h despite the finalizer firing is far
+more likely to be something stuck than a still-legitimately-open PR, so no live GitHub
+check is needed here, just age + the label) - since the 2026-08-24 move to
+`idp-application` (see "Namespace cleanup: TTL sweep, not cascade-delete" above), this is
+now the mechanism that actually removes every PR namespace, not just the rare stuck one.
+RBAC is cluster-scoped by necessity (`Namespace` has no namespaced form) but deliberately
+narrow: `list`/`get`/`delete` on `namespaces` only.
 
-The old system had an equivalent sweep for its branch-based ephemeral envs but never
-extended it to PR-based ones - the label this sweep selects on
-(`platform.io/ephemeral-env: "true"`, set in `k8s/ephemeral/namespace.yaml`) exists from
-day one here specifically so this gap can't recur.
-
-## A real gap this surfaced: Kustomize's `nameSuffix` skips `Namespace` objects
-
-Verified live: Kustomize's built-in name-transformer deliberately excludes `Namespace`
-from `nameSuffix`/`namePrefix` (confirmed via `kubectl kustomize` against the base with
-just `nameSuffix` set - every other resource got suffixed, the `Namespace` didn't). Since
-`destination.namespace` (`<APP_NAMESPACE>-pr-{{.number}}`) is set independently in the
-ApplicationSet template spec, this produced a real, reproducible failure on the first
-live PR test: the `Namespace` synced as `<APP_NAMESPACE>-pr` (unsuffixed) while the `Deployment`/
-`Service` were targeted at `<APP_NAMESPACE>-pr-{{.number}}`, which never existed - sync failed
-with `namespace ... not found`, retried, never converged.
-
-Fixed with an explicit Kustomize JSON6902 `patches` entry in the ApplicationSet template,
-templated the same way `nameSuffix`/`images` already are, that renames the `Namespace`
-object directly:
-```yaml
-patches:
-  - target: { kind: Namespace, name: <APP_NAMESPACE>-pr }
-    patch: |-
-      - op: replace
-        path: /metadata/name
-        value: <APP_NAMESPACE>-pr-{{.number}}
-```
-Also confirmed live that ArgoCD correctly prunes the old (wrongly-named) `Namespace` once
-the Application's tracked-resource set changes to the corrected name - the rename itself
-doesn't leave an orphan behind.
+The label this sweep selects on (`platform.io/ephemeral-env: "true"`) is stamped by
+`ephemeral-envs.yaml`'s own `managedNamespaceMetadata` at sync time, not by a manifest in
+the app's own repo (that was true only under the old Kustomize-based design, where
+`k8s/ephemeral/namespace.yaml` set it). The old cd-pipelines system had an equivalent
+sweep for its branch-based ephemeral envs but never extended it to PR-based ones - this
+platform's sweep has covered both since day one, specifically so that gap can't recur.
 
 ## A real gap this surfaced: newly-created GHCR packages default to private
 
@@ -192,9 +235,29 @@ needs to happen once per app.)
 
 One-time setup per app, same spirit as the release stage's onboarding steps.
 
-1. **Push `nodejs-demo-app`'s new `k8s/ephemeral/` directory** (`namespace.yaml`,
-   `deployment.yaml`, `service.yaml`, `kustomization.yaml`) - no PR needed unless the repo
-   has branch protection configured (it doesn't currently, unlike `gitops-nodejs-demo-app`).
+1. **Push `nodejs-demo-app`'s new `platform/pr-env.yaml`** (see "Deploying through
+   idp-application, not raw Kustomize" above for its shape) - no PR needed unless the
+   repo has branch protection configured (it doesn't currently, unlike
+   `gitops-nodejs-demo-app`).
+
+1a. **Add a `pull_request`-triggered flow to `cicd.yaml`'s `pipelines:` map**, e.g.:
+   ```yaml
+   pipelines:
+     pr-build:
+       trigger: { source: git, event: pull_request, branch: main }
+       steps:
+         - stage: build
+   ```
+   Required, not optional - see "Image tagging: sha-only for PR builds" above. Without
+   this, `ephemeralEnvironments.pullRequest`'s own ApplicationSet has nothing that ever
+   produces the image it expects, and every preview pod sits in `ImagePullBackOff`
+   forever (found live 2026-08-24). `deliver-onboarding-files.yaml`'s onboarding-resync
+   mechanism regenerates `.tekton/flow-pr-build.yaml` from this entry automatically -
+   remember it only reacts to a real `cicd.yaml` diff landing on `main`, and only updates
+   `main`'s own `.tekton/` copy, so a long-lived feature/PR branch needs `main` merged
+   back into it before its own `.tekton/flow-pr-build.yaml` picks up any later fix to
+   this generator (confirmed live, cost real time to work out: pushes to an open PR's
+   branch alone never re-triggered it).
 
 2. **Apply the ApplicationSet + AppProject template**, with `<APP_NAMESPACE>`, `<APP_NAME>`,
    `<APP_REPO_URL>`, `<GITHUB_OWNER>` substituted:
@@ -238,10 +301,12 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
 
 This platform's clusters have no ingress/DNS by default (an already-documented gap), so
 there's no clickable preview URL to post as a PR comment - access is
-`kubectl port-forward` into the PR's namespace, same as every other environment. Note the Service name
-also gets the `-{{.number}}` suffix (nameSuffix applies normally to it, unlike Namespace):
+`kubectl port-forward` into the PR's namespace, same as every other environment. Unlike
+the old Kustomize-based design, the Service name is NOT per-PR-suffixed - only the
+destination namespace differs between PRs (`idp-application` doesn't rename resources
+per environment, it deploys the same fixed name into a different namespace each time):
 ```
-kubectl port-forward -n platform-cicd-demo-pr-<number> svc/nodejs-demo-app-<number> 8080:80
+kubectl port-forward -n app-nodejs-demo-app-pr-<number> svc/nodejs-demo-app 8080:80
 ```
 
 ## Verification
@@ -250,12 +315,15 @@ kubectl port-forward -n platform-cicd-demo-pr-<number> svc/nodejs-demo-app-<numb
   `requeueAfterSeconds`), `kubectl get application.argoproj.io -n app-nodejs-demo-app-cicd`
   should show `nodejs-demo-app-pr-<number>` (generated Applications land in the same
   namespace as their ApplicationSet - not `argocd`, see "Credential for the
-  ApplicationSet generator" above), and `kubectl get ns platform-cicd-demo-pr-<number>`
+  ApplicationSet generator" above), and `kubectl get ns app-nodejs-demo-app-pr-<number>`
   should exist with a running pod on that PR's own uniquely-tagged image.
 - `kubectl port-forward` into it and confirm the PR's actual code is running (not just
   any deploy).
-- Close the PR (or remove the label) and confirm both the `Application` and the
-  namespace are actually gone within the poll interval, not just `Terminating`.
+- Close the PR (or remove the label) and confirm the `Application` is gone within the
+  poll interval, not just `Terminating`. The namespace itself is NOT expected to
+  disappear immediately - see "Namespace cleanup: TTL sweep, not cascade-delete" above -
+  confirm instead that it's empty (no `Rollout`/`Service`/etc left in it) and that it
+  actually gets swept within the TTL window, not orphaned forever.
 - Security check: from `platform-cicd-demo`'s SA, request a token for a repo the Application
   doesn't own via `/github-installation-token` - should still be rejected (403), same as
   the release-stage check.
