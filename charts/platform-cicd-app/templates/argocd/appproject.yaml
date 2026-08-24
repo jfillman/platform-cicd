@@ -69,6 +69,10 @@ spec:
     PR-based ephemeral-environment deployments for {{ .Values.platformIdentity.appName }}.
   sourceRepos:
     - {{ .Values.platformIdentity.appRepoUrl }}
+    # idp-application chart source (ephemeral-envs.yaml's Application now deploys
+    # through the same shared chart the lower-env tier uses, not a raw Kustomize path
+    # in the app's own repo - 2026-08-24).
+    - {{ .Values.idpServiceCatalog.repoUrl }}
   # Required by ArgoCD's ApplicationSet-in-any-namespace feature so the pr-envs
   # ApplicationSet (ephemeral-envs.yaml), which lives in this app's own -cicd namespace
   # rather than argocd-apps's own, can reference this project.
@@ -79,9 +83,18 @@ spec:
       server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     # Namespace is cluster-scoped, so it must be whitelisted here (not
-    # namespaceResourceWhitelist) or ArgoCD blocks syncing k8s/ephemeral/namespace.yaml.
+    # namespaceResourceWhitelist) even though idp-application never renders a Namespace
+    # object of its own - CreateNamespace=true still needs this project's permission to
+    # create one (confirmed live: an AppProject with no clusterResourceWhitelist
+    # implicitly denies every cluster-scoped resource, same gotcha
+    # appproject-lower.yaml's own header comment documents hitting first).
     - { group: "", kind: Namespace }
-  namespaceResourceWhitelist:
-    - { group: "apps", kind: Deployment }
-    - { group: "", kind: Service }
+  # No namespaceResourceWhitelist, deliberately - matches appproject-lower.yaml's own
+  # shape for the same reason: idp-application renders far more than Deployment/Service
+  # depending on what platform/pr-env.yaml turns on (Rollout, ServiceAccount, ConfigMap,
+  # Secret, NetworkPolicy, ServiceMonitor, ...), and an absent namespaceResourceWhitelist
+  # defaults to allow-all for namespaced kinds (the opposite default from cluster-scoped
+  # kinds above) - narrowing it here would just mean re-widening it piecemeal every time
+  # a developer's own platform/pr-env.yaml turns on a chart feature this project hasn't
+  # seen yet.
 {{- end }}

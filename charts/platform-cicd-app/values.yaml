@@ -95,6 +95,18 @@ secrets: []
 # platform's CI stays on the dev cluster always).
 devClusterName: kind-dev
 
+# PR-based ephemeral environments (ephemeral-envs.yaml) deploy through
+# idp-service-catalog's idp-application chart - same chart/pin-update discipline the
+# lower-env tier already uses (gitops-cluster-dev's lower-envs-applicationset.yaml),
+# so a preview env behaves like any other tier instead of a bespoke Kustomize-only
+# path. Version pinned independently of that file's own pin (v0.3.35, currently
+# behind) - matches tenant-onboarding/applicationset.yaml's v0.3.37 instead, the more
+# current of the two existing consumers as of 2026-08-24 (confirmed no chart diff
+# between v0.3.37..v0.3.38, so v0.3.37 is current, not stale).
+idpServiceCatalog:
+  repoUrl: https://github.com/jfillman/idp-service-catalog.git
+  chartVersion: v0.3.37
+
 # Platform-wide constants every Application install shares (not per-app identity, so
 # kept outside platformIdentity). Defaults to this repo's own published image (real,
 # public, working) - override if you've built and published your own copy.

@@ -1,6 +1,5 @@
 {{- if and .Values.ephemeralEnvironments .Values.ephemeralEnvironments.pullRequest .Values.ephemeralEnvironments.pullRequest.enabled }}
 {{- $appNamespace := include "platform-cicd-app.namespace" . }}
-{{- $prBaseNamespace := include "platform-cicd-app.envNamespace" (list . "pr") }}
 # Rendered only if ephemeralEnvironments.pullRequest.enabled.
 #
 # IMPORTANT: the `template:` block below uses ArgoCD ApplicationSet's own Go-template
@@ -47,40 +46,80 @@ spec:
   template:
     metadata:
       name: "{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
-      # Cascade-delete only works if the Namespace is a tracked resource
-      # (k8s/ephemeral/namespace.yaml), not a CreateNamespace=true side effect - hence
-      # CreateNamespace=true is deliberately not set below.
+      # Cascade-delete removes the Deployment/Rollout/Service etc. idp-application
+      # renders, but NOT the namespace itself - CreateNamespace=true's namespace isn't
+      # a tracked resource (idp-application, like the lower-env tier it mirrors, never
+      # renders a Namespace object of its own). Deliberately accepted, not an oversight:
+      # the platform.io/ephemeral-env=true label below is what pr-namespace-ttl-sweep-
+      # cronjob.yaml actually keys its 24h sweep on, and now doubles as the real cleanup
+      # path for the empty namespace left behind after cascade-delete, not just a
+      # backstop for a stuck finalizer. Means a closed PR's namespace can sit empty for
+      # up to 24h, not disappear instantly - accepted tradeoff for standardizing on the
+      # same idp-application chart every other tier uses (2026-08-24).
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
       project: {{ $appNamespace }}
-      source:
-        repoURL: {{ .Values.platformIdentity.appRepoUrl }}
-        targetRevision: "{{ "{{" }}.head_sha{{ "}}" }}"
-        path: k8s/ephemeral
-        kustomize:
-          nameSuffix: "-{{ "{{" }}.number{{ "}}" }}"
-          # trunc 12 matches build-image.yaml's own <app>-pr:<12-char-sha> tag.
-          images:
-            - "ghcr.io/{{ .Values.platformIdentity.githubOwner }}/{{ .Values.platformIdentity.appName }}-pr:{{ "{{" }} trunc 12 .head_sha {{ "}}" }}"
-          # Kustomize's nameSuffix skips Namespace objects, so without this patch the
-          # Namespace would stay "<type>-<app>-pr" while destination.namespace below
-          # expects a per-PR-numbered suffix, failing sync with "namespace not found".
-          patches:
-            - target:
-                kind: Namespace
-                name: {{ $prBaseNamespace }}
-              patch: |-
-                - op: replace
-                  path: /metadata/name
-                  value: {{ $prBaseNamespace }}-{{ "{{" }}.number{{ "}}" }}
+      sources:
+        # Source 0: idp-service-catalog's shared idp-application chart, same pattern
+        # (and same helm.valuesObject-beats-helm.valueFiles precedence, live-attack-
+        # tested elsewhere in this project) as the lower-env tier's own
+        # lower-envs-applicationset.yaml. envName/rollout.image are stamped here,
+        # per-PR, computed rather than developer-supplied - they can't be overridden by
+        # platform/pr-env.yaml below, only everything else can.
+        - repoURL: {{ .Values.idpServiceCatalog.repoUrl }}
+          targetRevision: {{ .Values.idpServiceCatalog.chartVersion }}
+          path: charts/idp-application
+          helm:
+            valuesObject:
+              appName: {{ .Values.platformIdentity.appName }}
+              cluster: {{ .Values.devClusterName }}
+              envName: "pr-{{ "{{" }}.number{{ "}}" }}"
+              rollout:
+                image:
+                  repository: ghcr.io/{{ .Values.platformIdentity.githubOwner }}/{{ .Values.platformIdentity.appName }}-pr
+                  # trunc 12 matches build-image.yaml's own <app>-pr:<12-char-sha> tag.
+                  tag: "{{ "{{" }} trunc 12 .head_sha {{ "}}" }}"
+            valueFiles:
+              # Not platform/envs/pr.yaml - lower-envs-applicationset.yaml's own git
+              # generator already watches platform/envs/*.yaml on every onboarded app's
+              # repo (for the dev-tier lower env), so a file there would ALSO spawn a
+              # bogus static "pr" lower env via THAT ApplicationSet, on top of this
+              # one's real per-PR-numbered ones. platform/pr-env.yaml, one level up,
+              # avoids the collision while staying next to platform/envs/dev.yaml's
+              # own convention. Read from the PR's own head_sha (not main, see source 1
+              # below), so editing this file inside a PR customizes that PR's own
+              # preview environment - ports/probes/resources/secrets/etc, anything
+              # except envName/rollout.image above.
+              - $appsrc/platform/pr-env.yaml
+        # Source 1: $ref-only into the same app repo the pullRequest generator above
+        # already reads from - same "referenced values file needs its own source"
+        # multi-source pattern lower-envs-applicationset.yaml uses, pinned to this PR's
+        # own commit (not main) so platform/pr-env.yaml is read from the PR branch.
+        - repoURL: {{ .Values.platformIdentity.appRepoUrl }}
+          targetRevision: "{{ "{{" }}.head_sha{{ "}}" }}"
+          ref: appsrc
+          directory:
+            exclude: "*"
       destination:
         server: https://kubernetes.default.svc
-        namespace: "{{ $prBaseNamespace }}-{{ "{{" }}.number{{ "}}" }}"
+        namespace: "app-{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
       syncPolicy:
         automated:
           prune: true
           selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+        managedNamespaceMetadata:
+          labels:
+            # Selected by pr-namespace-ttl-sweep-cronjob.yaml's 24h sweep - see this
+            # template's own finalizer comment above for why that sweep, not cascade-
+            # delete, is what actually removes this namespace.
+            platform.io/ephemeral-env: "true"
+            # Matches lower-envs-applicationset.yaml's own reasoning: lets platform-
+            # cicd's registry-credentials ClusterExternalSecret select this namespace so
+            # the private ghcr.io/<owner>/<app>-pr image can actually be pulled.
+            platform.io/managed-secrets: "true"
 ---
 # The ApplicationSet pullRequest generator needs a static Secret to read a GitHub token
 # from. Rather than a long-lived PAT, this CronJob periodically mints a fresh,
