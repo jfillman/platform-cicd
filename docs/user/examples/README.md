@@ -14,7 +14,7 @@ real Helm chart as part of this repo's own checks - if it's in this folder, it w
 | 4 | [04-multi-env-promotion.yaml](04-multi-env-promotion.yaml) | dev → staging → governed `release` |
 | 5 | [05-release-on-tag.yaml](05-release-on-tag.yaml) | Git-rooted release, triggered by a version tag |
 | 6 | [06-release-branch-fast-track.yaml](06-release-branch-fast-track.yaml) | A `release/*` branch skips dev entirely |
-| 7 | [07-multi-suite-testing.yaml](07-multi-suite-testing.yaml) | Two test suites against one build |
+| 7 | [07-multiple-tests.yaml](07-multiple-tests.yaml) | Two TestWorkflows against one build |
 | 8 | [08-dockerfile-only-build.yaml](08-dockerfile-only-build.yaml) | Whole build inside a multi-stage Dockerfile |
 | 9 | [09-ephemeral-environments.yaml](09-ephemeral-environments.yaml) | A live preview environment per PR/branch |
 | 10 | [10-production-grade.yaml](10-production-grade.yaml) | Everything together - path filters, caching, governance, notifications |
@@ -43,7 +43,7 @@ flowchart LR
         direction LR
         a6[build] --> b6[deploy staging] --> c6[release]
     end
-    subgraph ex7["07 - two test suites"]
+    subgraph ex7["07 - two TestWorkflows"]
         direction LR
         a7[build] --> b7["test: smoke"] --> c7["test: integration"] --> d7["deploy dev"]
     end

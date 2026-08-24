@@ -14,7 +14,14 @@ rbac:
 # anyone, so it's a working default (unlike a repo URL or secret, sharing a public tool
 # image is normal). Override if you've built and published your own copy - see
 # catalog/toolbox/Dockerfile's own build command.
-toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
+#
+# Pinned to an explicit tag, not :latest, as of 2026-08-24: schemas/cicd.schema.json is
+# baked into this image (Dockerfile's own header explains why), and validate-cicd-config
+# needs the version carrying the test.suite -> test.name / steps[].suite -> testName
+# rename. Every Task uses imagePullPolicy: IfNotPresent, so re-pushing :latest wouldn't
+# actually reach already-cached nodes - a real staleness class this platform has hit
+# before. Bump this tag (not just the image content) whenever schema.json changes.
+toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:2026-08-24-testworkflow-rename
 
 # Cluster-agnostic namespace derivation: which namespace Tekton Chains runs in -
 # matters here because verify-image-provenance.yaml/verify-sast-attestation.yaml

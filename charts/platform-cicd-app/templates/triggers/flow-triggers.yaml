@@ -95,9 +95,9 @@ stage can now chain from any other. */ -}}
   {{- $imageField = "artifactId" -}}
 {{- end -}}
 
-{{- /* Only meaningful for test; falls back to top-level test.suite. Threaded through
+{{- /* Only meaningful for test; falls back to top-level test.name. Threaded through
 unconditionally like cluster/name - Tekton tolerates the unused param on other stages. */ -}}
-{{- $effectiveSuite := $step.suite | default ($.Values.test.suite | default "") -}}
+{{- $effectiveTestName := $step.testName | default ($.Values.test.name | default "") -}}
 ---
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
@@ -117,7 +117,7 @@ spec:
     unique name so a redelivered CDEvent no-ops, and repeated stage names don't collide. */}}
     - { name: pipeline-run-name, value: {{ printf "%s-%d-%s-$(body.context.id)" $flowName $index $stageName | quote }} }
     - { name: env, value: {{ $step.env | default "dev" | quote }} }
-    - { name: suite, value: {{ $effectiveSuite | quote }} }
+    - { name: test-name, value: {{ $effectiveTestName | quote }} }
     {{/* $step.cluster if set, else resolved from upperEnvironments - see _helpers.tpl's
     resolveStepCluster. */}}
     - { name: cluster, value: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) | quote }} }
@@ -158,7 +158,7 @@ spec:
     - name: stage-name
     - name: pipeline-run-name
     - name: env
-    - name: suite
+    - name: test-name
     - name: cluster
     - name: name
     - name: is-flow-root
@@ -193,7 +193,7 @@ spec:
           - { name: app-name, value: {{ $.Values.platformIdentity.appName }} }
           - { name: app-type, value: {{ $.Values.platformIdentity.type }} }
           - { name: env, value: $(tt.params.env) }
-          - { name: suite, value: $(tt.params.suite) }
+          - { name: test-name, value: $(tt.params.test-name) }
           - { name: cluster, value: $(tt.params.cluster) }
           - { name: name, value: $(tt.params.name) }
           - { name: git-url, value: $(tt.params.git-url) }

@@ -66,7 +66,7 @@ jobs:
             '      - stage: build' \
             '      - stage: test' \
             '        env: dev' \
-            '        suite: unit' \
+            '        testName: unit' \
             '    trigger:' \
             '      source: event' \
             '      event: artifact.published' \
@@ -82,7 +82,7 @@ jobs:
             '      - stage: build' \
             '      - stage: test' \
             '        env: dev' \
-            '        suite: unit' \
+            '        testName: unit' \
             '      - stage: deploy' \
             '        env: dev' \
             '      - stage: release' \

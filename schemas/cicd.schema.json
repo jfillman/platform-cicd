@@ -71,7 +71,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean", "default": true },
-        "suite": { "type": "string", "description": "Name of the Testkube/test suite to run against the dev deployment." }
+        "name": { "type": "string", "description": "Name of the TestWorkflow to run (platform/<name>.yaml in this repo)." }
       }
     },
 
@@ -251,9 +251,9 @@
                   "properties": {
                     "stage": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
                     "env": { "type": "string" },
-                    "suite": {
+                    "testName": {
                       "type": "string",
-                      "description": "Only meaningful on a test step. Overrides the top-level test.suite for this specific step - needed when a flow has more than one test step (they'd otherwise be indistinguishable). Falls back to test.suite when omitted; one of the two must resolve to a value, since a test run always needs a name."
+                      "description": "Only meaningful on a test step. Overrides the top-level test.name for this specific step - needed when a flow has more than one test step (they'd otherwise be indistinguishable). Falls back to test.name when omitted; one of the two must resolve to a value, since a TestWorkflow run always needs a name. Not called `name` - that field below is the deploy/release target name, a different concept."
                     },
                     "cluster": { "type": "string" },
                     "name": { "type": "string" }
@@ -275,7 +275,7 @@
                 "tagPattern": { "type": "string" },
                 "filePathPattern": { "type": "array", "items": { "type": "string" } },
                 "env": { "type": "string" },
-                "suite": { "type": "string" },
+                "testName": { "type": "string" },
                 "cluster": { "type": "string" },
                 "name": { "type": "string" },
                 "triggerEnv": { "type": "string" }

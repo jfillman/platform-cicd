@@ -1,10 +1,10 @@
-# Example 7: Two test suites against the same build
+# Example 7: Two TestWorkflows against the same build
 #
 # A single build can be exercised by more than one test step in the same flow - useful
-# when you want a fast smoke/unit-style suite to gate before running a slower, fuller
-# integration suite, without triggering two separate builds. Each `test` step needs its
-# own `suite` here specifically because they'd otherwise be indistinguishable (both
-# would inherit the same top-level test.suite and look identical).
+# when you want a fast smoke-style TestWorkflow to gate before running a slower, fuller
+# integration one, without triggering two separate builds. Each `test` step needs its
+# own `testName` here specifically because they'd otherwise be indistinguishable (both
+# would inherit the same top-level test.name and look identical).
 #
 # Flow shape:
 #
@@ -22,8 +22,8 @@ build:
   script: ./build.sh
 
 test:
-  suite: integration   # the fallback/default - only actually used if a test step
-                        # omits its own `suite`, which neither one does below
+  name: integration   # the fallback/default - only actually used if a test step
+                       # omits its own `testName`, which neither one does below
 
 deploy:
   lowerEnvironments: [dev]
@@ -38,10 +38,10 @@ pipelines:
       - stage: build
       - stage: test
         env: dev
-        suite: smoke        # overrides the top-level test.suite for this step -
-                             # your ./integration-test.sh receives TEST_SUITE=smoke
+        testName: smoke      # overrides the top-level test.name for this step -
+                              # platform/smoke.yaml is what actually runs
       - stage: test
         env: dev
-        suite: integration   # a second, independent test step - TEST_SUITE=integration
+        testName: integration   # a second, independent test step - platform/integration.yaml
       - stage: deploy
         env: dev

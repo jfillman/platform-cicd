@@ -216,8 +216,8 @@ renderer can treat both forms uniformly.
     {{- if hasKey $entry "env" -}}
       {{- $_ := set $step "env" $entry.env -}}
     {{- end -}}
-    {{- if hasKey $entry "suite" -}}
-      {{- $_ := set $step "suite" $entry.suite -}}
+    {{- if hasKey $entry "testName" -}}
+      {{- $_ := set $step "testName" $entry.testName -}}
     {{- end -}}
     {{- if hasKey $entry "cluster" -}}
       {{- $_ := set $step "cluster" $entry.cluster -}}
@@ -305,8 +305,8 @@ renderer can treat both forms uniformly.
       {{- if hasKey $entry "env" -}}
         {{- $_ := set $step "env" $entry.env -}}
       {{- end -}}
-      {{- if hasKey $entry "suite" -}}
-        {{- $_ := set $step "suite" $entry.suite -}}
+      {{- if hasKey $entry "testName" -}}
+        {{- $_ := set $step "testName" $entry.testName -}}
       {{- end -}}
       {{- if hasKey $entry "cluster" -}}
         {{- $_ := set $step "cluster" $entry.cluster -}}
@@ -350,14 +350,16 @@ platform-cicd-app.validateFlows - validates pipeline flow definitions. Rules:
 - A deploy step's env must be listed under deploy.lowerEnvironments/upperEnvironments -
   deploy-rbac.yaml only grants pipeline-runner access to envs from that list, so this
   catches what would otherwise be a late, bare Forbidden RBAC error.
-- A test step needs a resolvable suite name (its own `suite` or top-level `test.suite`),
-  so repeated test steps in one flow can be told apart.
+- A test step needs a resolvable test name (its own `testName` or top-level
+  `test.name`), so repeated test steps in one flow can be told apart. Not called
+  `name` at the step level - that field already means the deploy/release target name
+  (see resolveStepCluster) - so a test step's own identifier is `testName` instead.
 
 Fails fast with a descriptive message if violated.
 */}}
 {{- define "platform-cicd-app.validateFlows" -}}
 {{- $flows := .Values.pipelines | default (dict) -}}
-{{- $defaultSuite := .Values.test.suite | default "" -}}
+{{- $defaultTestName := .Values.test.name | default "" -}}
 {{- $lowerEnvs := .Values.deploy.lowerEnvironments | default (list) -}}
 {{- /* upperEnvironments entries are a plain string (same-cluster) or a {name, cluster}
 object (docs/multi-cluster.md); upperEnvClusters normalizes both shapes. */ -}}
@@ -407,8 +409,8 @@ object (docs/multi-cluster.md); upperEnvClusters normalizes both shapes. */ -}}
       {{- end -}}
 
       {{- if eq $stageName "test" -}}
-        {{- if and (not $step.suite) (not $defaultSuite) -}}
-          {{- fail (printf "Flow '%s' step %d: test stage needs a suite name - set this step's own `suite`, or a top-level `test.suite` shared by all test steps." $flowName (add $index 1)) -}}
+        {{- if and (not $step.testName) (not $defaultTestName) -}}
+          {{- fail (printf "Flow '%s' step %d: test stage needs a test name - set this step's own `testName`, or a top-level `test.name` shared by all test steps." $flowName (add $index 1)) -}}
         {{- end -}}
       {{- end -}}
 

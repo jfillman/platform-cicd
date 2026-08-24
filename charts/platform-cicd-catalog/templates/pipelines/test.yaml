@@ -41,9 +41,9 @@ spec:
     - name: env
       type: string
       description: "Which environment's build this test run is exercising - required by validateFlows on every test step, since a test result is meaningless without knowing what it ran against."
-    - name: suite
+    - name: test-name
       type: string
-      description: "Test suite name - the step's own `suite`, or cicd.yaml's top-level test.suite. validateFlows requires one of the two to resolve."
+      description: "TestWorkflow name - the step's own `testName`, or cicd.yaml's top-level test.name. validateFlows requires one of the two to resolve."
     - name: app-namespace
       type: string
     - name: app-name
@@ -142,13 +142,13 @@ spec:
       params:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
 
-    - name: integration-test
+    - name: run-testworkflow
       runAfter: [validate-config, start-test-stage-span]
       taskRef:
         resolver: cluster
         params:
           - { name: kind, value: task }
-          - { name: name, value: run-integration-tests }
+          - { name: name, value: run-testworkflow }
           - { name: namespace, value: {{ .Release.Namespace }} }
       workspaces:
         - { name: source, workspace: source }
@@ -157,7 +157,7 @@ spec:
         - { name: agent-image, value: $(tasks.validate-config.results.agent-image) }
         - { name: image-ref, value: $(params.image-ref) }
         - { name: env, value: $(params.env) }
-        - { name: suite, value: $(params.suite) }
+        - { name: test-name, value: $(params.test-name) }
         - { name: app-name, value: $(params.app-name) }
 
   finally:
@@ -223,7 +223,7 @@ spec:
         - { name: subject-type, value: "testCaseRun" }
         - name: subject-content-json
           value: >-
-            {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "git-url": "$(params.git-url)", "env": "$(params.env)", "suite": "$(params.suite)"}
+            {"outcome": "$(tasks.status)", "image": "$(params.image-ref)", "revision": "$(params.git-revision)", "git-url": "$(params.git-url)", "env": "$(params.env)", "test-name": "$(params.test-name)"}
         - { name: chain-id, value: $(tasks.start-flow.results.chain-id) }
         - { name: traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }

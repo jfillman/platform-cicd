@@ -60,7 +60,7 @@ If nothing appears after a minute or two, see "If nothing happens" below.
 
 ```yaml
 test:
-  suite: integration   # the suite name every test step inherits by default
+  name: integration   # the TestWorkflow name every test step inherits by default
 
 pipelines:
   ci:
@@ -73,7 +73,7 @@ pipelines:
 
 `stage: test` is **event-chained** - it isn't triggered by a second git push, it's
 triggered automatically the moment `build` finishes and publishes its image. You don't
-configure that wiring; declaring the step is enough. `env: dev` and a resolvable suite
+configure that wiring; declaring the step is enough. `env: dev` and a resolvable test
 name are both required on every test step - see
 [cicd-yaml-reference.md](cicd-yaml-reference.md#the-test-block) for why.
 

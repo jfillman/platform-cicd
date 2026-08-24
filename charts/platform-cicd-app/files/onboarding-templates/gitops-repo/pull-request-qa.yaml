@@ -3,7 +3,7 @@
 # docs/admin/release-guardrails.md. References the qa-check Pipeline, which calls
 # qa-gate.yaml, which itself still calls governance-gate-stub's shared machinery under
 # the hood - loud "no real check implemented yet" logging + a stub span, never a silent
-# pass (ADR-0003). Intended real behavior: verify the required test suite actually ran
+# pass (ADR-0003). Intended real behavior: verify the required TestWorkflow actually ran
 # and passed for the commit being promoted (mechanism TBD - likely reading the test
 # stage's own recorded outcome rather than re-running tests here). Landing that is now a
 # one-file change to qa-gate.yaml's own step - see that Task's own header for why it's

@@ -231,11 +231,11 @@ spec:
 
         generate_flow_file() {
           local flow_name="$1" event="$2" branch="$3" tag_pattern="$4" file_paths_json="$5" root_stage="$6"
-          local root_env="$7" root_suite="$8" root_cluster="$9" root_name="${10}" is_flow_terminal="${11}"
+          local root_env="$7" root_test_name="$8" root_cluster="$9" root_name="${10}" is_flow_terminal="${11}"
           local labels_json="${12:-[]}"
           local on_event="" branch_line="" cel_line="" tag_param_line=""
           # deploy/release/test can all be a flow's git-rooted first step (e.g. a tag push
-          # deploying straight to prod). Their Pipelines read env/suite/cluster/name as
+          # deploying straight to prod). Their Pipelines read env/test-name/cluster/name as
           # regular params, only emitted when set. This quartet was previously missing
           # entirely: a git-rooted deploy declaring `env: staging` would have silently
           # deployed to "dev" (deploy.yaml's own Tekton-level default) since nothing passed
@@ -245,9 +245,9 @@ spec:
             root_param_lines="${root_param_lines}
             - { name: env, value: \"${root_env}\" }"
           fi
-          if [[ -n "${root_suite}" ]]; then
+          if [[ -n "${root_test_name}" ]]; then
             root_param_lines="${root_param_lines}
-            - { name: suite, value: \"${root_suite}\" }"
+            - { name: test-name, value: \"${root_test_name}\" }"
           fi
           if [[ -n "${root_cluster}" ]]; then
             root_param_lines="${root_param_lines}
@@ -461,7 +461,7 @@ spec:
           labels_json="$(echo "${flow_json}" | jq -c '.trigger.labels // []')"
           root_stage="$(echo "${flow_json}" | jq -r '.steps[0].stage // "build"')"
           root_env="$(echo "${flow_json}" | jq -r '.steps[0].env // ""')"
-          root_suite="$(echo "${flow_json}" | jq -r '.steps[0].suite // ""')"
+          root_test_name="$(echo "${flow_json}" | jq -r '.steps[0].testName // ""')"
           root_cluster="$(echo "${flow_json}" | jq -r '.steps[0].cluster // ""')"
           if [[ -z "${root_cluster}" && "${root_stage}" == "release" ]]; then
             root_cluster="$(jq -r --arg e "${root_env}" '.[$e] // ""' <<<"${upper_env_clusters_json}")"
@@ -474,7 +474,7 @@ spec:
           is_flow_terminal="false"
           [[ "${step_count}" -eq 1 ]] && is_flow_terminal="true"
 
-          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" "${is_flow_terminal}" "${labels_json}" > ".tekton/flow-${flow_name}.yaml"
+          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_test_name}" "${root_cluster}" "${root_name}" "${is_flow_terminal}" "${labels_json}" > ".tekton/flow-${flow_name}.yaml"
           echo "app repo: generated .tekton/flow-${flow_name}.yaml (${trigger_event} -> ${root_stage})"
         done <<< "${flow_names}"
 

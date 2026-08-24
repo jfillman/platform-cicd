@@ -8,14 +8,14 @@
 # the RoleBinding (which SA gets it) is tenant-specific.
 #
 # Deliberately NOT resourceNames-restricted, unlike the per-tenant secrets grant
-# (rbac-and-secret.yaml): TestWorkflow suite names are developer-chosen and self-service
+# (rbac-and-secret.yaml): TestWorkflow names are developer-chosen and self-service
 # (a file dropped in the app repo's own platform/ folder, no operator involved), so a
 # fixed allow-list of names isn't possible without reintroducing an operator step for
-# every new test suite - which would defeat the point. Accepted, lower-severity
+# every new test name - which would defeat the point. Accepted, lower-severity
 # consequence: any tenant's pipeline-runner could technically create/overwrite another
 # tenant's TestWorkflow object name in this shared namespace. Mitigated at the
-# correctness (not RBAC) layer: run-integration-tests.yaml always force-rewrites
-# metadata.name to "<trusted-app-name>-<suite>" before applying, using app-name sourced
+# correctness (not RBAC) layer: run-testworkflow.yaml always force-rewrites
+# metadata.name to "<trusted-app-name>-<test-name>" before applying, using app-name sourced
 # from the PipelineRun's own trusted platformIdentity-derived params - a compromised
 # pipeline step COULD still bypass that script logic and call the API directly with an
 # arbitrary name, same as any namespace-mate could, but the blast radius stops at "a

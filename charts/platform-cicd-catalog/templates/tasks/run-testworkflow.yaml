@@ -1,8 +1,15 @@
-# catalog/tasks/run-integration-tests.yaml
+# catalog/tasks/run-testworkflow.yaml
 #
-# Two ways a test suite can run, tried in this order:
+# Deliberately not "run-integration-tests" (its original name through 2026-08-24) - a
+# TestWorkflow isn't necessarily a test. It's whatever the app repo's own
+# platform/<name>.yaml declares: an integration test, a smoke check, or an ops action
+# with no assertions at all (clearing a cache before release, warming something up,
+# etc). This Task's job is "run the named TestWorkflow and report pass/fail," not
+# "test the code" specifically.
 #
-# 1. Testkube (real integration, 2026-08-24): if the app repo has platform/<suite>.yaml,
+# Two ways a named TestWorkflow can run, tried in this order:
+#
+# 1. Testkube (real integration, 2026-08-24): if the app repo has platform/<name>.yaml,
 #    it's applied as a TestWorkflow into Testkube CE's single shared `testkube`
 #    namespace (see gitops-cluster-dev/50-platform-cicd/testkube/application.yaml's own
 #    header for why it's one shared namespace, not one per tenant - executionNamespaces
@@ -18,15 +25,15 @@
 #    secret name before applying, so the workflow file itself never needs to know or
 #    hardcode this Application's own name.
 #
-#    metadata.name in platform/<suite>.yaml is ALWAYS overwritten to
-#    "<app-name>-<suite>" before applying, regardless of what's in the file - Testkube's
-#    shared namespace means TestWorkflow names must be unique across every onboarded
-#    Application, and app-name here comes from the PipelineRun's own trusted
+#    metadata.name in platform/<name>.yaml is ALWAYS overwritten to
+#    "<app-name>-<test-name>" before applying, regardless of what's in the file -
+#    Testkube's shared namespace means TestWorkflow names must be unique across every
+#    onboarded Application, and app-name here comes from the PipelineRun's own trusted
 #    platformIdentity-derived param, not anything a developer's commit controls, so
 #    this can't be spoofed by editing the workflow file itself.
 #
 # 2. Phase 1 fallback (original mechanism, kept for Applications not yet migrated): if
-#    there's no platform/<suite>.yaml but ./integration-test.sh exists, run that
+#    there's no platform/<name>.yaml but ./integration-test.sh exists, run that
 #    against the freshly built image, in the Application's own agent-image (unlike the
 #    Testkube step above, which runs in the shared toolboxImage since it only needs
 #    kubectl/yq, never the app's own runtime).
@@ -37,7 +44,7 @@
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: run-integration-tests
+  name: run-testworkflow
   labels:
     {{- include "platform-cicd-catalog.labels" . | nindent 4 }}
     platform.io/catalog: "true"
@@ -53,12 +60,12 @@ spec:
       type: string
     - name: env
       type: string
-    - name: suite
+    - name: test-name
       type: string
     - name: app-name
       type: string
   steps:
-    - name: resolve-suite
+    - name: resolve-enabled
       image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent  # public image on ghcr.io, not kind-loaded
       results:
@@ -70,22 +77,22 @@ spec:
         # (see run-tests.yaml's own identical fix for the full explanation): jq's `//`
         # treats `false` the same as missing/null, so an explicit `test.enabled: false`
         # was silently ignored - no Application has ever actually been able to disable the
-        # integration-test stage via cicd.yaml.
+        # test stage via cicd.yaml.
         #
-        # Second, separate bug found live in THIS step while wiring up test env/suite
+        # Second, separate bug found live in THIS step while wiring up test env/name
         # (2026-08-09): this used to pipe jq's own output straight into `tee` with no `-n`
         # anywhere, so the result file held "true\n", not "true" - a real cross-step env
         # var substitution (unlike a $(...) command substitution) does NOT strip that
         # trailing newline (same gotcha build-image.yaml's own header already documents
         # for span-start-time). `[[ "${TEST_ENABLED}" != "true" ]]` in the next step was
         # therefore ALWAYS true regardless of cicd.yaml's actual value - confirmed live,
-        # every integration-test run ever reported "disabled...skipping" even with
-        # test.enabled defaulting true. run-tests.yaml's equivalent step already avoided
-        # this by capturing into a variable first; mirrored here.
+        # every test run ever reported "disabled...skipping" even with test.enabled
+        # defaulting true. run-tests.yaml's equivalent step already avoided this by
+        # capturing into a variable first; mirrored here.
         ENABLED="$(jq -r 'if .test.enabled == false then "false" else "true" end' <<< '$(params.config-json)')"
         echo -n "${ENABLED}" | tee "$(step.results.enabled.path)"
 
-    - name: run-testworkflow
+    - name: execute-testworkflow
       image: {{ .Values.toolboxImage }}
       imagePullPolicy: IfNotPresent
       workingDir: $(workspaces.source.path)
@@ -95,9 +102,9 @@ spec:
       # see the comment in catalog/tasks/build-image.yaml's run-build-script step.
       env:
         - name: TEST_ENABLED
-          value: $(steps.resolve-suite.results.enabled)
-        - name: TEST_SUITE
-          value: $(params.suite)
+          value: $(steps.resolve-enabled.results.enabled)
+        - name: TEST_NAME
+          value: $(params.test-name)
         - name: APP_NAME
           value: $(params.app-name)
       script: |
@@ -110,7 +117,7 @@ spec:
           exit 0
         fi
 
-        WORKFLOW_FILE="platform/${TEST_SUITE}.yaml"
+        WORKFLOW_FILE="platform/${TEST_NAME}.yaml"
         if [[ ! -f "${WORKFLOW_FILE}" ]]; then
           echo "no ${WORKFLOW_FILE} - falling back to ./integration-test.sh if present"
           echo -n "true" | tee "$(step.results.fallback-needed.path)"
@@ -118,7 +125,7 @@ spec:
         fi
         echo -n "false" | tee "$(step.results.fallback-needed.path)"
 
-        WORKFLOW_NAME="${APP_NAME}-${TEST_SUITE}"
+        WORKFLOW_NAME="${APP_NAME}-${TEST_NAME}"
         SECRET_NAME="${APP_NAME}-app-secrets"
 
         echo "materializing this namespace's app-secrets into testkube/${SECRET_NAME}"
@@ -184,18 +191,18 @@ spec:
           exit 1
         fi
 
-    - name: integration-test
+    - name: fallback-script
       image: $(params.agent-image)
       workingDir: $(workspaces.source.path)
       env:
         - name: IMAGE_REF
           value: $(params.image-ref)
         - name: FALLBACK_NEEDED
-          value: $(steps.run-testworkflow.results.fallback-needed)
+          value: $(steps.execute-testworkflow.results.fallback-needed)
         - name: TEST_ENV
           value: $(params.env)
-        - name: TEST_SUITE
-          value: $(params.suite)
+        - name: TEST_NAME
+          value: $(params.test-name)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -203,9 +210,9 @@ spec:
           exit 0
         fi
         if [[ ! -f ./integration-test.sh ]]; then
-          echo "warn: no platform/${TEST_SUITE}.yaml and no ./integration-test.sh found at repo root - skipping, not failing" >&2
+          echo "warn: no platform/${TEST_NAME}.yaml and no ./integration-test.sh found at repo root - skipping, not failing" >&2
           exit 0
         fi
-        echo "running suite '${TEST_SUITE}' against env '${TEST_ENV}', image ${IMAGE_REF}"
+        echo "running '${TEST_NAME}' against env '${TEST_ENV}', image ${IMAGE_REF}"
         chmod +x ./integration-test.sh
         ./integration-test.sh

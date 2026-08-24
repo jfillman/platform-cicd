@@ -31,7 +31,7 @@ build:
     size: medium
 
 test:
-  suite: integration
+  name: integration
 
 deploy:
   lowerEnvironments: [dev]

@@ -28,7 +28,7 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
-  # Added for run-integration-tests.yaml's Testkube step: it reads this namespace's own
+  # Added for run-testworkflow.yaml's Testkube step: it reads this namespace's own
   # app-secrets via the API (to re-materialize it into Testkube's shared namespace,
   # see platform-cicd-app's templates/testkube/rbac-and-secret.yaml) rather than a
   # volume mount, since which keys to forward isn't known until runtime. get-only,

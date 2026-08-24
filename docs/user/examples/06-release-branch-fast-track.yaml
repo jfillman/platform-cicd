@@ -23,7 +23,7 @@ build:
   script: ./build.sh
 
 test:
-  suite: integration
+  name: integration
 
 deploy:
   lowerEnvironments: [dev]

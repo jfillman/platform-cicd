@@ -69,9 +69,9 @@ build:
 test:
   enabled: true                 # Optional, default true. false skips the actual
                                  # test command but the stage still runs.
-  suite: integration            # The app-wide default suite name every `test` step
-                                 # inherits unless it sets its own `suite`. One of
-                                 # this or a step's own `suite` MUST resolve to a
+  name: integration              # The app-wide default TestWorkflow name every `test`
+                                 # step inherits unless it sets its own `testName`. One
+                                 # of this or a step's own `testName` MUST resolve to a
                                  # value - checked by validate-cicd-config.
 
 # --- deploy: optional block. See "The deploy: block" below. ---
@@ -206,8 +206,8 @@ pipelines:
         env: dev                  # Required for test/deploy/release steps; not
                                    # valid on build. Which environment this step
                                    # targets/exercises.
-        suite: integration        # Only meaningful on a test step - see the test:
-                                   # block above.
+        testName: integration      # Only meaningful on a test step - see the test:
+                                   # block above. Not called `name` - see below.
         cluster: prod-cluster     # Only valid on a release step. Optional - only set
                                    # this if you want an explicit consistency check
                                    # against deploy.upperEnvironments' own mapping for
@@ -216,6 +216,9 @@ pipelines:
                                    # docs/multi-cluster.md.
         name: my-label            # Optional free-text label, passed through to the
                                    # generated PipelineRun's params. Cosmetic today.
+                                   # A different field from testName above - this one
+                                   # exists on every step, testName only matters on a
+                                   # test step.
 ```
 
 ## Design rules this file follows
@@ -317,23 +320,26 @@ run, there's nothing to migrate: a size change just takes effect on the next Pip
 ```yaml
 test:
   enabled: true       # default true
-  suite: integration  # falls back to nothing - see "How flows work" below, one of
-                       # test.suite or a step's own `suite` must be set
+  name: integration   # falls back to nothing - see "How flows work" below, one of
+                       # test.name or a step's own `testName` must be set
 ```
 
-`test.suite` is the app-wide default suite name, inherited by every `test` step in every
-flow that doesn't set its own `suite`. `enabled: false` skips the stage's actual test
-run but the stage still runs (span, CDEvent, Slack notification) - it just reports
+`test.name` is the app-wide default TestWorkflow name, inherited by every `test` step in
+every flow that doesn't set its own `testName`. `enabled: false` skips the stage's actual
+test run but the stage still runs (span, CDEvent, Slack notification) - it just reports
 success without having tested anything.
 
-Whatever suite name is in effect resolves to one of two things, checked in this order:
+Whatever name is in effect resolves to one of two things, checked in this order:
 
-1. **`platform/<suite>.yaml` (Testkube, preferred)** - if this file exists, it's applied
-   as a Testkube `TestWorkflow` and run for real. Testkube CE installs into one shared
-   `testkube` namespace on this cluster (not one per Application - cross-namespace
-   execution is a Testkube Pro/Enterprise-only feature), so two things about this file
-   are enforced by the platform, not left to convention:
-   - `metadata.name` is always overwritten to `<your-app-name>-<suite>` before applying,
+1. **`platform/<name>.yaml` (Testkube, preferred)** - if this file exists, it's applied
+   as a Testkube `TestWorkflow` and run for real. It doesn't have to be a test in the
+   strict sense - a TestWorkflow is just "a thing that runs and reports pass/fail," so
+   `platform/<name>.yaml` is equally at home clearing a cache or running some other ops
+   action before release as it is running assertions against your code. Testkube CE
+   installs into one shared `testkube` namespace on this cluster (not one per
+   Application - cross-namespace execution is a Testkube Pro/Enterprise-only feature),
+   so two things about this file are enforced by the platform, not left to convention:
+   - `metadata.name` is always overwritten to `<your-app-name>-<name>` before applying,
      regardless of what you put there - required so TestWorkflow names stay unique
      across every onboarded Application sharing that one namespace.
    - To reference your own app-secrets in the workflow's env, use the literal
@@ -348,16 +354,19 @@ Whatever suite name is in effect resolves to one of two things, checked in this 
      ```
      Whatever's in this namespace's own `app-secrets` (the `secrets:` block earlier in
      this file) is what shows up there - same keys, materialized fresh into Testkube's
-     namespace immediately before each run and blanked again immediately after.
+     namespace immediately before each run and blanked again immediately after. A
+     Kyverno policy in the `testkube` namespace enforces that `secretKeyRef.name` here
+     can only ever resolve to your own Application's secret, not another tenant's - see
+     `../admin/adr/0008-kyverno-testkube-secret-policy.md`.
    - See the TestWorkflow CRD docs (docs.testkube.io) for the rest of `spec:` - image,
      command, assertions, etc. are all standard Testkube, nothing platform-specific
      beyond the two rules above.
-2. **`./integration-test.sh` (fallback)** - if there's no `platform/<suite>.yaml`, this
-   runs instead, in your own `build.agent` image. Whatever suite name is in effect,
-   plus the step's `env` and the image reference under test, reach it as
-   `TEST_SUITE`/`TEST_ENV`/`IMAGE_REF` environment variables. This is the original,
+2. **`./integration-test.sh` (fallback)** - if there's no `platform/<name>.yaml`, this
+   runs instead, in your own `build.agent` image. Whatever name is in effect, plus the
+   step's `env` and the image reference under test, reach it as
+   `TEST_NAME`/`TEST_ENV`/`IMAGE_REF` environment variables. This is the original,
    pre-Testkube mechanism - kept working for Applications that haven't added a
-   `platform/<suite>.yaml` yet, not the recommended path for a new Application.
+   `platform/<name>.yaml` yet, not the recommended path for a new Application.
 
 Neither present: the stage still runs (span, CDEvent, notification) but reports success
 without having tested anything, same as `enabled: false`.
@@ -484,16 +493,16 @@ index in the `steps:` list, looking at whichever stage the previous entry declar
 it was pure decoration that could silently disagree with what actually ran. It was
 removed rather than left in place. Write your steps in the order they execute.
 
-**Every `test` step needs `env` and a resolvable suite name.** `env` says which
+**Every `test` step needs `env` and a resolvable test name.** `env` says which
 environment's build this run is exercising (there's no default - a test result is
-meaningless without knowing what it ran against). The suite name can come from either
-the step's own `suite`, or the top-level `test.suite` shared by every test step in the
+meaningless without knowing what it ran against). The test name can come from either
+the step's own `testName`, or the top-level `test.name` shared by every test step in the
 app - one of the two has to resolve, checked by `validate-cicd-config` before anything
 runs. The step-level override only matters once a flow has more than one test step (the
-two-step case: hitting the same build with two different suites) - otherwise just set
-`test.suite` once and every test step inherits it. Both `env` and the resolved suite
+two-step case: hitting the same build with two different TestWorkflows) - otherwise just
+set `test.name` once and every test step inherits it. Both `env` and the resolved test
 name, along with the image reference under test, reach your own `./integration-test.sh`
-as `TEST_ENV`, `TEST_SUITE`, and `IMAGE_REF` environment variables.
+as `TEST_ENV`, `TEST_NAME`, and `IMAGE_REF` environment variables.
 
 **A `deploy` step's `env` must be provisioned.** It has to appear in
 `deploy.lowerEnvironments` or `deploy.upperEnvironments` (see above) - that's the list
@@ -545,15 +554,16 @@ finding them for you.
 `test.enabled` both used to be read via `jq -r '.path.enabled // true'` - jq's `//`
 operator treats `false` the same as `null`/missing, so an explicit `enabled: false` was
 silently overridden back to `"true"`. No Application had ever actually been able to
-disable unit tests or the integration-test stage via `cicd.yaml` until this was found
+disable unit tests or the test stage via `cicd.yaml` until this was found
 and fixed. Verified live: `unitTest.enabled: false` now genuinely skips the test
 command.
 
-**Integration tests never actually ran, for anyone, ever (fixed).** A separate, deeper
-bug in the same area: `run-integration-tests.yaml`'s internal result-passing wrote a
+**Tests never actually ran, for anyone, ever (fixed).** A separate, deeper
+bug in the same area: the test stage's Task (`run-integration-tests.yaml` at the time,
+since renamed to `run-testworkflow.yaml`) had its internal result-passing write a
 value with a trailing newline that a cross-step variable substitution doesn't strip
 (`"true\n"` instead of `"true"`), so its own enabled-check always evaluated false
-regardless of the real config. Every integration-test run silently reported "disabled...
+regardless of the real config. Every test run silently reported "disabled...
 skipping." Fixed and confirmed live - a real test command now genuinely runs.
 
 **`branch.created`'s `branch` pattern used to be ignored entirely (fixed).** The CEL

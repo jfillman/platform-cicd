@@ -2,7 +2,7 @@
 #
 # A capstone example combining most of the platform's real features into one realistic
 # config for a service that actually matters: path-filtered builds (monorepo-friendly),
-# dependency caching, two test suites, dev/staging promotion, a fully governance-gated
+# dependency caching, two TestWorkflows, dev/staging promotion, a fully governance-gated
 # release requiring signed commits, and real Slack notifications. Not a "toggle
 # everything on" demo - each choice below is what a team shipping a real production
 # service would plausibly want.
@@ -29,7 +29,7 @@ build:
     size: medium
 
 test:
-  suite: integration   # fallback default; the flow below overrides per-step anyway
+  name: integration   # fallback default; the flow below overrides per-step anyway
 
 deploy:
   lowerEnvironments: [dev]
@@ -65,10 +65,10 @@ pipelines:
       - stage: build
       - stage: test
         env: dev
-        suite: smoke
+        testName: smoke
       - stage: test
         env: dev
-        suite: integration
+        testName: integration
       - stage: deploy
         env: dev
       - stage: deploy

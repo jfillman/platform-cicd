@@ -22,8 +22,8 @@ build:
   dockerfile: ./Dockerfile   # thin packaging Dockerfile - copies build.sh's output in
 
 test:
-  suite: integration   # the suite name this flow's `test` step inherits, since it
-                        # doesn't set its own `suite` below
+  name: integration   # the TestWorkflow name this flow's `test` step inherits, since it
+                       # doesn't set its own `testName` below
 
 deploy:
   lowerEnvironments: [dev]   # this is the default - shown explicitly since the
