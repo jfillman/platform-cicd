@@ -170,3 +170,18 @@ pipelines-as-code-secret-external-secret.yaml` (targets `tekton-pipelines`, not
 `pipelines-as-code` - see that file's own header for why). `github-app-creds` is
 unaffected - still a separate copy, still what token-review-interceptor consumes; the
 two `ExternalSecret`s just happen to read the same source values now.
+
+**2026-08-24: a third key, `webhook.secret`, was missing from that first pass** -
+`github-app-creds` never needed it (token-review-interceptor only mints installation
+tokens, it doesn't validate inbound webhook deliveries), but PaC's own controller reads
+it from this same Secret to verify GitHub webhook signatures before minting a token
+itself - confirmed live: every push/PR was being rejected
+(`"[SECURITY] Blocked GitHub App token minting before webhook signature validation
+completed"`) until this was added. Exact key name confirmed against
+`tektoncd/pipelines-as-code`'s own v0.49.0 source, not guessed. This value never existed
+in Infisical at all (confirmed by listing every key already there) - not something lost
+in the rebuild, since GitHub Apps make a webhook secret write-only after creation
+anyway. Plant a freshly-generated value as `github-webhook-secret` in
+`platform-cicd-kind-dev`'s Infisical project AND set the same value on the GitHub App's
+own Settings > Webhook secret field - same "manual by design" posture as the id/private
+key above, and the two sides (Infisical, GitHub) have to actually agree.
