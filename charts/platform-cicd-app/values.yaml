@@ -112,6 +112,13 @@ idpServiceCatalog:
 # public, working) - override if you've built and published your own copy.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
+# The single shared namespace Testkube CE installs into on this cluster - see
+# templates/testkube/rbac-and-secret.yaml's own header for why this Application
+# renders resources into it. Same value/default as charts/platform-cicd-control-plane's
+# own testkubeNamespace - kept in sync across both charts deliberately, not duplicated
+# by accident.
+testkubeNamespace: testkube
+
 # This chart's own repo - needed once ephemeral-envs.yaml's per-PR Application sources
 # charts/pr-preview-notify from here as a third source. Same value/precedent as
 # platform-cicd-control-plane's own platformCicdRepoUrl (required there, no default) -

@@ -158,6 +158,7 @@ spec:
         - { name: image-ref, value: $(params.image-ref) }
         - { name: env, value: $(params.env) }
         - { name: suite, value: $(params.suite) }
+        - { name: app-name, value: $(params.app-name) }
 
   finally:
     - name: end-test-stage-span

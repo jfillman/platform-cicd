@@ -1,10 +1,39 @@
 # catalog/tasks/run-integration-tests.yaml
 #
-# Phase 1 scope: runs ./integration-test.sh (repo convention) against the freshly built
-# image if the script exists and cicd.yaml's `test.enabled` isn't false; skips cleanly
-# otherwise. Real Testkube/Testkube-Cloud integration (as the old platform had) is
-# deferred - this Task's contract (take image-ref, produce pass/fail) is what a richer
-# test-runner integration will plug into later without changing the Pipeline shape.
+# Two ways a test suite can run, tried in this order:
+#
+# 1. Testkube (real integration, 2026-08-24): if the app repo has platform/<suite>.yaml,
+#    it's applied as a TestWorkflow into Testkube CE's single shared `testkube`
+#    namespace (see gitops-cluster-dev/50-platform-cicd/testkube/application.yaml's own
+#    header for why it's one shared namespace, not one per tenant - executionNamespaces
+#    is a Testkube Pro/Enterprise-only feature, confirmed live + in source, so CE
+#    genuinely cannot run this inside the app's own -cicd namespace). Application
+#    secrets reach the workflow by a different route than namespace colocation: this
+#    step re-materializes this namespace's own app-secrets into a pre-seeded,
+#    per-Application placeholder Secret in the testkube namespace (rendered by this
+#    Application's own onboarding chart - see platform-cicd-app's templates/testkube/
+#    rbac-and-secret.yaml), which the TestWorkflow spec references via a standard
+#    env[].valueFrom.secretKeyRef naming the literal placeholder
+#    "__APP_SECRETS_NAME__" - this step substitutes that for the real per-Application
+#    secret name before applying, so the workflow file itself never needs to know or
+#    hardcode this Application's own name.
+#
+#    metadata.name in platform/<suite>.yaml is ALWAYS overwritten to
+#    "<app-name>-<suite>" before applying, regardless of what's in the file - Testkube's
+#    shared namespace means TestWorkflow names must be unique across every onboarded
+#    Application, and app-name here comes from the PipelineRun's own trusted
+#    platformIdentity-derived param, not anything a developer's commit controls, so
+#    this can't be spoofed by editing the workflow file itself.
+#
+# 2. Phase 1 fallback (original mechanism, kept for Applications not yet migrated): if
+#    there's no platform/<suite>.yaml but ./integration-test.sh exists, run that
+#    against the freshly built image, in the Application's own agent-image (unlike the
+#    Testkube step above, which runs in the shared toolboxImage since it only needs
+#    kubectl/yq, never the app's own runtime).
+#
+# Skips cleanly, not a failure, if neither exists or cicd.yaml's `test.enabled` is
+# false. This Task's contract (take image-ref, produce pass/fail) hasn't changed since
+# Phase 1 - only what happens inside it has.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -25,6 +54,8 @@ spec:
     - name: env
       type: string
     - name: suite
+      type: string
+    - name: app-name
       type: string
   steps:
     - name: resolve-suite
@@ -54,16 +85,95 @@ spec:
         ENABLED="$(jq -r 'if .test.enabled == false then "false" else "true" end' <<< '$(params.config-json)')"
         echo -n "${ENABLED}" | tee "$(step.results.enabled.path)"
 
-    - name: integration-test
-      image: $(params.agent-image)
+    - name: run-testworkflow
+      image: {{ .Values.toolboxImage }}
+      imagePullPolicy: IfNotPresent
       workingDir: $(workspaces.source.path)
+      results:
+        - name: fallback-needed
       # Cross-step result references only work in env/command/args, not inline script -
       # see the comment in catalog/tasks/build-image.yaml's run-build-script step.
       env:
-        - name: IMAGE_REF
-          value: $(params.image-ref)
         - name: TEST_ENABLED
           value: $(steps.resolve-suite.results.enabled)
+        - name: TEST_SUITE
+          value: $(params.suite)
+        - name: APP_NAME
+          value: $(params.app-name)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        if [[ "${TEST_ENABLED}" != "true" ]]; then
+          echo "test stage disabled in cicd.yaml, skipping"
+          echo -n "false" | tee "$(step.results.fallback-needed.path)"
+          exit 0
+        fi
+
+        WORKFLOW_FILE="platform/${TEST_SUITE}.yaml"
+        if [[ ! -f "${WORKFLOW_FILE}" ]]; then
+          echo "no ${WORKFLOW_FILE} - falling back to ./integration-test.sh if present"
+          echo -n "true" | tee "$(step.results.fallback-needed.path)"
+          exit 0
+        fi
+        echo -n "false" | tee "$(step.results.fallback-needed.path)"
+
+        WORKFLOW_NAME="${APP_NAME}-${TEST_SUITE}"
+        SECRET_NAME="${APP_NAME}-app-secrets"
+
+        echo "materializing this namespace's app-secrets into testkube/${SECRET_NAME}"
+        if kubectl get secret app-secrets >/dev/null 2>&1; then
+          PATCH_DATA="$(kubectl get secret app-secrets -o json | jq -c '{data: .data}')"
+          kubectl -n testkube patch secret "${SECRET_NAME}" --type merge -p "${PATCH_DATA}"
+        else
+          echo "no app-secrets in this namespace - leaving ${SECRET_NAME} empty"
+        fi
+
+        echo "applying ${WORKFLOW_FILE} as TestWorkflow/${WORKFLOW_NAME} in testkube namespace"
+        yq eval ".metadata.name = \"${WORKFLOW_NAME}\"" "${WORKFLOW_FILE}" \
+          | sed "s/__APP_SECRETS_NAME__/${SECRET_NAME}/g" \
+          | kubectl -n testkube apply -f -
+
+        echo "triggering execution"
+        EXECUTION_NAME="$(kubectl -n testkube create -o jsonpath='{.metadata.name}' -f - <<EOF
+        apiVersion: testworkflows.testkube.io/v1
+        kind: TestWorkflowExecution
+        metadata:
+          generateName: ${WORKFLOW_NAME}-
+        spec:
+          testWorkflow:
+            name: ${WORKFLOW_NAME}
+        EOF
+        )"
+        echo "TestWorkflowExecution/${EXECUTION_NAME} started, polling for a terminal status"
+
+        STATUS=""
+        for i in $(seq 1 60); do
+          STATUS="$(kubectl -n testkube get testworkflowexecution "${EXECUTION_NAME}" -o jsonpath='{.status.latestExecution.result.status}' 2>/dev/null || true)"
+          case "${STATUS}" in
+            passed|failed|aborted) break ;;
+          esac
+          sleep 10
+        done
+
+        echo "blanking ${SECRET_NAME} again (never deleting it - it's owned by this Application's own onboarding chart, not this Task)"
+        kubectl -n testkube patch secret "${SECRET_NAME}" --type merge -p '{"data":{}}' || true
+
+        echo "TestWorkflowExecution/${EXECUTION_NAME} finished with status: ${STATUS:-timeout waiting 10m}"
+        if [[ "${STATUS}" != "passed" ]]; then
+          ERROR_MSG="$(kubectl -n testkube get testworkflowexecution "${EXECUTION_NAME}" -o jsonpath='{.status.error}' 2>/dev/null || true)"
+          [[ -n "${ERROR_MSG}" ]] && echo "error: ${ERROR_MSG}" >&2
+          exit 1
+        fi
+
+    - name: integration-test
+      image: $(params.agent-image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: IMAGE_REF
+          value: $(params.image-ref)
+        - name: FALLBACK_NEEDED
+          value: $(steps.run-testworkflow.results.fallback-needed)
         - name: TEST_ENV
           value: $(params.env)
         - name: TEST_SUITE
@@ -71,12 +181,11 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        if [[ "${TEST_ENABLED}" != "true" ]]; then
-          echo "test stage disabled in cicd.yaml, skipping"
+        if [[ "${FALLBACK_NEEDED}" != "true" ]]; then
           exit 0
         fi
         if [[ ! -f ./integration-test.sh ]]; then
-          echo "warn: test.enabled is true but no ./integration-test.sh found at repo root - skipping, not failing" >&2
+          echo "warn: no platform/${TEST_SUITE}.yaml and no ./integration-test.sh found at repo root - skipping, not failing" >&2
           exit 0
         fi
         echo "running suite '${TEST_SUITE}' against env '${TEST_ENV}', image ${IMAGE_REF}"

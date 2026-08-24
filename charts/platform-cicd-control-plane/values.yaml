@@ -9,6 +9,15 @@
 # and published your own copy.
 toolboxImage: ghcr.io/jfillman/platform-cicd-toolbox:latest
 
+# The single shared namespace Testkube CE installs into on this cluster (see
+# gitops-cluster-dev/50-platform-cicd/testkube/application.yaml's own header for why
+# it's one shared namespace, not one per tenant - executionNamespaces/multinamespace
+# is a Pro/Enterprise-only feature in Testkube's own source, confirmed live). Same
+# value/default as charts/platform-cicd-app's own testkubeNamespace - kept in sync
+# across both charts deliberately, not duplicated by accident. Consumed by
+# templates/testkube/rbac.yaml here.
+testkubeNamespace: testkube
+
 # Same field, same default, same reasoning as charts/platform-cicd-catalog/values.yaml's
 # own tektonChainsNamespace comment - kept in sync across both charts deliberately, not
 # duplicated by accident. Consumed by templates/hooks/chains-config-patch-job.yaml here.

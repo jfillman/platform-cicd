@@ -323,11 +323,44 @@ test:
 
 `test.suite` is the app-wide default suite name, inherited by every `test` step in every
 flow that doesn't set its own `suite`. `enabled: false` skips the stage's actual test
-command (`./integration-test.sh`) but the stage still runs (span, CDEvent, Slack
-notification) - it just reports success without having tested anything. Whatever suite
-name is in effect, plus the step's `env` and the image reference under test, reach your
-own `./integration-test.sh` as `TEST_SUITE`/`TEST_ENV`/`IMAGE_REF` environment
-variables.
+run but the stage still runs (span, CDEvent, Slack notification) - it just reports
+success without having tested anything.
+
+Whatever suite name is in effect resolves to one of two things, checked in this order:
+
+1. **`platform/<suite>.yaml` (Testkube, preferred)** - if this file exists, it's applied
+   as a Testkube `TestWorkflow` and run for real. Testkube CE installs into one shared
+   `testkube` namespace on this cluster (not one per Application - cross-namespace
+   execution is a Testkube Pro/Enterprise-only feature), so two things about this file
+   are enforced by the platform, not left to convention:
+   - `metadata.name` is always overwritten to `<your-app-name>-<suite>` before applying,
+     regardless of what you put there - required so TestWorkflow names stay unique
+     across every onboarded Application sharing that one namespace.
+   - To reference your own app-secrets in the workflow's env, use the literal
+     `secretKeyRef.name` value `__APP_SECRETS_NAME__` - it's substituted for your
+     Application's real, per-Application secret name in that shared namespace before
+     applying. Don't hardcode a real secret name; it won't exist under that name.
+     ```yaml
+     env:
+       - name: API_TOKEN
+         valueFrom:
+           secretKeyRef: { name: __APP_SECRETS_NAME__, key: api-token }
+     ```
+     Whatever's in this namespace's own `app-secrets` (the `secrets:` block earlier in
+     this file) is what shows up there - same keys, materialized fresh into Testkube's
+     namespace immediately before each run and blanked again immediately after.
+   - See the TestWorkflow CRD docs (docs.testkube.io) for the rest of `spec:` - image,
+     command, assertions, etc. are all standard Testkube, nothing platform-specific
+     beyond the two rules above.
+2. **`./integration-test.sh` (fallback)** - if there's no `platform/<suite>.yaml`, this
+   runs instead, in your own `build.agent` image. Whatever suite name is in effect,
+   plus the step's `env` and the image reference under test, reach it as
+   `TEST_SUITE`/`TEST_ENV`/`IMAGE_REF` environment variables. This is the original,
+   pre-Testkube mechanism - kept working for Applications that haven't added a
+   `platform/<suite>.yaml` yet, not the recommended path for a new Application.
+
+Neither present: the stage still runs (span, CDEvent, notification) but reports success
+without having tested anything, same as `enabled: false`.
 
 ## The `deploy:` block
 

@@ -28,9 +28,20 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
+  # Added for run-integration-tests.yaml's Testkube step: it reads this namespace's own
+  # app-secrets via the API (to re-materialize it into Testkube's shared namespace,
+  # see platform-cicd-app's templates/testkube/rbac-and-secret.yaml) rather than a
+  # volume mount, since which keys to forward isn't known until runtime. get-only,
+  # resourceNames-restricted to the one Secret this Role's own namespace already trusts
+  # this pipeline with - not a general secrets-read grant.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["app-secrets"]
+    verbs: ["get"]
   # Deliberately no apps/deployments rule (that's deploy-rbac.yaml, a peer namespace),
   # no impersonate, no wildcards, no cluster-scoped rules - this is the entire blast
-  # radius of a compromised pipeline-runner identity.
+  # radius of a compromised pipeline-runner identity (plus the narrowly-scoped
+  # cross-namespace Testkube grants in templates/testkube/rbac-and-secret.yaml).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
