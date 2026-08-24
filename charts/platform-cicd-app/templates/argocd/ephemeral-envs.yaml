@@ -47,15 +47,16 @@ spec:
     metadata:
       name: "{{ .Values.platformIdentity.appName }}-pr-{{ "{{" }}.number{{ "}}" }}"
       # Cascade-delete removes the Deployment/Rollout/Service etc. idp-application
-      # renders, but NOT the namespace itself - CreateNamespace=true's namespace isn't
-      # a tracked resource (idp-application, like the lower-env tier it mirrors, never
-      # renders a Namespace object of its own). Deliberately accepted, not an oversight:
-      # the platform.io/ephemeral-env=true label below is what pr-namespace-ttl-sweep-
-      # cronjob.yaml actually keys its 24h sweep on, and now doubles as the real cleanup
-      # path for the empty namespace left behind after cascade-delete, not just a
-      # backstop for a stuck finalizer. Means a closed PR's namespace can sit empty for
-      # up to 24h, not disappear instantly - accepted tradeoff for standardizing on the
-      # same idp-application chart every other tier uses (2026-08-24).
+      # renders, AND the namespace itself - idp-application now renders an explicit
+      # Namespace object (templates/namespace/namespace.yaml, v0.3.40+), which ArgoCD
+      # tracks and prunes like any other resource, unlike a namespace that only exists
+      # via CreateNamespace=true. Fixes a real leftover-namespace bug found live:
+      # app-checkout-api-pr-9 sat around after its Application was cascade-deleted
+      # (2026-08-24) - the platform.io/ephemeral-env=true label below (now set via
+      # source 0's namespace.labels, not managedNamespaceMetadata - an explicit
+      # Namespace manifest overwrites that field rather than merging with it) still
+      # feeds pr-namespace-ttl-sweep-cronjob.yaml, kept as a backstop for a stuck
+      # finalizer, not the primary cleanup path anymore.
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
@@ -82,6 +83,18 @@ spec:
                   repository: ghcr.io/{{ .Values.platformIdentity.githubOwner }}/{{ .Values.platformIdentity.appName }}-pr
                   # trunc 12 matches build-image.yaml's own <app>-pr:<12-char-sha> tag.
                   tag: "{{ "{{" }} trunc 12 .head_sha {{ "}}" }}"
+              # Moved here from managedNamespaceMetadata.labels (removed below) - an
+              # explicit Namespace manifest (idp-application v0.3.40+) overwrites
+              # managedNamespaceMetadata rather than merging with it, so it's a no-op
+              # once the chart renders its own Namespace object.
+              namespace:
+                labels:
+                  # Selected by pr-namespace-ttl-sweep-cronjob.yaml's 24h backstop sweep.
+                  platform.io/ephemeral-env: "true"
+                  # Lets platform-cicd's registry-credentials ClusterExternalSecret select
+                  # this namespace so the private ghcr.io/<owner>/<app>-pr image can
+                  # actually be pulled.
+                  platform.io/managed-secrets: "true"
             valueFiles:
               # Not platform/envs/pr.yaml - lower-envs-applicationset.yaml's own git
               # generator already watches platform/envs/*.yaml on every onboarded app's
@@ -133,17 +146,10 @@ spec:
           prune: true
           selfHeal: true
         syncOptions:
+          # Harmless to leave set - a no-op once idp-application's own Namespace
+          # manifest already declares the namespace (only fires when the destination
+          # namespace isn't in the source manifests at all).
           - CreateNamespace=true
-        managedNamespaceMetadata:
-          labels:
-            # Selected by pr-namespace-ttl-sweep-cronjob.yaml's 24h sweep - see this
-            # template's own finalizer comment above for why that sweep, not cascade-
-            # delete, is what actually removes this namespace.
-            platform.io/ephemeral-env: "true"
-            # Matches lower-envs-applicationset.yaml's own reasoning: lets platform-
-            # cicd's registry-credentials ClusterExternalSecret select this namespace so
-            # the private ghcr.io/<owner>/<app>-pr image can actually be pulled.
-            platform.io/managed-secrets: "true"
 ---
 # The ApplicationSet pullRequest generator needs a static Secret to read a GitHub token
 # from. Rather than a long-lived PAT, this CronJob periodically mints a fresh,

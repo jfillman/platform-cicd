@@ -99,13 +99,13 @@ devClusterName: kind-dev
 # idp-service-catalog's idp-application chart - same chart/pin-update discipline the
 # lower-env tier already uses (gitops-cluster-dev's lower-envs-applicationset.yaml),
 # so a preview env behaves like any other tier instead of a bespoke Kustomize-only
-# path. Version pinned independently of that file's own pin (v0.3.35, currently
-# behind) - matches tenant-onboarding/applicationset.yaml's v0.3.37 instead, the more
-# current of the two existing consumers as of 2026-08-24 (confirmed no chart diff
-# between v0.3.37..v0.3.38, so v0.3.37 is current, not stale).
+# path. v0.3.40 (2026-08-24): idp-application now renders an explicit Namespace
+# object, fixing the leftover-namespace-after-cascade-delete bug - bumped alongside
+# every other consumer's pin (lower-envs-applicationset.yaml,
+# tenant-onboarding/applicationset.yaml, both clusters) the same day.
 idpServiceCatalog:
   repoUrl: https://github.com/jfillman/idp-service-catalog.git
-  chartVersion: v0.3.37
+  chartVersion: v0.3.40
 
 # Platform-wide constants every Application install shares (not per-app identity, so
 # kept outside platformIdentity). Defaults to this repo's own published image (real,
