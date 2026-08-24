@@ -37,5 +37,7 @@ spec:
     # tasks/finally split - see pull-request-sast.yaml's own header (2026-08-23) for
     # why finally/comment-pr must never share a budget with the real check tasks.
     tasks: "8m"
-    finally: "2m"
-    pipeline: "10m"
+    # finally bumped 2m->4m - see pull-request-sast.yaml's own header (2026-08-24)
+    # for the live comment-pr cancellation this fixes.
+    finally: "4m"
+    pipeline: "12m"

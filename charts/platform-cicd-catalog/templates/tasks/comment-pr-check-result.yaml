@@ -120,11 +120,21 @@ spec:
         if [[ "${STATUS}" == "Succeeded" || "${STATUS}" == "Completed" ]]; then
           # Best-effort: surface a Task result if one exists (only image-scan produces
           # findings-summary today) - never required, a plain pass is a complete comment too.
-          summary="$(kubectl get taskrun -n "${NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json 2>/dev/null \
-            | jq -r '[.items[].status.results[]? | select(.name == "findings-summary")][0].value // empty')"
-          body="### ✅ \`${GATE_NAME}\` passed"
-          if [[ -n "${summary}" ]]; then
-            body="${body}"$'\n\n'"${summary}"
+          taskrun_results="$(kubectl get taskrun -n "${NAMESPACE}" -l "tekton.dev/pipelineRun=${PIPELINE_RUN_NAME}" -o json 2>/dev/null)"
+          summary="$(echo "${taskrun_results}" | jq -r '[.items[].status.results[]? | select(.name == "findings-summary")][0].value // empty')"
+          # governance-gate-stub/qa-gate (ADR-0003) emit outcome=stub - a stub always
+          # succeeds, so STATUS alone can't tell "really passed" from "not a real check
+          # yet". Without this, a stubbed gate (currently itsm/qa/policy-validation/
+          # image-promotion) posts the same "passed" wording as a genuine result, which
+          # reads as the gate having actually verified something it never checked.
+          outcome="$(echo "${taskrun_results}" | jq -r '[.items[].status.results[]? | select(.name == "outcome")][0].value // empty')"
+          if [[ "${outcome}" == "stub" ]]; then
+            body="### ⚠️ \`${GATE_NAME}\` — stub, not a real check yet"$'\n\n'"This gate always succeeds today; it hasn't verified anything real. See docs/admin/governance-stubs.md."
+          else
+            body="### ✅ \`${GATE_NAME}\` passed"
+            if [[ -n "${summary}" ]]; then
+              body="${body}"$'\n\n'"${summary}"
+            fi
           fi
         else
           # Same failed-TaskRun + log-excerpt lookup notify-slack.yaml uses - best-effort,

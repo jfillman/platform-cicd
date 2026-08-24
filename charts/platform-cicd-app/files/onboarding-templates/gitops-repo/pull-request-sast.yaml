@@ -57,5 +57,12 @@ spec:
     serviceAccountName: pipeline-runner
   timeouts:
     tasks: "8m"
-    finally: "2m"
-    pipeline: "10m"
+    # 2026-08-24: a live run's comment-pr TaskRun (qa7wddf, same shared
+    # comment-pr-check-result Task every gate uses) took >114s against a normal
+    # ~60-70s and was cancelled by a 2m finally budget before it could post/edit
+    # the PR comment - the gate's real outcome (stub or otherwise) never made it
+    # onto the PR, leaving a stale comment from an earlier commit's run in place.
+    # No error in cdevents-broker-auth logs at the time; ordinary GitHub API
+    # latency variance, not a broker/tunnel issue. 4m gives real headroom.
+    finally: "4m"
+    pipeline: "12m"
