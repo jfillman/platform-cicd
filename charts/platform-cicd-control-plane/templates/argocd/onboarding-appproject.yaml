@@ -34,6 +34,12 @@ spec:
   destinations:
     - namespace: argocd
       server: https://kubernetes.default.svc
+    # platform-cicd-app's per-tenant AppProject (templates/argocd/appproject.yaml) renders
+    # a copy here too when ephemeral environments are enabled - an ArgoCD instance only
+    # ever looks for an AppProject inside its own control-plane namespace, so this is what
+    # puts PR-based ephemeral environments under argocd-apps instead of argocd-platform.
+    - namespace: argocd-apps
+      server: https://kubernetes.default.svc
     - namespace: "app-*"
       server: https://kubernetes.default.svc
     - namespace: "infra-*"
