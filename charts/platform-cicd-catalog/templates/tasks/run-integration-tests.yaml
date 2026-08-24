@@ -147,9 +147,21 @@ spec:
         )"
         echo "TestWorkflowExecution/${EXECUTION_NAME} started, polling for a terminal status"
 
+        # NOT `kubectl get testworkflowexecution ... -o jsonpath='{.status.latestExecution...}'`
+        # - live-verified 2026-08-24 that the TestWorkflowExecution CR's own .status
+        # subresource never populates in standalone/CE mode even though the run
+        # genuinely completes (RBAC on that subresource is fine; this looks like a
+        # standalone-mode gap in status propagation back onto the CR, not anything this
+        # Task controls). The API server's own REST endpoint reflects the real result
+        # immediately, confirmed against a real passed execution - poll that instead.
+        # api-server's Service resolves in-cluster with no auth required in standalone
+        # mode. Matched by runningContext.actor.name (the CR name above), not
+        # workflow-name + page position, so this can't pick up a stale prior run's
+        # result for the same workflow.
         STATUS=""
         for i in $(seq 1 60); do
-          STATUS="$(kubectl -n testkube get testworkflowexecution "${EXECUTION_NAME}" -o jsonpath='{.status.latestExecution.result.status}' 2>/dev/null || true)"
+          STATUS="$(curl -fsS "http://testkube-api-server.testkube.svc.cluster.local:8088/v1/test-workflows/${WORKFLOW_NAME}/executions" \
+            | jq -r --arg name "${EXECUTION_NAME}" '.results[]? | select(.runningContext.actor.name == $name) | .result.status // empty' || true)"
           case "${STATUS}" in
             passed|failed|aborted) break ;;
           esac
@@ -161,8 +173,8 @@ spec:
 
         echo "TestWorkflowExecution/${EXECUTION_NAME} finished with status: ${STATUS:-timeout waiting 10m}"
         if [[ "${STATUS}" != "passed" ]]; then
-          ERROR_MSG="$(kubectl -n testkube get testworkflowexecution "${EXECUTION_NAME}" -o jsonpath='{.status.error}' 2>/dev/null || true)"
-          [[ -n "${ERROR_MSG}" ]] && echo "error: ${ERROR_MSG}" >&2
+          curl -fsS "http://testkube-api-server.testkube.svc.cluster.local:8088/v1/test-workflows/${WORKFLOW_NAME}/executions" \
+            | jq -r --arg name "${EXECUTION_NAME}" '.results[]? | select(.runningContext.actor.name == $name)' >&2 || true
           exit 1
         fi
 
