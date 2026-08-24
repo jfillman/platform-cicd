@@ -29,6 +29,10 @@ spec:
       type: string
       default: ""
       description: "Git tag passed by PaC for tag-triggered builds (e.g., refs/tags/v1.2.3). Empty for branch-based triggers."
+    - name: pr-tag-only
+      type: string
+      default: "false"
+      description: "Passed straight through to build-image - see that Task's own param for what this controls."
     - name: image-repo
       type: string
     - name: app-namespace
@@ -194,6 +198,7 @@ spec:
         - { name: image-repo, value: $(params.image-repo) }
         - { name: git-revision, value: $(params.git-revision) }
         - { name: git-tag, value: $(params.git-tag) }
+        - { name: pr-tag-only, value: $(params.pr-tag-only) }
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 

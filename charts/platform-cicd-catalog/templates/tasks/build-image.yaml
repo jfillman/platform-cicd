@@ -45,6 +45,10 @@ spec:
       type: string
       default: ""
       description: "Git tag from PaC (e.g., refs/tags/v1.2.3). Used to extract version for image tag. Empty for branch-based triggers."
+    - name: pr-tag-only
+      type: string
+      default: "false"
+      description: "\"true\" tags the image as <12-char-sha> alone, skipping the <version>-<short-sha> scheme below entirely. Set by deliver-onboarding-files.yaml for pull_request-triggered flows only - a PR's package.json version isn't something ArgoCD's pullRequest generator can read at manifest-generation time (platform-cicd-app's ephemeral-envs.yaml computes this exact image reference independently, from .head_sha alone, to know what to deploy), so PR images need a tag ephemeral-envs.yaml can predict without it."
     - name: flow-traceparent
       type: string
       description: Root traceparent for the whole flow (from start-flow-root-span) - gives the kaniko-duration span its trace id. See emit-image-ref-and-span's own span-emission comment for why this Task can't wrap kaniko directly.
@@ -113,7 +117,14 @@ spec:
         fi
         [[ -z "${VERSION:-}" ]] && VERSION="0.0.0"
 
-        IMAGE_REF="$(params.image-repo):${VERSION}-${SHORT_SHA}"
+        if [[ "$(params.pr-tag-only)" == "true" ]]; then
+          # 12-char sha, matching platform-cicd-app's ephemeral-envs.yaml, which
+          # computes this same image reference independently via ArgoCD's own template
+          # (trunc-12'd .head_sha - see that file's own comment).
+          IMAGE_REF="$(params.image-repo):$(cut -c1-12 <<< "$(params.git-revision)")"
+        else
+          IMAGE_REF="$(params.image-repo):${VERSION}-${SHORT_SHA}"
+        fi
         echo -n "${DOCKERFILE_PATH}" | tee "$(step.results.dockerfile-path.path)"
         echo -n "${IMAGE_REF}" | tee "$(step.results.image-ref.path)"
         # -n here matters, unlike the two lines above it's not just style: this result is

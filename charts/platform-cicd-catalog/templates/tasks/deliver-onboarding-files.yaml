@@ -234,6 +234,11 @@ spec:
           # static pull-request.yaml template) so they never collide with a real release
           # tag in the same registry path.
           local effective_image_repo="${image_repo}"
+          # pr_tag_only: build-image.yaml's own param - see that Task's comment for why a
+          # PR image can't carry the normal <version>-<short-sha> tag (ArgoCD's
+          # pullRequest generator, in platform-cicd-app's ephemeral-envs.yaml, has no way
+          # to read package.json's version at manifest-generation time, only .head_sha).
+          local pr_tag_only="false"
 
           case "${event}" in
             push)
@@ -276,6 +281,7 @@ spec:
                 branch_line="    pipelinesascode.tekton.dev/on-target-branch: \"[${branch}]\""
               fi
               effective_image_repo="${image_repo}-pr"
+              pr_tag_only="true"
               ;;
             branch.created)
               on_event="[push]"
@@ -345,6 +351,7 @@ spec:
             - { name: git-url, value: "${GIT_URL_VAR}" }
             - { name: git-revision, value: "${GIT_REVISION_VAR}" }
             - { name: image-repo, value: "${effective_image_repo}" }
+            - { name: pr-tag-only, value: "${pr_tag_only}" }
             - { name: app-namespace, value: "${APP_NAMESPACE}" }
             - { name: app-name, value: "${APP_NAME}" }
             - { name: app-type, value: "${APP_TYPE}" }
