@@ -169,7 +169,13 @@ spec:
         done
 
         echo "blanking ${SECRET_NAME} again (never deleting it - it's owned by this Application's own onboarding chart, not this Task)"
-        kubectl -n testkube patch secret "${SECRET_NAME}" --type merge -p '{"data":{}}' || true
+        # NOT `-p '{"data":{}}'` - live-verified 2026-08-24 that's a no-op against an
+        # already-populated map under RFC 7396 JSON merge patch semantics (an empty
+        # object in the patch means "nothing to merge", not "clear this field") - the
+        # secret's real data silently survived every "blank" for as long as this bug
+        # existed. `data: null` is what actually clears it - a null in a merge patch
+        # means "remove this key", confirmed against the live object.
+        kubectl -n testkube patch secret "${SECRET_NAME}" --type merge -p '{"data":null}' || true
 
         echo "TestWorkflowExecution/${EXECUTION_NAME} finished with status: ${STATUS:-timeout waiting 10m}"
         if [[ "${STATUS}" != "passed" ]]; then
