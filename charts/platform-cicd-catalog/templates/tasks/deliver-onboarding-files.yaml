@@ -265,15 +265,26 @@ spec:
               # else, and a human hand-editing platform/envs/ is expected to do it as its
               # own standalone commit anyway.
               local loop_guard='!("platform/envs/**".pathChanged())'
+              # Same on-cel-expression-drops-on-event/on-target-branch gap as the
+              # pull_request case below, hit live 2026-08-24: this flow's on-target-branch
+              # ([main]) was silently ignored once the loop-guard CEL line was added, so a
+              # push to ANY branch (including a PR's own branch) matched it - a push to a
+              # preview PR branch fired both pr-build AND ci. has(body.ref) also guards
+              # against a pull_request webhook (which has no top-level ref) evaluating this
+              # expression at all, same reasoning as has(body.pull_request) below.
+              local push_branch_expr=""
+              if [[ -n "${branch}" ]]; then
+                push_branch_expr=" && has(body.ref) && body.ref == \"refs/heads/${branch}\""
+              fi
               if [[ "${file_paths_json}" != "[]" ]]; then
                 local expr
                 # pathChanged() is a suffix method on the pattern string itself, not a
                 # function taking the pattern as an argument - the inverted form parses
                 # but PaC's CEL evaluator rejects it at webhook-delivery time.
                 expr="$(echo "${file_paths_json}" | jq -r 'map("\"" + . + "\".pathChanged()") | join(" || ")')"
-                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '(${expr}) && ${loop_guard}'"
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '(${expr}) && ${loop_guard}${push_branch_expr}'"
               else
-                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${loop_guard}'"
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${loop_guard}${push_branch_expr}'"
               fi
               ;;
             pull_request)
