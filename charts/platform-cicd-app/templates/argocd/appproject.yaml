@@ -59,7 +59,17 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: {{ $appNamespace }}
+  # Deliberately NOT the same name as the release AppProject above ({{ $appNamespace }}
+  # alone) even though the two live in different ArgoCD control-plane namespaces and are
+  # therefore different API objects. A name collision between them was the prime suspect
+  # for a real, reproducible bug hit live (2026-08-24): the argocd-apps application-
+  # controller intermittently rejected checkout-api-pr-9 with "is not permitted to use
+  # project 'app-checkout-api-cicd'" on periodic re-checks even though the live AppProject
+  # object it should have been reading had the correct sourceNamespaces/sourceRepos the
+  # whole time - config was provably correct, so the fix taken was to remove any
+  # possibility of ambiguity by making the name unique, rather than keep chasing the
+  # exact internal cache/lookup mechanism.
+  name: {{ $appNamespace }}-pr
   labels:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "argocd"

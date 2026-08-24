@@ -59,7 +59,9 @@ spec:
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
-      project: {{ $appNamespace }}
+      # Matches appproject.yaml's ephemeral AppProject name (deliberately not
+      # {{ $appNamespace }} alone - see that file's header comment).
+      project: {{ $appNamespace }}-pr
       sources:
         # Source 0: idp-service-catalog's shared idp-application chart, same pattern
         # (and same helm.valuesObject-beats-helm.valueFiles precedence, live-attack-
