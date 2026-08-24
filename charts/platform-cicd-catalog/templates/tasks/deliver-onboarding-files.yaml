@@ -129,6 +129,32 @@ spec:
           # right cluster instead of silently falling through to same-cluster (a real bug
           # that hit flow-triggers.yaml's Go-template equivalent too).
           upper_env_clusters_json="$(yq -o=json '.deploy.upperEnvironments // []' cicd.yaml | jq 'map(if type == "object" then {(.name): (.cluster // "")} else {(.): ""} end) | add // {}')"
+
+          # Synthesize a pr-build flow from ephemeralEnvironments.pullRequest when the
+          # operator hasn't hand-declared one. Its shape never varies (pull_request-
+          # triggered, single build step, -pr-tagged image via generate_flow_file's own
+          # pull_request case below) - so ephemeralEnvironments.pullRequest.enabled: true
+          # is meant to be the whole on/off switch. Without this, that flag alone did
+          # nothing: the ApplicationSet it drives (ephemeral-envs.yaml) had nothing that
+          # ever produced the image it expects, and actually turning the feature on meant
+          # hand-writing an entire pipelines.pr-build entry that just duplicated
+          # ephemeralEnvironments.pullRequest.labels under a different key - found live
+          # 2026-08-24 chasing checkout-api's own hand-written copy of exactly this flow.
+          # pipelines.pr-build remains a full override escape hatch (a different base
+          # branch, extra steps, a second differently-labeled PR flow, etc) - only
+          # synthesized when genuinely absent, never overwrites an explicit declaration.
+          pr_enabled="$(yq -r '.ephemeralEnvironments.pullRequest.enabled // false' cicd.yaml)"
+          if [[ "${pr_enabled}" == "true" ]] && [[ "$(echo "${pipelines_json}" | jq -r 'has("pr-build")')" != "true" ]]; then
+            pr_labels_json="$(yq -o=json '.ephemeralEnvironments.pullRequest.labels // ["preview"]' cicd.yaml)"
+            # Base branch: reuse whichever push-triggered flow's branch is already
+            # declared (this platform's convention for "the" release branch) - falls back
+            # to main if no push flow exists at all.
+            base_branch="$(echo "${pipelines_json}" | jq -r '[.[] | select((.trigger.event // .trigger.type) == "push") | .trigger.branch // empty] | first // "main"')"
+            pipelines_json="$(echo "${pipelines_json}" | jq \
+              --arg branch "${base_branch}" --argjson labels "${pr_labels_json}" \
+              '. + {"pr-build": {trigger: {source: "git", event: "pull_request", branch: $branch, labels: $labels}, steps: [{stage: "build"}]}}')"
+            echo "cicd.yaml: ephemeralEnvironments.pullRequest.enabled=true with no explicit pipelines.pr-build - synthesized one (branch=${base_branch}, labels=${pr_labels_json})"
+          fi
         else
           pipelines_json="{}"
           source_volume_size_raw="small"

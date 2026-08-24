@@ -189,6 +189,16 @@ pipelines:
                                   # ephemeralEnvironments.pullRequest to deploy, match
                                   # this to that same label or you'll build on every PR,
                                   # not just ones that actually get an environment.
+                                  #
+                                  # You normally don't need to write a pipelines.pr-build
+                                  # entry at all: setting ephemeralEnvironments.
+                                  # pullRequest.enabled: true is enough on its own - the
+                                  # platform synthesizes exactly this flow shape
+                                  # automatically (branch reused from your push flow,
+                                  # labels reused from ephemeralEnvironments.pullRequest.
+                                  # labels). Only declare pipelines.pr-build yourself to
+                                  # override that default - see
+                                  # ../admin/ephemeral-environments.md.
     steps:
       - stage: build              # REQUIRED per step. One of build/test/deploy/
                                    # release. build, if present, must be the flow's

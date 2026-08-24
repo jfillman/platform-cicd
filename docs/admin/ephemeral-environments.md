@@ -240,24 +240,31 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
    repo has branch protection configured (it doesn't currently, unlike
    `gitops-nodejs-demo-app`).
 
-1a. **Add a `pull_request`-triggered flow to `cicd.yaml`'s `pipelines:` map**, e.g.:
+1a. **Nothing to add here anymore.** `ephemeralEnvironments.pullRequest.enabled: true` is
+   now the whole switch - `deliver-onboarding-files.yaml`'s onboarding-resync mechanism
+   synthesizes a `pull_request`-triggered, build-only flow automatically (base branch
+   reused from whichever `push`-triggered flow already exists, falling back to `main`;
+   labels reused from `ephemeralEnvironments.pullRequest.labels`, defaulting to
+   `["preview"]`) whenever no explicit `pipelines.pr-build` is declared, and regenerates
+   `.tekton/flow-pr-build.yaml` from it. Declare `pipelines.pr-build` explicitly only to
+   override the default shape:
    ```yaml
    pipelines:
      pr-build:
-       trigger: { source: git, event: pull_request, branch: main }
+       trigger: { source: git, event: pull_request, branch: main, labels: ["preview"] }
        steps:
          - stage: build
    ```
-   Required, not optional - see "Image tagging: sha-only for PR builds" above. Without
-   this, `ephemeralEnvironments.pullRequest`'s own ApplicationSet has nothing that ever
-   produces the image it expects, and every preview pod sits in `ImagePullBackOff`
-   forever (found live 2026-08-24). `deliver-onboarding-files.yaml`'s onboarding-resync
-   mechanism regenerates `.tekton/flow-pr-build.yaml` from this entry automatically -
-   remember it only reacts to a real `cicd.yaml` diff landing on `main`, and only updates
-   `main`'s own `.tekton/` copy, so a long-lived feature/PR branch needs `main` merged
-   back into it before its own `.tekton/flow-pr-build.yaml` picks up any later fix to
-   this generator (confirmed live, cost real time to work out: pushes to an open PR's
-   branch alone never re-triggered it).
+   Before this synthesis existed (fixed 2026-08-24), this flow was required, not
+   optional - see "Image tagging: sha-only for PR builds" above. Without it,
+   `ephemeralEnvironments.pullRequest`'s own ApplicationSet had nothing that ever
+   produced the image it expects, and every preview pod sat in `ImagePullBackOff` forever
+   (found live 2026-08-24 - the same incident that motivated automating this instead of
+   just documenting it more clearly). The onboarding-resync mechanism still only reacts
+   to a real `cicd.yaml` diff landing on `main`, and only updates `main`'s own `.tekton/`
+   copy, so a long-lived feature/PR branch needs `main` merged back into it before its own
+   `.tekton/flow-pr-build.yaml` picks up any later fix to this generator (confirmed live,
+   cost real time to work out: pushes to an open PR's branch alone never re-triggered it).
 
 2. **Apply the ApplicationSet + AppProject template**, with `<APP_NAMESPACE>`, `<APP_NAME>`,
    `<APP_REPO_URL>`, `<GITHUB_OWNER>` substituted:
