@@ -56,6 +56,10 @@ pipelines:
       source: git
       event: pull_request
       branch: main
+      labels: ["preview"]      # only build for PRs that actually get a preview
+                                # environment - matches ephemeralEnvironments.pullRequest.
+                                # labels above. Omit this and every PR triggers a build,
+                                # not just labeled ones.
     steps:
       - stage: build
       # this build's image is what a PR-preview environment (above) actually deploys

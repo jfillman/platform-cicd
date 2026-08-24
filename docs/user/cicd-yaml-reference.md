@@ -179,6 +179,16 @@ pipelines:
                                   # match. Backslash escapes are handled correctly.
       filePathPattern: ["api/**"]  # Optional. Only trigger when a changed file
                                   # matches one of these globs. push events only.
+      labels: ["preview"]        # Optional, pull_request events only. Only trigger for
+                                  # a PR carrying ALL of these GitHub labels (same
+                                  # all-must-match semantics as ArgoCD's own pullRequest
+                                  # generator `labels:` field - see
+                                  # ephemeralEnvironments.pullRequest above). Omit for no
+                                  # label filter (fires on every PR touching this
+                                  # branch). If you're building an image for
+                                  # ephemeralEnvironments.pullRequest to deploy, match
+                                  # this to that same label or you'll build on every PR,
+                                  # not just ones that actually get an environment.
     steps:
       - stage: build              # REQUIRED per step. One of build/test/deploy/
                                    # release. build, if present, must be the flow's

@@ -234,7 +234,12 @@
                     "type": "string",
                     "description": "Regex the pushed tag's name must match, required when event is 'tag' (e.g. 'v[0-9]+\\.[0-9]+\\.[0-9]+'). See deliver-onboarding-files.yaml's generate_flow_file."
                   },
-                  "filePathPattern": { "type": "array", "items": { "type": "string" } }
+                  "filePathPattern": { "type": "array", "items": { "type": "string" } },
+                  "labels": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Only meaningful when event is 'pull_request'. If set, the flow only fires for a PR carrying ALL of these GitHub labels (same all-must-match semantics as ArgoCD's own pullRequest generator labels: field, for consistency between the build trigger and the ephemeral-environment deploy trigger that reads the same PR). Omit for no label filter (fires on every PR touching this branch). See deliver-onboarding-files.yaml's generate_flow_file."
+                  }
                 }
               },
               "steps": {

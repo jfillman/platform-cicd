@@ -206,6 +206,7 @@ spec:
         generate_flow_file() {
           local flow_name="$1" event="$2" branch="$3" tag_pattern="$4" file_paths_json="$5" root_stage="$6"
           local root_env="$7" root_suite="$8" root_cluster="$9" root_name="${10}" is_flow_terminal="${11}"
+          local labels_json="${12:-[]}"
           local on_event="" branch_line="" cel_line="" tag_param_line=""
           # deploy/release/test can all be a flow's git-rooted first step (e.g. a tag push
           # deploying straight to prod). Their Pipelines read env/suite/cluster/name as
@@ -282,6 +283,26 @@ spec:
               fi
               effective_image_repo="${image_repo}-pr"
               pr_tag_only="true"
+              # trigger.labels (schemas/cicd.schema.json) - all-must-match, same semantics
+              # as ArgoCD's own pullRequest generator `labels:` field. Without this, a
+              # pull_request-triggered build flow fires for every PR touching this branch,
+              # not just ones actually opted into an ephemeral environment (which IS
+              # label-gated, via ephemeral-envs.yaml's own ApplicationSet generator) -
+              # wastes a real build+push+SBOM/SAST/image-scan run on every WIP PR.
+              #
+              # Folds on-target-branch's own check into this same CEL expression, same
+              # precedent branch.created's own case below already established: PaC's own
+              # matcher logs a real, confirmed warning that on-cel-expression, once set,
+              # makes it ignore on-event/on-target-branch entirely - dropping the branch
+              # restriction silently instead of just adding a label filter on top of it.
+              if [[ "$(echo "${labels_json}" | jq -r 'length > 0')" == "true" ]]; then
+                local label_expr branch_expr=""
+                label_expr="$(echo "${labels_json}" | jq -r 'map("body.pull_request.labels.exists(l, l.name == \"" + . + "\")") | join(" && ")')"
+                if [[ -n "${branch}" ]]; then
+                  branch_expr=" && body.pull_request.base.ref == \"${branch}\""
+                fi
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${label_expr}${branch_expr}'"
+              fi
               ;;
             branch.created)
               on_event="[push]"
@@ -393,6 +414,7 @@ spec:
           branch="$(echo "${flow_json}" | jq -r '.trigger.branch // ""')"
           tag_pattern="$(echo "${flow_json}" | jq -r '.trigger.tagPattern // ""')"
           file_paths_json="$(echo "${flow_json}" | jq -c '.trigger.filePathPattern // []')"
+          labels_json="$(echo "${flow_json}" | jq -c '.trigger.labels // []')"
           root_stage="$(echo "${flow_json}" | jq -r '.steps[0].stage // "build"')"
           root_env="$(echo "${flow_json}" | jq -r '.steps[0].env // ""')"
           root_suite="$(echo "${flow_json}" | jq -r '.steps[0].suite // ""')"
@@ -408,7 +430,7 @@ spec:
           is_flow_terminal="false"
           [[ "${step_count}" -eq 1 ]] && is_flow_terminal="true"
 
-          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" "${is_flow_terminal}" > ".tekton/flow-${flow_name}.yaml"
+          generate_flow_file "${flow_name}" "${trigger_event}" "${branch}" "${tag_pattern}" "${file_paths_json}" "${root_stage}" "${root_env}" "${root_suite}" "${root_cluster}" "${root_name}" "${is_flow_terminal}" "${labels_json}" > ".tekton/flow-${flow_name}.yaml"
           echo "app repo: generated .tekton/flow-${flow_name}.yaml (${trigger_event} -> ${root_stage})"
         done <<< "${flow_names}"
 
