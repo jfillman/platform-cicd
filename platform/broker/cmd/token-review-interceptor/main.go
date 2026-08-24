@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/platform-cicd/broker/token-review-interceptor/internal/githubapp"
@@ -250,7 +251,31 @@ func handleGitHubInstallationToken(clientset kubernetes.Interface, dynClient dyn
 // gitops-<app-name> convention. Deliberately ignores the requested "owner" - the app
 // name -> gitops repo mapping is owner-agnostic (an app's own repo org and its gitops
 // repo org don't have to match).
+// prEnvNamespacePattern matches a PR-based ephemeral environment's own namespace
+// (platform-cicd-app.envNamespace's "pr-<number>" convention, e.g.
+// "app-checkout-api-pr-9") - capture group 1 is that same app's "-cicd" namespace name
+// ("app-checkout-api"), where its Repository CR actually lives.
+var prEnvNamespacePattern = regexp.MustCompile(`^(.+)-pr-\d+$`)
+
 func verifyAppOwnsRepo(dynClient dynamic.Interface, appNamespace, requestedRepo string) error {
+	if err := appNamespaceOwnsRepo(dynClient, appNamespace, requestedRepo); err == nil {
+		return nil
+	} else if m := prEnvNamespacePattern.FindStringSubmatch(appNamespace); m != nil {
+		// A PR-based ephemeral environment (ephemeral-envs.yaml) has no Repository CR of
+		// its own - only the app's shared "-cicd" namespace does. Narrowly scoped: this
+		// still only ever authorizes the SAME app's own repo, exactly the one namespace
+		// pattern platform-cicd-app.envNamespace generates for it - not a general
+		// cross-namespace grant. Added for the PR-preview-notify PostSync hook, which
+		// needs to post a PR comment from inside its own per-PR namespace (2026-08-24).
+		cicdNamespace := m[1] + "-cicd"
+		if err := appNamespaceOwnsRepo(dynClient, cicdNamespace, requestedRepo); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("app namespace %q has no Repository CR that maps to repo %q", appNamespace, requestedRepo)
+}
+
+func appNamespaceOwnsRepo(dynClient dynamic.Interface, appNamespace, requestedRepo string) error {
 	list, err := dynClient.Resource(repositoryGVR).Namespace(appNamespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("listing Repository CRs in %s: %w", appNamespace, err)
