@@ -15,9 +15,9 @@
 # cluster-admin (fixed - no elevated identity needed; ArgoCD's own trusted
 # applicationset-controller creates the namespace/Application).
 #
-# Lives in this app's -cicd namespace, not argocd, via ArgoCD's ApplicationSet-in-any-
-# namespace feature - lets the tokenRef Secret live here too, without a cross-namespace
-# RBAC grant into argocd. tokenRef strict mode requires that Secret carry the
+# Lives in this app's -cicd namespace, not argocd-apps, via ArgoCD's ApplicationSet-in-
+# any-namespace feature - lets the tokenRef Secret live here too, without a cross-
+# namespace RBAC grant into argocd-apps. tokenRef strict mode requires that Secret carry the
 # argocd.argoproj.io/secret-type: scm-creds label (set by the refresher CronJob below;
 # the Secret itself is minted live, never persisted, and isn't part of this chart's
 # rendered manifest).
