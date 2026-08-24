@@ -295,13 +295,20 @@ spec:
               # matcher logs a real, confirmed warning that on-cel-expression, once set,
               # makes it ignore on-event/on-target-branch entirely - dropping the branch
               # restriction silently instead of just adding a label filter on top of it.
+              #
+              # has(body.pull_request) guards the SAME reason, confirmed live 2026-08-24
+              # (a real CEL evaluation error on a plain push event, not just theoretical):
+              # on-cel-expression replaces on-event too, so PaC evaluates this expression
+              # against every webhook type, not just pull_request ones - a push event's
+              # body has no pull_request field at all, so body.pull_request.labels errors
+              # "no such key: labels" instead of just not matching, without this guard.
               if [[ "$(echo "${labels_json}" | jq -r 'length > 0')" == "true" ]]; then
                 local label_expr branch_expr=""
                 label_expr="$(echo "${labels_json}" | jq -r 'map("body.pull_request.labels.exists(l, l.name == \"" + . + "\")") | join(" && ")')"
                 if [[ -n "${branch}" ]]; then
                   branch_expr=" && body.pull_request.base.ref == \"${branch}\""
                 fi
-                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: '${label_expr}${branch_expr}'"
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && ${label_expr}${branch_expr}'"
               fi
               ;;
             branch.created)
