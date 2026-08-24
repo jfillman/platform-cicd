@@ -48,6 +48,13 @@ spec:
     # tenant reading the shared cluster-registry ConfigMap) - see docs/admin/multi-cluster.md.
     - namespace: platform-system
       server: https://kubernetes.default.svc
+    # Needed for platform-cicd-app's templates/testkube/rbac-and-secret.yaml - each
+    # tenant's onboarding render also places a placeholder Secret + resourceNames-
+    # scoped RBAC into Testkube's own shared namespace (ADR-0007). Found live 2026-08-24:
+    # without this, ArgoCD silently leaves those resources OutOfSync/Unknown forever -
+    # no InvalidSpecError condition surfaced, just a perpetually out-of-sync Application.
+    - namespace: {{ .Values.testkubeNamespace }}
+      server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     - { group: "", kind: Namespace }
   namespaceResourceWhitelist:
@@ -66,3 +73,7 @@ spec:
     - { group: "", kind: ConfigMap }
     - { group: "", kind: PersistentVolumeClaim }
     - { group: "", kind: ServiceAccount }
+    # Needed for templates/testkube/rbac-and-secret.yaml's placeholder Secret - not
+    # previously needed by anything this AppProject scoped (app-secrets itself is
+    # rendered by an ExternalSecret, not a plain Secret, elsewhere in this chart).
+    - { group: "", kind: Secret }
