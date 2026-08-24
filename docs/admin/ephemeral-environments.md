@@ -297,6 +297,26 @@ One-time setup per app, same spirit as the release stage's onboarding steps.
    gap this surfaced: newly-created GHCR packages default to private" above. One-time,
    not needed again for this app.
 
+## PR comment: `charts/pr-preview-notify`
+
+An ArgoCD `PostSync` hook Job, sourced as a third `sources:` entry on
+`ephemeral-envs.yaml`'s per-PR `Application` (not a Tekton Task - the build stage
+finishes before ArgoCD has even attempted to deploy, so it can't know whether the sync
+will succeed; not a conditional resource inside the shared `idp-application` chart -
+that chart is used by every tier, and nothing outside this one `ApplicationSet`
+template ever references `pr-preview-notify`, which is what actually guarantees this
+can't fire for a regular env). Posts/edits one PR comment (hidden-marker dedup, same
+pattern as `comment-pr-check-result.yaml`) with the namespace, the ArgoCD Application
+link, and a preview URL - or, since this platform has no ingress/DNS yet, a
+`kubectl port-forward` fallback instead. Two values
+(`platformIdentity.previewIngressBaseDomain`/`argocdUIBaseURL`, both empty by default)
+switch the comment over to real clickable links with no template change once real
+ingress exists.
+
+Needs the broker's `verifyAppOwnsRepo` to recognize a PR namespace as authorized for its
+own app's repo (`platform/broker/cmd/token-review-interceptor/main.go`) - a PR namespace
+has no `Repository` CR of its own, only the app's shared `-cicd` namespace does.
+
 ## Access
 
 This platform's clusters have no ingress/DNS by default (an already-documented gap), so
