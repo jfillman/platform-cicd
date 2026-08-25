@@ -62,6 +62,12 @@ spec:
     - { group: "argoproj.io", kind: Application }
     - { group: "argoproj.io", kind: ApplicationSet }
     - { group: "batch", kind: CronJob }
+    # Needed for templates/hooks/onboarding-resync-bootstrap.yaml's PostSync hook Job -
+    # found live 2026-08-24 re-syncing order-api-cicd after adding that hook: "resource
+    # batch:Job is not permitted in project platform-onboarding". CronJob (above) was
+    # already whitelisted for the pr-token-refresher; plain Job never had a use here
+    # until this hook.
+    - { group: "batch", kind: Job }
     - { group: "external-secrets.io", kind: ExternalSecret }
     - { group: "rbac.authorization.k8s.io", kind: Role }
     - { group: "rbac.authorization.k8s.io", kind: RoleBinding }
