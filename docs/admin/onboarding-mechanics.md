@@ -98,6 +98,18 @@ cluster - see [installation.md](installation.md).
    are never hand-edited. `git status --porcelain` inside that delivery step skips
    opening a PR when nothing changed, so this is safe to fire often.
 
+   **Bootstrapping this for a brand-new app is automatic**, not a step you do by hand:
+   `.tekton/onboarding-resync.yaml` is itself one of the files this mechanism delivers,
+   so on a repo where `.tekton/` doesn't exist yet, no `cicd.yaml` push (past or future)
+   can trigger it - PaC only matches against `.tekton/*.yaml` files already committed at
+   the pushed ref. `templates/hooks/onboarding-resync-bootstrap.yaml` (an ArgoCD
+   `PostSync` hook on this Application, same shape as `charts/pr-preview-notify`'s own
+   hook) closes this gap: it fires on every sync, checks whether
+   `.tekton/onboarding-resync.yaml` already exists on the app repo, and only if not,
+   creates the same bootstrap `PipelineRun` this section used to have you run by hand
+   (see git history for the old manual command). Past the first real delivery, PaC's own
+   `cicd.yaml`-push resync owns `.tekton/` and this hook is a no-op on every later sync.
+
 7. Push to `main`. Watch the Grafana dashboard.
 
 ## Keeping onboarding boilerplate in sync
