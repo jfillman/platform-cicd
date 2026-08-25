@@ -345,7 +345,18 @@ spec:
                 if [[ -n "${branch}" ]]; then
                   branch_expr=" && body.pull_request.base.ref == \"${branch}\""
                 fi
-                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && ${label_expr}${branch_expr}'"
+                # body.action != "opened" - confirmed live 2026-08-24: `gh pr create --label`
+                # (and equivalent UI flows) issue PR-creation and label-add as two separate
+                # GitHub API calls a second or so apart, each firing its own webhook (plain
+                # "opened" + "labeled"). GitHub webhook payloads reflect PR state at dispatch
+                # time, not at the instant the action fired, so if the "opened" delivery is
+                # dispatched even slightly late, body.pull_request.labels already shows the
+                # label - matching this same CEL a second time and firing a duplicate build
+                # (duplicate PipelineRun, check-run, and Slack notification) for the identical
+                # SHA. The "labeled" event on its own already covers "PR just became build-
+                # eligible", so opened never needs to independently match here; synchronize/
+                # reopened/etc. are untouched and still trigger rebuilds as intended.
+                cel_line="    pipelinesascode.tekton.dev/on-cel-expression: 'has(body.pull_request) && body.action != \"opened\" && ${label_expr}${branch_expr}'"
               fi
               ;;
             branch.created)
