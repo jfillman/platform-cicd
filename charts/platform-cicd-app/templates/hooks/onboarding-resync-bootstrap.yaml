@@ -77,6 +77,11 @@ spec:
                   path: github-token-broker-token
                   audience: github-installation-token
                   expirationSeconds: 600
+        # readOnlyRootFilesystem below (unlike pr-preview-notify, whose Job never writes
+        # a file) needs somewhere writable for `mktemp -d`/`git clone` - hit live
+        # 2026-08-24: "mktemp: failed to create directory ... Read-only file system".
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: bootstrap
           image: {{ .Values.toolboxImage }}
@@ -89,6 +94,8 @@ spec:
             - name: github-token-broker-token
               mountPath: /var/run/secrets/platform
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
           env:
             - name: GITHUB_TOKEN_BROKER_URL
               value: http://cdevents-broker-auth.platform-system.svc.cluster.local:8080/github-installation-token
