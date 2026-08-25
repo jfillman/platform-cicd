@@ -12,27 +12,42 @@
 # had already been pushed several times didn't matter either way - even with the App
 # installed from the first push, PaC still had nothing in `.tekton/` to match.
 #
-# PostSync (not the deliver-onboarding-files Task itself, and not a Sync-wave'd resource
-# in the regular manifest set) because this needs to fire exactly once ArgoCD has
-# actually created this Application's own `pipeline-runner` ServiceAccount/Role/RoleBinding
-# (identity/pipeline-runner.yaml, unconditional, non-hook) - the identity this hook's Job
-# runs as, and the one the bootstrap PipelineRun itself runs as. Same shape/precedent as
-# charts/pr-preview-notify's own PostSync hook Job (ephemeral-envs.yaml) - "fire an action
-# once ArgoCD confirms this exact Application is real."
+# `Sync` phase, not `PostSync` - tried PostSync first and hit a real deadlock live
+# 2026-08-24 onboarding order-api: PostSync hooks wait for the WHOLE Application to
+# reach Healthy before firing, and this namespace's own `build-cache-order-api` PVC
+# (WaitForFirstConsumer, see templates/env/build-cache-pvc.yaml) never binds - stays
+# Progressing forever - until some Pod actually mounts it. For a genuinely new app
+# that Pod only exists once a real `build` PipelineRun has run, which needs
+# `.tekton/flow-ci.yaml`, which needs exactly this hook to have fired first. PostSync
+# made the one thing meant to unblock the first pipeline run wait on the first
+# pipeline run having already happened.
+#
+# `Sync` phase resources apply as part of the normal wave-ordered manifest set instead
+# of gating on overall app health, so they don't inherit that deadlock - confirmed live
+# (same order-api PVC, still Pending, no PostSync-style block). No explicit
+# `sync-wave` override: stays in the same (default, "0") wave as
+# `identity/pipeline-runner.yaml`'s ServiceAccount/Role/RoleBinding, which this Job's
+# Pod depends on (serviceAccountName below) - same-wave resources apply together in one
+# pass with no ordering between them, but a Job whose ServiceAccount doesn't exist yet
+# at the instant of creation just has the Job controller retry pod creation (standard,
+# well-tolerated Kubernetes behavior) until it appears a moment later in the same apply
+# batch - not a real race in practice.
+#
+# Same shape/precedent as charts/pr-preview-notify's own hook Job (ephemeral-envs.yaml)
+# otherwise - "fire an action once this exact Application is real" - just Sync instead
+# of PostSync for the reason above.
 #
 # Deliberately does NOT replace the existing PaC-driven resync mechanism -
 # onboarding-mechanics.md documents that split (delivering files INTO the app/gitops
 # repos is a PaC concern, not an ArgoCD one) as a real, considered decision, not an
 # oversight. This hook only covers the one gap PaC structurally can't close itself: the
-# very first delivery. It fires on every sync of this Application (same as
-# pr-preview-notify), but is a no-op past the first real one - see the existence check
-# below - so it doesn't fight PaC's own self-heal once `.tekton/onboarding-resync.yaml`
-# is actually there.
+# very first delivery. It fires on every sync of this Application, but is a no-op past
+# the first real one - see the existence check below - so it doesn't fight PaC's own
+# self-heal once `.tekton/onboarding-resync.yaml` is actually there.
 #
 # Reuses the pipeline-runner ServiceAccount rather than minting a dedicated one: it
 # already carries exactly the RBAC this Job needs (create on tekton.dev/pipelineruns,
-# identity/pipeline-runner.yaml) and nothing more, and is guaranteed to exist by the time
-# PostSync fires (same Application, non-hook resource, always rendered first).
+# identity/pipeline-runner.yaml) and nothing more.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -42,7 +57,7 @@ metadata:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "hooks"
   annotations:
-    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: 2
