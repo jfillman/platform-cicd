@@ -20,6 +20,13 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "pipelines-as-code"
+  annotations:
+    # Earlier than onboarding-resync-bootstrap.yaml's Job (default wave "0", Sync phase):
+    # that Job's bootstrap PipelineRun mints a GitHub App installation token, which the
+    # broker's verifyAppOwnsRepo authorizes by checking for this Repository CR in the
+    # Job's own namespace (see comment above) - without an explicit wave both land in the
+    # same apply batch with no ordering guarantee between them.
+    argocd.argoproj.io/sync-wave: "-1"
 spec:
   url: {{ .Values.platformIdentity.appRepoUrl }}
 {{- if .Values.platformIdentity.gitopsRepoUrl }}
@@ -35,6 +42,8 @@ metadata:
   labels:
     {{- include "platform-cicd-app.labels" . | nindent 4 }}
     platform.io/subcomponent: "pipelines-as-code"
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
 spec:
   url: {{ .Values.platformIdentity.gitopsRepoUrl }}
 {{- end }}
