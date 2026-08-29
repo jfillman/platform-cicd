@@ -55,21 +55,37 @@ cluster - see [installation.md](installation.md).
      appRepoUrl: https://github.com/<org>/<app-name>            # always required
      githubOwner: <org>
      catalogNamespace: platform-catalog
+     # extraGitopsRepos: [https://github.com/<org>/gitops-cluster-<name>]  # optional
    ```
 
-   All six fields must be present (even as `""`) - the `ApplicationSet`'s own
+   All six top-level fields must be present (even as `""`) - the `ApplicationSet`'s own
    Go-template evaluation errors on a genuinely-missing key. `appRepoUrl` can't be
    `""` for any tenant: the `ApplicationSet`'s second source reads `cicd.yaml` live
    from exactly this URL. There's no `tenantNamespace` field - the execution namespace
    is *computed* from `type`+`appName` as `<type>-<app-name>-cicd`, so it can't drift
    from convention (see [naming-conventions.md](naming-conventions.md)).
 
+   `extraGitopsRepos` is optional - full URLs of extra gitops repos (beyond
+   `gitops-<app-name>`) this app's CI needs write access to, e.g. `gitops-image-bump`
+   for an app whose deploy target isn't its own `gitops-<app-name>` repo (a
+   hand-deployed singleton writing into a shared `gitops-cluster-*` repo instead - see
+   `docs/backstage-design.md` in the `idp` repo for a real example). Rendered as an
+   extra `Repository` CR grant by `platform-cicd-app`'s `repository.yaml`. It's a list,
+   so - unlike the six scalar fields above - it can't be forwarded through the
+   `ApplicationSet`'s Helm `valuesObject` (`goTemplate`'s per-field substitution can't
+   emit array items); the `ApplicationSet`'s third source $refs this whole
+   `identity.yaml` file as an extra `valueFiles` entry instead, specifically so
+   list-shaped fields like this one reach the chart. A real bug where this field
+   silently vanished (missing from `valuesObject`, no third source yet) was found and
+   fixed 2026-08-29.
+
    `platformIdentity` isn't a key `schemas/cicd.schema.json` permits -
    `additionalProperties: false` rejects any `cicd.yaml` that tries to define it. This
    is enforced structurally, not just by convention: the `ApplicationSet`'s Helm
    `valuesObject` (built only from this identity file) takes precedence over
-   `valueFiles` (the app repo's live `cicd.yaml`) for any overlapping key - verified
-   directly against a live cluster, not just a template diff.
+   `valueFiles` (the app repo's live `cicd.yaml`, and this identity file itself) for
+   any overlapping key - verified directly against a live cluster, not just a template
+   diff.
 
 4. **Provision the target Deployment first.** `deploy-manifests.yaml` patches an
    existing `Deployment` named `<app-name>` in `<type>-<app-name>-<env>` for each
@@ -81,8 +97,10 @@ cluster - see [installation.md](installation.md).
 
 5. **ArgoCD installs the app chart** - nothing to run by hand. Once step 3's identity
    file lands on this repo's default branch, the `ApplicationSet` creates/syncs a
-   two-source `Application` named `<app-name>-cicd`: one source is this platform's own
-   chart, the other reads `cicd.yaml` live from `appRepoUrl`. This provisions
+   three-source `Application` named `<app-name>-cicd`: one source is this platform's
+   own chart, one reads `cicd.yaml` live from `appRepoUrl`, and one reads this same
+   `identity.yaml` live from the tenants repo (see `extraGitopsRepos` above). This
+   provisions
    `pipeline-runner` + RBAC, only the stage-transition Triggers `cicd.yaml` actually
    declares, env-deploy RBAC per declared environment, the build-cache PVC, the
    release AppProject/Application/DORA RBAC (if `release` is declared), the
