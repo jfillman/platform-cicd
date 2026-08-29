@@ -44,6 +44,18 @@
 # cicd.yaml) for any overlapping key, so a tenant's cicd.yaml can't override
 # platformIdentity. `directory: {exclude: "*"}` on source 1 is required - without it every
 # *.yaml in the app repo root would be auto-applied as raw manifests by this Application.
+#
+# identity.yaml itself is ALSO ref'd as a valueFiles entry (source 2), not just mined for
+# the generator's params - goTemplate's per-string-field substitution (see IMPORTANT
+# above) can only ever produce scalar values, not dynamically generate array items, so an
+# optional list field like platformIdentity.extraGitopsRepos (xrds/tektoncicd.yaml) can't
+# be forwarded through valuesObject at all: a real live bug (backstage's
+# tenants/backstage/identity.yaml never reached its Repository CR) found while testing an
+# attempted range-based valuesObject fix, which Helm itself rejects as invalid YAML before
+# ArgoCD ever gets to templating it. Reading identity.yaml directly sidesteps the
+# field-by-field allowlist entirely - safe against valuesObject's fixed 6 keys per the
+# same precedence rule above, and safe to trust (unlike cicd.yaml) since it's
+# operator-owned, not the tenant's own repo.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -95,13 +107,22 @@ spec:
                 catalogNamespace: "{{ "{{" }}.platformIdentity.catalogNamespace{{ "}}" }}"
             valueFiles:
               # $ref value files resolve relative to that source's checkout root -
-              # cicd.yaml always lives at the app repo's own root.
+              # cicd.yaml always lives at the app repo's own root, identity.yaml at
+              # tenants/<appName>/identity.yaml in the tenants repo (source 2 below).
               - $appsrc/cicd.yaml
+              - "$tenantsrc/tenants/{{ "{{" }}.platformIdentity.appName{{ "}}" }}/identity.yaml"
         - repoURL: "{{ "{{" }}.platformIdentity.appRepoUrl{{ "}}" }}"
           targetRevision: main
           ref: appsrc
           # Exists only to be $ref'd for valueFiles above - directory:exclude prevents
           # it from being applied as raw manifests (see header).
+          directory:
+            exclude: "*"
+        - repoURL: {{ $tenantsRepoUrl }}
+          targetRevision: main
+          ref: tenantsrc
+          # Same tenants repo the generator above already reads - just also declared
+          # as a live source so its identity.yaml can be $ref'd for valueFiles.
           directory:
             exclude: "*"
       destination:
