@@ -47,4 +47,25 @@ metadata:
 spec:
   url: {{ .Values.platformIdentity.gitopsRepoUrl }}
 {{- end }}
+{{- range .Values.platformIdentity.extraGitopsRepos }}
+---
+# Extra Repository CR beyond the gitops-<app-name> convention above - see
+# platformIdentity.extraGitopsRepos in values.yaml for why this is operator-granted
+# rather than self-served. Name is the repo's own name (the URL's last path segment,
+# already "gitops-..."-shaped by convention), NOT re-prefixed - matches main.go's
+# verifyAppOwnsRepo exact-name branch, since these repos don't necessarily follow the
+# gitops-<this-app-name> shape (e.g. a shared gitops-cluster-* repo).
+apiVersion: pipelinesascode.tekton.dev/v1alpha1
+kind: Repository
+metadata:
+  name: {{ regexReplaceAll ".*/([^/]+?)(\\.git)?$" . "${1}" }}
+  namespace: {{ $appNamespace }}
+  labels:
+    {{- include "platform-cicd-app.labels" $ | nindent 4 }}
+    platform.io/subcomponent: "pipelines-as-code"
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  url: {{ . }}
+{{- end }}
 {{- end }}

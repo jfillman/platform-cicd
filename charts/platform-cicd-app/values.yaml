@@ -143,6 +143,14 @@ platformIdentity:
   appRepoUrl: ""
   githubOwner: ""
   catalogNamespace: platform-catalog
+  # Extra Repository CRs beyond gitops-<app-name> (full URLs), for an app whose
+  # gitops-image-bump stage targets a repo it doesn't itself own by naming convention
+  # (e.g. a hand-deployed singleton writing into a shared gitops-cluster-* repo - see
+  # docs/backstage-design.md). Deliberately lives here, in the operator-owned tenant
+  # identity.yaml, not in the app's own self-served cicd.yaml - granting write access
+  # to a repo an app doesn't already own by convention is a trust decision, not
+  # something the app owner should be able to self-grant by editing their own repo.
+  extraGitopsRepos: []
   # Renders templates/pipelines-as-code/repository.yaml's Repository CR(s). Defaults true;
   # set false to deregister a repo without the chart recreating the CR on next sync.
   registerPipelinesAsCode: true

@@ -136,6 +136,11 @@ spec:
     - { name: chain-id, value: "$(body.context.chainId)" }
     - { name: traceparent, value: "$(body.customData.platform.traceparent)" }
     - { name: flow-start-time, value: "$(body.customData.platform.flow_start_time)" }
+    {{/* gitops-image-bump only - Helm-time literals from this step's own cicd.yaml
+    entry, same pattern as test-name/cluster above, not a $(body...) CDEvent field.
+    Harmless empty default on every other stage. */}}
+    - { name: gitops-repo, value: {{ $step.gitopsRepo | default "" | quote }} }
+    - { name: manifest-path, value: {{ $step.manifestPath | default "" | quote }} }
     {{/* Lets deploy/release skip their own clone-repo+validate-config and inherit
     cicd.yaml's already-validated content instead (resolve-notify-config.yaml). Always a
     plain string (JSON-as-a-string, not a nested object) - Tekton Triggers' JSONPath
@@ -170,6 +175,8 @@ spec:
     - name: traceparent
     - name: flow-start-time
     - name: config-json
+    - name: gitops-repo
+    - name: manifest-path
   resourcetemplates:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
@@ -203,6 +210,12 @@ spec:
           - { name: flow-traceparent, value: $(tt.params.traceparent) }
           - { name: flow-start-time, value: $(tt.params.flow-start-time) }
           - { name: config-json, value: $(tt.params.config-json) }
+        {{- /* Only gitops-image-bump declares/needs these two - see that Pipeline's own
+        header for why they aren't threaded to every stage like the params above. */ -}}
+        {{- if eq $stageName "gitops-image-bump" }}
+          - { name: gitops-repo, value: $(tt.params.gitops-repo) }
+          - { name: manifest-path, value: $(tt.params.manifest-path) }
+        {{- end }}
         {{- /* Only test needs the source workspace (real checkout for integration-test).
         deploy/release use resolve-notify-config instead and need no workspace; omitting
         the binding entirely (not just empty) skips a PVC provision/teardown per

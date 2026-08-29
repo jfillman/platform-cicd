@@ -249,14 +249,22 @@
                   "additionalProperties": false,
                   "required": ["stage"],
                   "properties": {
-                    "stage": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
+                    "stage": { "type": "string", "enum": ["build", "test", "deploy", "release", "gitops-image-bump"] },
                     "env": { "type": "string" },
                     "testName": {
                       "type": "string",
                       "description": "Only meaningful on a test step. Overrides the top-level test.name for this specific step - needed when a flow has more than one test step (they'd otherwise be indistinguishable). Falls back to test.name when omitted; one of the two must resolve to a value, since a TestWorkflow run always needs a name. Not called `name` - that field below is the deploy/release target name, a different concept."
                     },
                     "cluster": { "type": "string" },
-                    "name": { "type": "string" }
+                    "name": { "type": "string" },
+                    "gitopsRepo": {
+                      "type": "string",
+                      "description": "Only meaningful (and required) on a gitops-image-bump step: the gitops repo (by name, e.g. 'gitops-cluster-kind-man') to open the image-bump PR against. Unlike release's gitops-<app-name> convention, this stage is for a hand-deployed singleton/cluster-config component whose manifests don't live in a per-app gitops repo, so the target repo must be named explicitly. Requires an extra Repository CR granting this app's CI namespace write access - see platformIdentity.extraGitopsRepos in the tenant identity.yaml (not this repo's cicd.yaml, since it's a trust/authorization grant the app owner doesn't self-serve)."
+                    },
+                    "manifestPath": {
+                      "type": "string",
+                      "description": "Only meaningful (and required) on a gitops-image-bump step: path within gitopsRepo to a plain Kubernetes manifest (not idp-application Helm values.yaml) whose first container's image field gets patched, e.g. '60-backstage/backstage/deployment.yaml'."
+                    }
                   }
                 }
               }
@@ -268,7 +276,7 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "task": { "type": "string", "enum": ["build", "test", "deploy", "release"] },
+                "task": { "type": "string", "enum": ["build", "test", "deploy", "release", "gitops-image-bump"] },
                 "trigger": { "type": "string", "enum": ["branch.created", "push", "pull_request", "tag", "deploy"] },
                 "branch": { "type": "string" },
                 "branchPattern": { "type": "string" },
@@ -278,7 +286,9 @@
                 "testName": { "type": "string" },
                 "cluster": { "type": "string" },
                 "name": { "type": "string" },
-                "triggerEnv": { "type": "string" }
+                "triggerEnv": { "type": "string" },
+                "gitopsRepo": { "type": "string" },
+                "manifestPath": { "type": "string" }
               }
             }
           }

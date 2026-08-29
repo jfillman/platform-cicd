@@ -153,7 +153,7 @@ Usage: {{ include "platform-cicd-app.resolveStepCluster" (list $ $step) }}
 {{- $step.cluster -}}
 {{- else -}}
 {{- $clusters := fromYaml (include "platform-cicd-app.upperEnvClusters" $ctx) -}}
-{{- get $clusters $step.env | default "" -}}
+{{- get $clusters ($step.env | default "") | default "" -}}
 {{- end -}}
 {{- end -}}
 
@@ -224,6 +224,12 @@ renderer can treat both forms uniformly.
     {{- end -}}
     {{- if hasKey $entry "name" -}}
       {{- $_ := set $step "name" $entry.name -}}
+    {{- end -}}
+    {{- if hasKey $entry "gitopsRepo" -}}
+      {{- $_ := set $step "gitopsRepo" $entry.gitopsRepo -}}
+    {{- end -}}
+    {{- if hasKey $entry "manifestPath" -}}
+      {{- $_ := set $step "manifestPath" $entry.manifestPath -}}
     {{- end -}}
     {{- if eq $idx 0 -}}
       {{- if hasKey $entry "trigger" -}}
@@ -313,6 +319,12 @@ renderer can treat both forms uniformly.
       {{- end -}}
       {{- if hasKey $entry "name" -}}
         {{- $_ := set $step "name" $entry.name -}}
+      {{- end -}}
+      {{- if hasKey $entry "gitopsRepo" -}}
+        {{- $_ := set $step "gitopsRepo" $entry.gitopsRepo -}}
+      {{- end -}}
+      {{- if hasKey $entry "manifestPath" -}}
+        {{- $_ := set $step "manifestPath" $entry.manifestPath -}}
       {{- end -}}
       {{- $steps = append $steps $step -}}
     {{- end -}}
