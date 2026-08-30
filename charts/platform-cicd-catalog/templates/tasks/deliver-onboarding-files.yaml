@@ -284,13 +284,20 @@ spec:
               # app that also sets trigger.paths would silently keep looping if this guard
               # were the separate annotation. One mechanism, always applied, covers both.
               #
-              # !("platform/envs/**".pathChanged()), not PaC's docs-stated "skip only if
-              # ALL changed files are under this path" semantics: pathChanged() actually
-              # matches on ANY changed file (a real gap between docs and implementation).
-              # Accepted tradeoff - deploy-manifests.yaml's commits never touch anything
-              # else, and a human hand-editing platform/envs/ is expected to do it as its
-              # own standalone commit anyway.
-              local loop_guard='!("platform/envs/**".pathChanged())'
+              # NOT path-based (was: !("platform/envs/**".pathChanged())) - real bug hit
+              # live on order-api 2026-08-29: pathChanged() diffs the whole push's
+              # before...after range, not each commit individually. Once deploy-manifests.yaml
+              # pushes its commit straight to main, the developer's next `git push` needs a
+              # merge/rebase first, so their push's range ends up containing BOTH their own
+              # commit and the bot's platform/envs/ commit - pathChanged() then matches on
+              # the bot's file and skips the developer's push too, silently, until they push
+              # again (by which point the bot's commit is no longer in the new range).
+              #
+              # Matching on the push's head-commit author instead is range-proof: it only
+              # asks "did the bot itself produce this push's tip", which is only ever true
+              # for deploy-manifests.yaml's own solo push (see its git config user.email,
+              # same literal here - keep in sync).
+              local loop_guard='(!has(body.head_commit) || body.head_commit.author.email != "deploy@platform-cicd.invalid")'
               # Same on-cel-expression-drops-on-event/on-target-branch gap as the
               # pull_request case below, hit live 2026-08-24: this flow's on-target-branch
               # ([main]) was silently ignored once the loop-guard CEL line was added, so a
