@@ -3,28 +3,33 @@
 # The downstream consumer of the environment.deployed CDEvent the argocd-outcome-relay
 # forwards (platform/broker/cmd/argocd-outcome-relay) once a cluster-mapped release
 # actually confirms success/failure on its own upper-env cluster - this is what "closes
-# the loop" in a way a human notices, not just a CDEvent landing unseen. Three tasks,
-# deliberately independent of each other (no runAfter): `notify` reuses notify-
-# slack.yaml as-is rather than duplicating its message formatting, `span` sends a real,
-# standalone trace span reporting the outcome (see release-outcome-span.yaml's own
-# header for why it's a separate trace, not appended to the original flow's - added
-# 2026-08-12, a real gap found live: this Pipeline had no tracing task at all before),
-# `update-dora-metrics` calls dora-exporter's own /argocd-outcome endpoint (added
-# 2026-08-22, replacing a direct HTTP call argocd-outcome-relay used to make itself -
-# see update-dora-metrics.yaml's own header for why running it here instead fixed a
-# real MTTR gap, not just moved the call). `release-log` emits one structured record of
-# this release's full outcome - approvers, per-gate results, bypass - into the release
-# log (added 2026-08-23, see release-log-emit.yaml's own header and
-# docs/admin/release-log.md; cluster-mapped releases only, a known scope gap covered in
-# that doc).
+# the loop" in a way a human notices, not just a CDEvent landing unseen. Four tasks:
+# `resolve-release-tracking` reads pr-url/pr-created-at back out of the dev-cluster
+# ConfigMap open-release-pr.yaml wrote at PR-open time (added 2026-08-31 - those two
+# fields used to ride the CDEvent like everything else, via a second git commit on the
+# release PR, but that commit re-triggered every governance gate on the gitops repo a
+# second time on every release; see open-release-pr.yaml's own header). The other three
+# are independent of EACH OTHER (no runAfter among them), but all three depend on
+# resolve-release-tracking implicitly, via its $(tasks.resolve-release-tracking.
+# results.*) references below - no explicit runAfter needed for that, Tekton infers the
+# edge from the result reference: `notify` reuses notify-slack.yaml as-is rather than
+# duplicating its message formatting, `span` sends a real, standalone trace span
+# reporting the outcome (see release-outcome-span.yaml's own header for why it's a
+# separate trace, not appended to the original flow's - added 2026-08-12, a real gap
+# found live: this Pipeline had no tracing task at all before), `update-dora-metrics`
+# calls dora-exporter's own /argocd-outcome endpoint (added 2026-08-22, replacing a
+# direct HTTP call argocd-outcome-relay used to make itself - see
+# update-dora-metrics.yaml's own header for why running it here instead fixed a real
+# MTTR gap, not just moved the call). `release-log` emits one structured record of this
+# release's full outcome - approvers, per-gate results, bypass - into the release log
+# (added 2026-08-23, see release-log-emit.yaml's own header and docs/admin/release-log.md;
+# cluster-mapped releases only, a known scope gap covered in that doc).
 # No resolve-notify-config/clone/workspace needed here (unlike
 # deploy.yaml/release.yaml) - config-json arrives pre-resolved: open-release-pr.yaml
 # base64-encodes it into the PostSync/SyncFail hook Job's own CONFIG_JSON_B64 env var at
 # PR-open time, the hook script forwards it to argocd-outcome-relay, and the relay
 # decodes it straight into the CDEvent's body.subject.content.configJson this Pipeline's
-# own Trigger binds from (see release-outcome-trigger.yaml) - no live fetch, no
-# ConfigMap, no Application-manifest annotation involved (an earlier design used each of
-# those in turn; see docs/multi-cluster.md for why both were replaced).
+# own Trigger binds from (see release-outcome-trigger.yaml).
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -51,9 +56,6 @@ spec:
     - name: git-revision
       type: string
       default: ""
-    - name: pr-url
-      type: string
-      default: ""
     - name: config-json
       type: string
       default: "{}"
@@ -65,13 +67,6 @@ spec:
       type: string
       default: ""
       description: The original flow's own start time (DORA lead-time anchor) - see release-outcome-span.yaml.
-    - name: pr-created-at
-      type: string
-      default: ""
-      description: >-
-        When open-release-pr.yaml's own API call actually created this release PR - the
-        real start anchor for release-outcome-span.yaml's span (falls back to
-        flow-start-time there if empty, for an app onboarded before this field existed).
     - name: finished-at
       type: string
       default: ""
@@ -80,6 +75,21 @@ spec:
         subject.content.finishedAt) - update-dora-metrics's lead-time/MTTR end anchor,
         same field the same-cluster path reads off status.operationState.finishedAt.
   tasks:
+    # pr-url/pr-created-at never round-trip through git or the outcome CDEvent (see
+    # open-release-pr.yaml's own header) - resolved here instead, from the dev-cluster
+    # ConfigMap that Task wrote at PR-open time. No runAfter needed on the three
+    # consumers below - referencing $(tasks.resolve-release-tracking.results.*) already
+    # gives Tekton the dependency edge.
+    - name: resolve-release-tracking
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: resolve-release-tracking }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: chain-id, value: $(params.chain-id) }
+
     - name: notify
       taskRef:
         resolver: cluster
@@ -102,7 +112,7 @@ spec:
         - { name: app-name, value: $(params.app-name) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
-        - { name: pr-url, value: $(params.pr-url) }
+        - { name: pr-url, value: $(tasks.resolve-release-tracking.results.pr-url) }
         - { name: env, value: $(params.env) }
 
     # See release-outcome-span.yaml's own header for why this is a standalone span/
@@ -121,7 +131,7 @@ spec:
         - { name: status, value: $(params.status) }
         - { name: chain-id, value: $(params.chain-id) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: pr-created-at, value: $(params.pr-created-at) }
+        - { name: pr-created-at, value: $(tasks.resolve-release-tracking.results.pr-created-at) }
 
     # See update-dora-metrics.yaml's own header for why this runs as a Task here now,
     # instead of argocd-outcome-relay calling dora-exporter directly.
@@ -156,8 +166,8 @@ spec:
         - { name: status, value: $(params.status) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
-        - { name: pr-url, value: $(params.pr-url) }
+        - { name: pr-url, value: $(tasks.resolve-release-tracking.results.pr-url) }
         - { name: chain-id, value: $(params.chain-id) }
         - { name: flow-start-time, value: $(params.flow-start-time) }
-        - { name: pr-created-at, value: $(params.pr-created-at) }
+        - { name: pr-created-at, value: $(tasks.resolve-release-tracking.results.pr-created-at) }
         - { name: finished-at, value: $(params.finished-at) }

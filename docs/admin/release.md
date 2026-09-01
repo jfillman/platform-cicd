@@ -233,16 +233,24 @@ detail (a live pod-log excerpt), a gate-specific recommendation, and the exact `
 <gate>` command on failure; a short confirmation on success. It edits its own prior
 comment on a gate in place (a hidden `<!-- platform-cicd:gate:<name> -->` marker) rather
 than always appending, so re-verifying an unchanged commit updates the existing comment
-instead of spamming a duplicate. **Real race, found live 2026-08-12**: for a cluster-mapped release,
-`open-release-pr.yaml` opens a release PR with two commits (the promote commit, then a
-second outcome-hooks commit pushed right after - see [multi-cluster.md](multi-cluster.md)),
-and since every commit gets independently re-verified, two check runs for the *same* gate can land close
-enough together that both read "no existing comment" before either posts - two comments,
-not deduped. Fixed without a lock: after posting, re-list this gate's own comments and
-collapse to the single earliest (lowest id) survivor - every racing run computes the
-same decision off the same eventually-consistent list, so they converge regardless of
-which one "wins" (a second run's delete of an already-deleted duplicate is expected and
-tolerated).
+instead of spamming a duplicate. **Real race, found live 2026-08-12**: since every
+commit on a release PR gets independently re-verified, any two check runs for the *same*
+gate landing close enough together (originally: `open-release-pr.yaml`'s own two commits,
+back when it made two - see [multi-cluster.md](multi-cluster.md); now, e.g. a `/retest
+<gate>` racing a webhook redelivery) can both read "no existing comment" before either
+posts - two comments, not deduped. Fixed without a lock: after posting, re-list this
+gate's own comments and collapse to the single earliest (lowest id) survivor - every
+racing run computes the same decision off the same eventually-consistent list, so they
+converge regardless of which one "wins" (a second run's delete of an already-deleted
+duplicate is expected and tolerated).
+
+**Update, 2026-08-31**: `open-release-pr.yaml` now pushes exactly one commit per release
+PR - the second commit (outcome-tracking data, needing the PR's own URL) was found to be
+re-triggering every governance gate a second time on every single release, for zero
+informational gain. `pr-url`/`pr-created-at` are resolved a different way now (a
+dev-cluster ConfigMap, read by `release-outcome-notify.yaml`'s `resolve-release-tracking`
+Task - see multi-cluster.md); this dedup logic stays in place regardless, since the race
+it guards against isn't specific to that removed second commit.
 
 **Break-glass** (decided with the user, 2026-08-05): who can force a release through a
 failing required check, and how it's made visible.

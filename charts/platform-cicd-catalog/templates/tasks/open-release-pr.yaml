@@ -16,13 +16,19 @@
 # ApplicationSet, which also owns that path's ArgoCD Application) - so `cluster` is a
 # required param, not optional; this Task's own scope is just patch-the-image/open-the-PR.
 #
-# A second commit on the same PR branch carries releaseTracking data (relay URL,
-# chain-id, PR url/created-at, etc.) that idp-application's own PostSync/SyncFail hook
-# Jobs read to report DORA/Slack outcomes - those Jobs render as part of the same
-# Application idp's ApplicationSet owns, not a second writer. outcomeRelayURL is looked
-# up live from platform-cicd's own cluster-registry ConfigMap via a narrow get-only Role;
-# this Task still never calls the upper cluster's API directly, preserving the "only a
-# reviewed git commit crosses from dev to an upper cluster" boundary.
+# Exactly ONE commit per release PR. releaseTracking data (relay URL, chain-id, etc.)
+# that idp-application's own PostSync/SyncFail hook Jobs read to report DORA/Slack
+# outcomes rides in the SAME commit as the image-tag patch - every field is known before
+# the PR exists, except prUrl/prCreatedAt (the PR's own URL obviously can't be committed
+# before the PR is created). Those two go to a short-lived ConfigMap on THIS cluster
+# instead of a second git commit - see the note lower in this file. A second commit used
+# to carry them, but that meant every governance gate on the gitops repo re-ran in full a
+# second time on every single release (found live 2026-08-31: doubled Check Runs,
+# doubled Trivy re-scans, for zero informational gain - the two commits never differed in
+# anything those gates inspect). outcomeRelayURL is looked up live from platform-cicd's
+# own cluster-registry ConfigMap via a narrow get-only Role; this Task still never calls
+# the upper cluster's API directly, preserving the "only a reviewed git commit crosses
+# from dev to an upper cluster" boundary.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -128,6 +134,12 @@ spec:
           value: $(params.flow-start-time)
         - name: CONFIG_JSON
           value: $(params.config-json)
+        - name: NAMESPACE
+          # For the release-tracking ConfigMap (this cluster, this Application's own
+          # namespace) - $(context.taskRun.namespace) is the correct Task-level
+          # equivalent of $(context.pipelineRun.namespace), which does not resolve here.
+          # Same gotcha comment-pr-check-result.yaml already documents.
+          value: $(context.taskRun.namespace)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -160,9 +172,38 @@ spec:
         manifest="${CLUSTER}/${ENV}/values.yaml"
         image_repo="${IMAGE_REF%:*}"
         image_tag="${IMAGE_REF##*:}"
+
+        # Release-tracking fields resolved up front, before the (only) commit - every
+        # one of these is known without the PR existing. outcomeRelayURL is resolved
+        # live from platform-cicd's own cluster-registry ConfigMap (platform-system) via
+        # a get-only Role scoped to this ConfigMap only. A hard failure here (not
+        # best-effort) is deliberate: CLUSTER is already required/validated above, so a
+        # missing registry entry means this app's cluster mapping is genuinely
+        # misconfigured - better to fail before opening a PR than open one with silently
+        # broken outcome reporting.
+        registry_entry="$(kubectl get configmap cluster-registry -n platform-system -o jsonpath="{.data.${CLUSTER}}")"
+        if [[ -z "${registry_entry}" ]]; then
+          echo "error: cluster '${CLUSTER}' has no entry in the platform-cicd cluster-registry ConfigMap (platform-system, charts/platform-cicd-control-plane's clusters:) - can't resolve outcomeRelayURL, so release-tracking can't be wired up for this release. A platform admin needs to add it before this app can release to ${ENV}." >&2
+          exit 1
+        fi
+        registry_relay_url="$(jq -r '.outcomeRelayURL' <<<"${registry_entry}")"
+
+        # Base64, not raw JSON - the one field here that can contain quotes/braces;
+        # sidesteps yq mis-escaping it into the surrounding YAML. Decoded only at the
+        # end, by catalog/lib/argocd-outcome-hook.sh.
+        config_json_b64="$(printf '%s' "${CONFIG_JSON}" | base64 | tr -d '\n')"
+
         yq -i -e "
           .rollout.image.repository = \"${image_repo}\" |
-          .rollout.image.tag = \"${image_tag}\"
+          .rollout.image.tag = \"${image_tag}\" |
+          .releaseTracking.relayUrl = \"${registry_relay_url}\" |
+          .releaseTracking.cluster = \"${CLUSTER}\" |
+          .releaseTracking.appNamespace = \"${APP_NAMESPACE}\" |
+          .releaseTracking.gitUrl = \"${GIT_URL}\" |
+          .releaseTracking.gitRevision = \"${GIT_REVISION}\" |
+          .releaseTracking.flowStartTime = \"${FLOW_START_TIME}\" |
+          .releaseTracking.chainId = \"${CHAIN_ID}\" |
+          .releaseTracking.configJsonB64 = \"${config_json_b64}\"
         " "${manifest}"
 
         git config user.name "platform-cicd release automation"
@@ -217,40 +258,28 @@ spec:
         # for one timestamp.
         pr_created_at="$(date -u +"%Y-%m-%dT%H:%M:%S.%NZ")"
 
-        # Second commit, same branch: release-tracking data for idp-application's own
-        # PostSync/SyncFail hook Jobs. Deliberately after the PR above, since
-        # pr_url/pr_created_at don't exist until it does - GitHub just adds it to the
-        # already-open PR.
-        #
-        # outcomeRelayURL is resolved live from platform-cicd's own cluster-registry
-        # ConfigMap (platform-system) via a get-only Role scoped to this ConfigMap only.
-        registry_entry="$(kubectl get configmap cluster-registry -n platform-system -o jsonpath="{.data.${CLUSTER}}")"
-        if [[ -z "${registry_entry}" ]]; then
-          echo "error: cluster '${CLUSTER}' has no entry in the platform-cicd cluster-registry ConfigMap (platform-system, charts/platform-cicd-control-plane's clusters:) - can't resolve outcomeRelayURL, so release-tracking can't be wired up for this release. The PR above was still opened successfully." >&2
-          exit 1
+        # prUrl/prCreatedAt genuinely can't be known before the PR exists, and writing
+        # them via a second git commit would re-trigger every governance gate on this PR
+        # a second time (see this file's own header). A short-lived ConfigMap on THIS
+        # (dev) cluster, keyed by chain-id, hands them to release-outcome-notify.yaml's
+        # resolve-release-tracking Task instead - that Task runs here too, so this never
+        # becomes a cross-cluster call. Self-cleaned on read (see that Task); the
+        # pr-namespace-ttl-sweep CronJob is the backstop for a release whose PR never
+        # merges, so that Task never runs. --dry-run=client|apply, not a raw heredoc -
+        # see the pr_body_text comment above on why a heredoc at column 0 breaks this
+        # Task's own surrounding YAML.
+        if [[ -n "${CHAIN_ID}" ]]; then
+          kubectl create configmap "release-tracking-${CHAIN_ID}" \
+            -n "${NAMESPACE}" \
+            --from-literal="prUrl=${pr_url}" \
+            --from-literal="prCreatedAt=${pr_created_at}" \
+            --dry-run=client -o yaml \
+            | kubectl apply -f -
+          kubectl label configmap "release-tracking-${CHAIN_ID}" -n "${NAMESPACE}" \
+            "platform.io/subcomponent=release-tracking" --overwrite
+        else
+          echo "warning: no chain-id for this release - pr-url/pr-created-at won't reach release-outcome-notify.yaml (app onboarded before chain-id existed, or a manual/direct invocation)." >&2
         fi
-        registry_relay_url="$(jq -r '.outcomeRelayURL' <<<"${registry_entry}")"
-
-        # Base64, not raw JSON - the one field here that can contain quotes/braces;
-        # sidesteps yq mis-escaping it into the surrounding YAML. Decoded only at the
-        # end, by catalog/lib/argocd-outcome-hook.sh.
-        config_json_b64="$(printf '%s' "${CONFIG_JSON}" | base64 | tr -d '\n')"
-
-        yq -i -e "
-          .releaseTracking.relayUrl = \"${registry_relay_url}\" |
-          .releaseTracking.cluster = \"${CLUSTER}\" |
-          .releaseTracking.appNamespace = \"${APP_NAMESPACE}\" |
-          .releaseTracking.gitUrl = \"${GIT_URL}\" |
-          .releaseTracking.gitRevision = \"${GIT_REVISION}\" |
-          .releaseTracking.flowStartTime = \"${FLOW_START_TIME}\" |
-          .releaseTracking.chainId = \"${CHAIN_ID}\" |
-          .releaseTracking.prUrl = \"${pr_url}\" |
-          .releaseTracking.prCreatedAt = \"${pr_created_at}\" |
-          .releaseTracking.configJsonB64 = \"${config_json_b64}\"
-        " "${manifest}"
-        git add "${manifest}"
-        git commit --quiet -m "Add release-tracking outcome data for ${ENV} (see ${pr_url})"
-        git push --quiet "${clone_url}" "${branch}"
 
         echo "${pr_url}" | tee "$(results.pr-url.path)"
         echo -n "${pr_created_at}" | tee "$(results.pr-created-at.path)"

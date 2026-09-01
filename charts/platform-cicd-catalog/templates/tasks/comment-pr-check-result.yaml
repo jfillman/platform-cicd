@@ -211,13 +211,15 @@ spec:
             -d "$(jq -n --arg body "${body}" '{body: $body}')")"
           echo "posted new PR comment: $(jq -r '.html_url' <<<"${comment_response}")"
 
-          # Self-heal a real race: open-release-pr.yaml pushes two commits to the same PR
-          # in quick succession, and since every commit is independently re-verified, two
-          # check runs for the same gate can both read "no existing comment" before either
-          # posts - two comments with the same marker. No lock needed: re-list this gate's
-          # comments now and collapse to the single earliest (lowest id) survivor. Every
-          # racing run converges on the same decision off the same eventually-consistent
-          # list; deleting an already-deleted duplicate is expected and tolerated (--fail
+          # Self-heal a real race: since every commit on a release PR is independently
+          # re-verified, ANY two check runs for the same gate landing close together
+          # (e.g. a `/retest <gate>` racing a webhook redelivery of the original run, or -
+          # before 2026-08-31 - open-release-pr.yaml's own two commits, back when it made
+          # two) can both read "no existing comment" before either posts - two comments
+          # with the same marker. No lock needed: re-list this gate's comments now and
+          # collapse to the single earliest (lowest id) survivor. Every racing run
+          # converges on the same decision off the same eventually-consistent list;
+          # deleting an already-deleted duplicate is expected and tolerated (--fail
           # dropped on purpose here).
           dup_ids="$(curl --silent --show-error --max-time 10 \
             -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \

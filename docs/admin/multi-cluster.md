@@ -156,17 +156,21 @@ see the feedback-relay section below for the full mechanism.
 still a deliberate no-op for a cluster-mapped env - see that Task's own `cluster` param
 - these hook Jobs are what replaces it.
 
-**`deployment.yaml` itself also carries a small set of tracking annotations** (added
-2026-08-11, at the user's request) - `platform.io/dora-{git-revision,image,
-flow-start-time,gitops-pr-url}`. Don't confuse this with the paragraph above: this is
-pure operator visibility (`kubectl describe deployment`/`get -o yaml` on the live
-upper-env cluster, no cross-referencing pipeline logs needed to see which build produced
-what's running), not part of the outcome-reporting mechanism - the hook Jobs carry their
-own copy of this data independently, and nothing reads these annotations back. Since a
-GitHub PR's own URL doesn't exist until after the branch is pushed, this - and the RBAC/
-hook Jobs, which also want the PR URL now (see below) - land in a SECOND commit, pushed
-right after the PR is opened, on the same branch/PR. Ordinary on GitHub's side: just one
-more commit already part of the same open PR, nothing to re-open or re-review structurally.
+**Historical, no longer live**: `deployment.yaml` used to also carry a small set of
+operator-visibility tracking annotations (added 2026-08-11, at the user's request) -
+`platform.io/dora-{git-revision,image,flow-start-time,gitops-pr-url}` -
+(`kubectl describe deployment` on the live upper-env cluster, no cross-referencing
+pipeline logs needed to see which build produced what's running). That mechanism doesn't
+exist any more: it targeted a raw `deployment.yaml`, from before releases moved onto the
+`idp-application` Helm chart's `<cluster>/<env>/values.yaml`, and was never ported over -
+this doc simply went stale rather than the feature being deliberately dropped. Because
+`gitops-pr-url` was one of those annotations, it was also the reason (alongside the
+release-tracking hook-Job fields below) that `open-release-pr.yaml` used to push a SECOND
+commit to every release PR, after opening it, once the PR's own URL existed. That second
+commit was removed 2026-08-31 - see "pr-url/pr-created-at don't round-trip through git"
+below - since it meant every governance gate on the gitops repo re-ran in full a second
+time on every single release, for zero informational gain (the two commits never
+differed in anything those gates inspect).
 
 A real, pre-existing gap surfaced and fixed while building this: `app-type`
 (platformIdentity.type, needed for the `<app-type>-<app-name>-<env>` namespace
@@ -272,14 +276,10 @@ plain env vars, `CONFIG_JSON_B64` (base64, the one field that's an arbitrary JSO
 rather than a flat string - sidesteps any risk of the printf-per-line manifest
 generation mis-escaping it) the same way. `PHASE` is baked in per-hook-type
 (`Succeeded`/`Failed`) rather than discovered live - which hook ran already tells you
-the outcome. Two more fields joined this list 2026-08-12, both optional (`:-`, not
-`:?`, in the hook script - an app onboarded before either existed must keep releasing
-without them): `CHAIN_ID` (this flow's own chain-id, threaded from
-`release.yaml`'s `start-flow` result - see "The outcome span" below for what it's
-for) and `PR_CREATED_AT` (the wall-clock moment this Task's own GitHub PR-creation API
-call returned, captured immediately after `pr_url` is resolved - the real start anchor
-for that same span, deliberately NOT `FLOW_START_TIME`, see below for why). The hook
-script itself
+the outcome. `CHAIN_ID` (this flow's own chain-id, threaded from `release.yaml`'s
+`start-flow` result - see "The outcome span" below for what it's for) joined this list
+2026-08-12, optional (`:-`, not `:?`, in the hook script - an app onboarded before it
+existed must keep releasing without it). The hook script itself
 (`catalog/lib/argocd-outcome-hook.sh`, baked into the toolbox image, not embedded in the
 generated Job YAML - avoids re-hitting the same YAML-block-scalar-indentation class of
 bug documented below) does exactly two live things: read a small per-app,
@@ -287,6 +287,24 @@ hand-provisioned `platform-outcome-relay-token` Secret in its OWN namespace (RBA
 delivered alongside the hooks, see `platform-outcome-rbac.yaml`), and `curl` the relay -
 `RELAY_URL` itself also baked in, sourced from the cluster registry's new
 `outcomeRelayURL` field.
+
+**`pr-url`/`pr-created-at` don't round-trip through git, unlike everything else above**
+(changed 2026-08-31). They briefly joined the baked-in-fields list the same way
+`CHAIN_ID` did (`PR_CREATED_AT` on 2026-08-12), each committed via a second commit pushed
+right after the PR opened - the PR's own URL obviously can't be known before it exists.
+That worked, but it meant every governance gate on the gitops repo (`sast`/`sbom`/
+`image-scan`/`provenance`/etc., see `docs/admin/release-guardrails.md`) independently
+re-verified the PR's HEAD a second time on every single release, since per-commit
+verification is deliberate (see `pull-request-sast.yaml`'s own CEL comment) - doubled
+Check Runs and doubled real work (e.g. `image-scan`'s live Trivy re-scan) against an
+image/commit that never actually changed between the two commits. Fixed by dropping the
+second commit entirely: `open-release-pr.yaml` now writes `pr-url`/`pr-created-at` to a
+short-lived `release-tracking-<chain-id>` ConfigMap on the DEV cluster (the same cluster
+that Task already runs on - never a cross-cluster call) instead, and
+`release-outcome-notify.yaml`'s `resolve-release-tracking` Task reads (and deletes) it by
+chain-id when the outcome CDEvent eventually arrives, rather than expecting the CDEvent
+itself to carry those two fields. `pr-namespace-ttl-sweep` is the backstop for a release
+whose PR never merges (so that Task never runs to consume/delete the ConfigMap).
 
 **A new per-app Trigger** (`charts/platform-cicd-app/templates/triggers/
 release-outcome-trigger.yaml`, rendered only for apps with a cluster-mapped upper env)
@@ -557,6 +575,14 @@ PR URL was known), the live Deployment on `kind-prod` carried all four
 `platform.io/dora-*` annotations with correct values including the real PR URL, and
 `release-outcome-notify`'s own `notify-slack` TaskRun actually posted (not skipped) with
 `pr-url` resolved correctly through the full relay/CDEvent/Trigger chain.
+
+Historical as of 2026-08-31: the deployment.yaml annotations described here didn't
+survive the later migration onto the `idp-application` Helm chart (see the "Historical,
+no longer live" note above), and the two-commit restructuring itself was removed the
+same day the redundant-check-run cost it caused was found - see "pr-url/pr-created-at
+don't round-trip through git" above for the replacement mechanism. `pr-url` still
+resolves correctly through `notify-slack`/`release-log-emit`, just via a ConfigMap now,
+not a second commit.
 
 Remaining, explicitly deferred: self-service onboarding tooling for additional
 tenants/clusters, real TLS/ingress hardening for the relay (same-host podman

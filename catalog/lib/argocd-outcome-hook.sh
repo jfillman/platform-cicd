@@ -32,10 +32,14 @@ set -euo pipefail
 : "${PHASE:?PHASE must be set}"
 : "${POD_NAMESPACE:?POD_NAMESPACE must be set - downward API, set on the hook Job spec}"
 
-# CHAIN_ID and PR_CREATED_AT are optional, unlike the required fields above: both feed
-# release-outcome-span.yaml's Tempo correlation (chain-id tagging, PR-creation as the
-# real start anchor, falling back to flow-start-time if empty), and making them
-# required would break every release from an app onboarded before either field existed.
+# CHAIN_ID is optional, unlike the required fields above - it feeds
+# release-outcome-span.yaml's Tempo correlation, and making it required would break
+# every release from an app onboarded before it existed. PR_URL/PR_CREATED_AT used to be
+# read here too, but never round-trip through git/this hook Job any more - they can't be
+# known at PR-open commit time (the PR doesn't exist yet), and a second commit to add
+# them once it did re-triggered every governance gate on the gitops repo a second time
+# on every release. release-outcome-notify.yaml's resolve-release-tracking Task reads
+# them straight from a dev-cluster ConfigMap instead - see open-release-pr.yaml's header.
 
 # Shared per-cluster secret, hand-provisioned once per app namespace on THIS cluster -
 # never committed to git, never passed through open-release-pr.yaml (which runs on the
@@ -97,9 +101,7 @@ payload="$(jq -n \
   --arg gitRevision "${GIT_REVISION:-}" \
   --arg flowStartTime "${FLOW_START_TIME:-}" \
   --arg finishedAt "${finished_at}" \
-  --arg prUrl "${PR_URL:-}" \
   --argjson configJson "${config_json}" \
-  --arg prCreatedAt "${PR_CREATED_AT:-}" \
   '{
     context: {
       version: "0.4.1",
@@ -126,9 +128,7 @@ payload="$(jq -n \
         gitRevision: $gitRevision,
         flowStartTime: $flowStartTime,
         finishedAt: $finishedAt,
-        prUrl: $prUrl,
-        configJson: ($configJson | tojson),
-        prCreatedAt: $prCreatedAt
+        configJson: ($configJson | tojson)
       }
     },
     customData: {

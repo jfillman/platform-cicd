@@ -38,10 +38,20 @@ rules:
     resources: ["secrets"]
     resourceNames: ["app-secrets"]
     verbs: ["get"]
+  # release-tracking ConfigMaps (open-release-pr.yaml writes release-tracking-<chain-id>
+  # holding pr-url/pr-created-at, since those can't be committed to git before the PR
+  # exists - see that Task's own header; release-outcome-notify.yaml's
+  # resolve-release-tracking Task reads + deletes it). Can't be resourceNames-restricted
+  # like the app-secrets grant above - the name is dynamic per chain-id - so this is
+  # genuinely configmaps-wide within this one namespace, not just one object.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "patch", "delete"]
   # Deliberately no apps/deployments rule (that's deploy-rbac.yaml, a peer namespace),
-  # no impersonate, no wildcards, no cluster-scoped rules - this is the entire blast
-  # radius of a compromised pipeline-runner identity (plus the narrowly-scoped
-  # cross-namespace Testkube grants in templates/testkube/rbac-and-secret.yaml).
+  # no impersonate, no wildcards, no cluster-scoped rules - this plus the configmaps
+  # grant above is the entire blast radius of a compromised pipeline-runner identity
+  # (plus the narrowly-scoped cross-namespace Testkube grants in
+  # templates/testkube/rbac-and-secret.yaml).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
