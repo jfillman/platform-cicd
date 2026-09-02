@@ -185,3 +185,53 @@ anyway. Plant a freshly-generated value as `github-webhook-secret` in
 `platform-cicd-kind-dev`'s Infisical project AND set the same value on the GitHub App's
 own Settings > Webhook secret field - same "manual by design" posture as the id/private
 key above, and the two sides (Infisical, GitHub) have to actually agree.
+
+## GitHub credentials in this platform
+
+A live audit (2026-09-01, both real clusters, hash-compared where a value's identity
+mattered so no token was ever actually exposed) found this platform depends on one
+shared GitHub App plus several independent classic PATs - worth a single reference
+here since they'd otherwise only be discoverable by reading every consumer's own
+manifest by hand.
+
+**The shared platform GitHub App** - one App ID + private key, reused as-is by three
+independent consumers (confirmed live: all three `Secret`s carry byte-identical key
+material):
+
+| Consumer | Secret | Purpose |
+|---|---|---|
+| ArgoCD (dev cluster only) | `github-app-repo-creds` (`argocd`/`argocd-apps`) | Private-repo git sync |
+| `platform-cicd` control plane | `github-app-creds` (`platform-system`) | `token-review-interceptor`'s installation-token minting (release PRs, onboarding file delivery, PR-generator-token refresh) |
+| Pipelines-as-Code | `pipelines-as-code-secret` (`tekton-pipelines`) | Webhook receipt + git operations; also carries `webhook.secret`, a separate HMAC value the other two consumers never needed |
+
+All three sync from the same three Infisical keys (`github-application-id`/
+`github-private-key`/`github-installation-id`) via independent `ExternalSecret`s - see
+`pipelines-as-code-secret`'s own history above for why that one in particular is a
+second, independently-synced copy rather than a shared `Secret` reference.
+
+**Independent classic PATs** - each a distinct credential, not derived from the App
+above, and none currently ESO-managed except where noted:
+
+| Secret | Scope | Purpose | ESO-managed? |
+|---|---|---|---|
+| `provider-github-creds` (`crossplane-system`) | `repo` + `delete_repo` | Crossplane `provider-upjet-github` - repo create/delete for the Bootstrap-tier XRDs. A GitHub App can't create repos on a personal account, hence a raw PAT specifically here | Yes |
+| `registry-credentials-dockerconfigjson` (Infisical key) | `read:packages`/`write:packages` | GHCR image pull, every tenant namespace, every cluster - see the dedicated section above | Yes |
+| `<app>-pr-generator-token` (one per onboarded app, `app-<name>-cicd`) | undocumented upstream, presumed `repo` + PR-write | ArgoCD `ApplicationSet`'s `pullRequest.github.tokenRef` for PR-based ephemeral environments | No - hand-minted per app, deliberately (see below) |
+| `argocd-repo-creds-<you>` (upper clusters, e.g. kind-prod) | classic PAT, username+password shape | ArgoCD's private-repo git sync, on any cluster not reusing the shared App above | No |
+| `backstage-github-token` | `repo` only (no `delete_repo`) | Backstage scaffolder's `publish:github:pull-request` action | No |
+| `github-mcp-token` (`holmesgpt`) | undocumented | GitHub MCP server token for HolmesGPT AI-triage | No |
+
+**Known gap, not yet closed**: only dev-hosted clusters reuse the shared GitHub App for
+ArgoCD repo access. Upper clusters (kind-prod) still carry their own standalone
+`argocd-repo-creds-<you>` PAT instead - real drift between the two mechanisms doing the
+same job, not an intentional design split. Migrating upper clusters onto the shared App
+would let them drop this PAT entirely.
+
+**Confirmed live, not assumed**: the six `<app>-pr-generator-token` values are six
+genuinely distinct PATs (hash-compared, never decoded) - not one shared token copied
+per app. `docs/admin/ephemeral-environments.md` describes these as short-lived,
+GitHub-App-derived installation tokens refreshed automatically; the real, currently
+deployed mechanism is static, hand-minted PATs instead - a prior review of minting
+these via ESO's Webhook generator concluded the persisted-credential tradeoff wasn't
+worth it at this call frequency, so treat these six as long-lived manual credentials to
+track, not auto-rotating ones.
