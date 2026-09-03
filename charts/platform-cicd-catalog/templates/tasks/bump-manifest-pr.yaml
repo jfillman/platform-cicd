@@ -106,7 +106,19 @@ spec:
         # shape, not the split repository/tag fields idp-application's Helm values use
         # (see open-release-pr.yaml). First container only - every hand-deployed
         # singleton this Task targets today has exactly one.
-        yq -i -e ".spec.template.spec.containers[0].image = \"${IMAGE_REF}\"" "${MANIFEST_PATH}"
+        #
+        # select(.kind == "Deployment") is load-bearing, not decorative: these target
+        # files are multi-document streams (e.g. backstage's deployment.yaml bundles
+        # Namespace + Deployment + Service in one file). yq -i applies an unscoped
+        # path assignment to every document in the stream, and since Namespace/Service
+        # don't have .spec.template.spec.containers, yq's assignment auto-vivifies
+        # that whole path onto them too - a field the k8s API server silently prunes
+        # on apply, which ArgoCD then reports as permanent OutOfSync drift (the git
+        # manifest carries the field forever, the live object never does). Hit for
+        # real on gitops-cluster-kind-man's backstage bump 2026-09-01 (commit
+        # b56b807) - confirmed live via `yq eval-all` that the unscoped form touches
+        # all three documents, and that this scoped form touches only the Deployment.
+        yq -i -e "(select(.kind == \"Deployment\") | .spec.template.spec.containers[0].image) = \"${IMAGE_REF}\"" "${MANIFEST_PATH}"
 
         git config user.name "platform-cicd release automation"
         git config user.email "release@platform-cicd.invalid"
