@@ -83,7 +83,7 @@ spec:
         repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
         token="$(github_app_installation_token "${owner}" "${repo}")"
 
-        pr_json="$(curl --fail --silent --show-error \
+        pr_json="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
           "https://api.github.com/repos/${owner}/${repo}/pulls/${PR_NUMBER}")"
         head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
@@ -91,7 +91,7 @@ spec:
         pr_title="$(jq -r '.title' <<<"${pr_json}")"
         pr_url="$(jq -r '.html_url' <<<"${pr_json}")"
 
-        checks_json="$(curl --fail --silent --show-error \
+        checks_json="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
           "https://api.github.com/repos/${owner}/${repo}/commits/${head_sha}/check-runs")"
 
@@ -145,7 +145,7 @@ spec:
           }
           ')"
 
-        curl --fail --silent --show-error --max-time 10 \
+        curl --fail --silent --show-error --max-time 10 --retry 3 --retry-connrefused \
           -X POST "${WEBHOOK_URL}" \
           -H 'Content-Type: application/json' \
           -d "${payload}"

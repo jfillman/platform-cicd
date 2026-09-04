@@ -144,6 +144,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         if [[ -z "${CLUSTER}" ]]; then
           echo "error: cluster is required - gitops-${APP_NAME}'s layout is <cluster>/<env>/values.yaml, there's no manifest path to write without one. Set deploy.upperEnvironments' object form ({ name: ${ENV}, cluster: <cluster-name> }) in this app's cicd.yaml." >&2
@@ -157,12 +158,49 @@ spec:
 
         token="$(github_app_installation_token "${owner}" "${gitops_repo}")"
 
+        # Deliberately NOT timestamped (unlike this Task's original version) - a
+        # deterministic branch name per (app, revision) is what makes the idempotency
+        # check below actually work. A retried run (Tekton task retry, or a re-triggered
+        # PipelineRun after a transient GitHub error) must compute the same branch name
+        # as the run it's retrying, or it can never find that run's still-open PR and
+        # just opens a duplicate release PR every time instead.
+        branch="release-${GIT_REVISION:0:8}"
+
+        # Check for an already-open PR from this exact branch before doing any work -
+        # this Task's own result description has always claimed "(or already-open, on
+        # retry)", but nothing enforced that until now (the old timestamped branch name
+        # made every retry look like a brand new release). head=owner:branch scopes the
+        # search to this repo's own branch, not every fork.
+        existing_pr="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
+          -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/${owner}/${gitops_repo}/pulls?head=${owner}:${branch}&state=open")"
+        pr_url="$(jq -r '.[0].html_url // empty' <<<"${existing_pr}")"
+        if [[ -n "${pr_url}" ]]; then
+          echo "release PR for ${branch} is already open (retry) - reusing it instead of opening a duplicate: ${pr_url}"
+          # GitHub's own created_at for the existing PR, not a fresh `date -u` - this IS
+          # a retry, so the original PR's real creation time is the correct lead-time
+          # anchor, not this attempt's (later) wall-clock time.
+          pr_created_at="$(jq -r '.[0].created_at' <<<"${existing_pr}")"
+          if [[ -n "${CHAIN_ID}" ]]; then
+            kubectl create configmap "release-tracking-${CHAIN_ID}" \
+              -n "${NAMESPACE}" \
+              --from-literal="prUrl=${pr_url}" \
+              --from-literal="prCreatedAt=${pr_created_at}" \
+              --dry-run=client -o yaml \
+              | kubectl apply -f -
+            kubectl label configmap "release-tracking-${CHAIN_ID}" -n "${NAMESPACE}" \
+              "platform.io/subcomponent=release-tracking" --overwrite
+          fi
+          echo "${pr_url}" | tee "$(results.pr-url.path)"
+          echo -n "${pr_created_at}" | tee "$(results.pr-created-at.path)"
+          exit 0
+        fi
+
         workdir="$(mktemp -d)"
         clone_url="https://x-access-token:${token}@github.com/${owner}/${gitops_repo}.git"
-        git clone --quiet "${clone_url}" "${workdir}/repo"
+        with_retry 3 -- git clone --quiet "${clone_url}" "${workdir}/repo"
         cd "${workdir}/repo"
 
-        branch="release-${GIT_REVISION:0:8}-$(date +%s)"
         git checkout -b "${branch}"
 
         # <cluster>/<env>/values.yaml - idp-application's Helm values (scaffolded by
@@ -218,7 +256,13 @@ spec:
         commit_message="$(printf 'Release: promote %s to %s @ %s\n\nX-App-Repo: %s\nX-App-Commit: %s' \
           "${APP_NAME}" "${ENV}" "${IMAGE_REF}" "${GIT_URL}" "${GIT_REVISION}")"
         git commit --quiet -am "${commit_message}"
-        git push --quiet "${clone_url}" "${branch}"
+        # --force is safe/correct here, not just convenient: this branch name is
+        # deterministic and exclusively owned by this automation (see above), so the
+        # only way a remote branch with this exact name already exists is a stale
+        # leftover from an earlier attempt at this same (app, revision) pair - one this
+        # run's fresh commit should simply replace, not be rejected by as a
+        # non-fast-forward push.
+        with_retry 3 -- git push --quiet --force "${clone_url}" "${branch}"
 
         # Field vocabulary/ordering matches the shared design language used in Slack
         # notifications (notify-slack.yaml), in GitHub-flavored markdown here. No color
@@ -248,7 +292,7 @@ spec:
           --arg base "main" \
           '{title: $title, body: $body, head: $head, base: $base}')"
 
-        pr_response="$(curl --fail --silent --show-error \
+        pr_response="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -X POST -H "Authorization: Bearer ${token}" \
           -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
           "https://api.github.com/repos/${owner}/${gitops_repo}/pulls" \

@@ -235,7 +235,7 @@ spec:
               }
               ')"
 
-            curl --fail --silent --show-error --max-time 10 \
+            curl --fail --silent --show-error --max-time 10 --retry 3 --retry-connrefused \
               -X POST "${WEBHOOK_URL}" \
               -H 'Content-Type: application/json' \
               -d "${payload}"

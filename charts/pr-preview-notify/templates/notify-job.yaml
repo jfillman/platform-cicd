@@ -124,19 +124,19 @@ spec:
               marker="<!-- platform-cicd:preview-env -->"
               body="${marker}"$'\n'"${body}"
 
-              existing_comment_id="$(curl --fail --silent --show-error --max-time 10 \
+              existing_comment_id="$(curl --fail --silent --show-error --max-time 10 --retry 3 --retry-connrefused \
                 -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/${PR_NUMBER}/comments?per_page=100" \
                 | jq -r --arg marker "${marker}" '[.[] | select(.body | startswith($marker))][0].id // empty')"
 
               if [[ -n "${existing_comment_id}" ]]; then
-                curl --fail --silent --show-error --max-time 10 -o /dev/null \
+                curl --fail --silent --show-error --max-time 10 --retry 3 --retry-connrefused -o /dev/null \
                   -X PATCH -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/comments/${existing_comment_id}" \
                   -d "$(jq -n --arg body "${body}" '{body: $body}')"
                 echo "updated existing preview-env PR comment ${existing_comment_id}"
               else
-                curl --fail --silent --show-error --max-time 10 -o /dev/null \
+                curl --fail --silent --show-error --max-time 10 --retry 3 --retry-connrefused -o /dev/null \
                   -X POST -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/${PR_NUMBER}/comments" \
                   -d "$(jq -n --arg body "${body}" '{body: $body}')"
@@ -145,7 +145,7 @@ spec:
                 # Self-heal the same race comment-pr-check-result.yaml's own header
                 # documents: collapse to the earliest (lowest id) survivor if two syncs
                 # both saw "no existing comment" before either posted.
-                dup_ids="$(curl --silent --show-error --max-time 10 \
+                dup_ids="$(curl --silent --show-error --max-time 10 --retry 3 --retry-connrefused \
                   -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/${PR_NUMBER}/comments?per_page=100" \
                   | jq -r --arg marker "${marker}" '[.[] | select(.body | startswith($marker))] | sort_by(.id) | .[1:][].id' \
@@ -153,7 +153,7 @@ spec:
                 while IFS= read -r dup_id; do
                   [[ -z "${dup_id}" ]] && continue
                   echo "collapsing duplicate preview-env comment ${dup_id}"
-                  curl --silent --show-error --max-time 10 -o /dev/null \
+                  curl --silent --show-error --max-time 10 --retry 3 --retry-connrefused -o /dev/null \
                     -X DELETE -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
                     "https://api.github.com/repos/${GITHUB_OWNER}/${APP_REPO_NAME}/issues/comments/${dup_id}" || true
                 done <<<"${dup_ids}"

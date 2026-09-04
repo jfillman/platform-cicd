@@ -60,6 +60,7 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+        source "${PLATFORM_LIB}/retry.sh"
         if [[ "$(workspaces.source.bound)" == "true" ]]; then
           WS="$(workspaces.source.path)"
           CONFIG_FILE="${WS}/cicd.yaml"
@@ -68,7 +69,7 @@ spec:
             # UID, so git's "dubious ownership" check refuses to operate on it without
             # this explicit exception.
             git config --global --add safe.directory "${WS}"
-            git clone --quiet '$(params.git-url)' "${WS}"
+            with_retry 3 -- git clone --quiet '$(params.git-url)' "${WS}"
             git -C "${WS}" checkout --quiet '$(params.git-revision)'
           fi
           if [[ -f "${CONFIG_FILE}" ]]; then

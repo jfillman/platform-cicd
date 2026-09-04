@@ -127,7 +127,7 @@ spec:
         pr_number="$(echo "${PR_URL}" | sed -E 's#.*/pull/([0-9]+).*#\1#')"
         token="$(github_app_installation_token "${owner}" "${repo}")"
 
-        pr_json="$(curl --fail --silent --show-error \
+        pr_json="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
           "https://api.github.com/repos/${owner}/${repo}/pulls/${pr_number}")"
         head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
@@ -135,12 +135,12 @@ spec:
         merged_by="$(jq -r '.merged_by.login // "unknown"' <<<"${pr_json}")"
         pr_title="$(jq -r '.title' <<<"${pr_json}")"
 
-        reviews_json="$(curl --fail --silent --show-error \
+        reviews_json="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
           "https://api.github.com/repos/${owner}/${repo}/pulls/${pr_number}/reviews")"
         approvers="$(jq -r '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(",")' <<<"${reviews_json}")"
 
-        checks_json="$(curl --fail --silent --show-error \
+        checks_json="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
           "https://api.github.com/repos/${owner}/${repo}/commits/${head_sha}/check-runs")"
 

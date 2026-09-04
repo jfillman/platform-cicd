@@ -84,6 +84,7 @@ COPY --from=yajsv-build /go/bin/yajsv /usr/local/bin/yajsv
 COPY catalog/lib/otel.sh /opt/platform/lib/otel.sh
 COPY catalog/lib/cdevents.sh /opt/platform/lib/cdevents.sh
 COPY catalog/lib/github-app.sh /opt/platform/lib/github-app.sh
+COPY catalog/lib/retry.sh /opt/platform/lib/retry.sh
 COPY catalog/lib/argocd-outcome-hook.sh /opt/platform/lib/argocd-outcome-hook.sh
 COPY catalog/lib/build-agents.env /opt/platform/lib/build-agents.env
 # Executed directly as a Job command (ArgoCD PostSync/SyncFail hook), unlike the other

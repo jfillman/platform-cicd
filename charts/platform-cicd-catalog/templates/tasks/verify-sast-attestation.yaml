@@ -55,8 +55,8 @@ spec:
         rest="${IMAGE_REF#*/}"
         repo="${rest%:*}"
         tag="${rest##*:}"
-        token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
-        digest="$(curl -fsSL -D - -o /dev/null \
+        token="$(curl -fsSL --retry 3 --retry-connrefused --max-time 15 "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+        digest="$(curl -fsSL -D - -o /dev/null --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" \
           -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
           "https://${registry}/v2/${repo}/manifests/${tag}" \
@@ -113,9 +113,9 @@ spec:
             sig_b64="$(jq -r '.dsseEnvelope.signatures[0].sig' <<<"${line}")"
           else
             if [[ -z "${att_token}" ]]; then
-              att_token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+              att_token="$(curl -fsSL --retry 3 --retry-connrefused --max-time 15 "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
             fi
-            att_manifest="$(curl -fsSL -H "Authorization: Bearer ${att_token}" \
+            att_manifest="$(curl -fsSL --retry 3 --retry-connrefused --max-time 15 -H "Authorization: Bearer ${att_token}" \
               -H "Accept: application/vnd.oci.image.manifest.v1+json" \
               "https://${registry}/v2/${repo}/manifests/sha256-${digest#sha256:}.att")"
             cert_pem="$(jq -r '.layers[0].annotations["dev.sigstore.cosign/certificate"]' <<<"${att_manifest}")"

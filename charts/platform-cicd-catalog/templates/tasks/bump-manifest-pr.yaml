@@ -82,6 +82,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         if [[ -z "${GITOPS_REPO}" || -z "${MANIFEST_PATH}" ]]; then
           echo "error: gitopsRepo and manifestPath are both required on a gitops-image-bump step in this app's cicd.yaml." >&2
@@ -94,12 +95,34 @@ spec:
 
         token="$(github_app_installation_token "${owner}" "${GITOPS_REPO}")"
 
+        # Deliberately NOT timestamped (unlike this Task's original version) - a
+        # deterministic branch name per (app, revision) is what makes the idempotency
+        # check below actually work. A retried run (Tekton task retry, or a re-triggered
+        # PipelineRun after the transient GitHub 503s seen 2026-09-03) must compute the
+        # same branch name as the run it's retrying, or it can never find that run's
+        # still-open PR and just opens a duplicate every time instead.
+        branch="image-bump-${APP_NAME}-${GIT_REVISION:0:8}"
+
+        # Check for an already-open PR from this exact branch before doing any work -
+        # this Task's own result description has always claimed "(or already-open, on
+        # retry)", but nothing enforced that until now (the old timestamped branch name
+        # made every retry look like a brand new change). head=owner:branch scopes the
+        # search to this repo's own branch, not every fork.
+        existing_pr="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
+          -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/${owner}/${GITOPS_REPO}/pulls?head=${owner}:${branch}&state=open")"
+        existing_pr_url="$(jq -r '.[0].html_url // empty' <<<"${existing_pr}")"
+        if [[ -n "${existing_pr_url}" ]]; then
+          echo "image-bump PR for ${branch} is already open (retry) - reusing it instead of opening a duplicate: ${existing_pr_url}"
+          echo "${existing_pr_url}" | tee "$(results.pr-url.path)"
+          exit 0
+        fi
+
         workdir="$(mktemp -d)"
         clone_url="https://x-access-token:${token}@github.com/${owner}/${GITOPS_REPO}.git"
-        git clone --quiet "${clone_url}" "${workdir}/repo"
+        with_retry 3 -- git clone --quiet "${clone_url}" "${workdir}/repo"
         cd "${workdir}/repo"
 
-        branch="image-bump-${APP_NAME}-${GIT_REVISION:0:8}-$(date +%s)"
         git checkout -b "${branch}"
 
         # Single combined "repo:tag" image field - a raw Deployment manifest's own
@@ -126,7 +149,13 @@ spec:
         commit_message="$(printf 'Bump %s image to %s\n\nX-App-Repo: %s\nX-App-Commit: %s' \
           "${APP_NAME}" "${IMAGE_REF}" "${GIT_URL}" "${GIT_REVISION}")"
         git commit --quiet -am "${commit_message}"
-        git push --quiet "${clone_url}" "${branch}"
+        # --force is safe/correct here, not just convenient: this branch name is
+        # deterministic and exclusively owned by this automation (see above), so the
+        # only way a remote branch with this exact name already exists is a stale
+        # leftover from an earlier attempt at this same (app, revision) pair - one this
+        # run's fresh commit should simply replace, not be rejected by as a
+        # non-fast-forward push.
+        with_retry 3 -- git push --quiet --force "${clone_url}" "${branch}"
 
         repo_short="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/([^/.]+).*#\1/\2#')"
         commit_short="${GIT_REVISION:0:12}"
@@ -139,7 +168,7 @@ spec:
           --arg base "main" \
           '{title: $title, body: $body, head: $head, base: $base}')"
 
-        pr_response="$(curl --fail --silent --show-error \
+        pr_response="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
           -X POST -H "Authorization: Bearer ${token}" \
           -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
           "https://api.github.com/repos/${owner}/${GITOPS_REPO}/pulls" \

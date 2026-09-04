@@ -70,6 +70,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         gitops_owner="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
         gitops_repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
@@ -77,7 +78,7 @@ spec:
         gitops_clone_url="https://x-access-token:${gitops_token}@github.com/${gitops_owner}/${gitops_repo}.git"
 
         workdir="$(mktemp -d)"
-        git clone --quiet "${gitops_clone_url}" "${workdir}/gitops"
+        with_retry 3 -- git clone --quiet "${gitops_clone_url}" "${workdir}/gitops"
         cd "${workdir}/gitops"
         git checkout --quiet "${REVISION}"
 
@@ -107,10 +108,10 @@ spec:
         rest="${image_ref#*/}"
         repo="${rest%:*}"
         tag="${rest##*:}"
-        token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+        token="$(curl -fsSL --retry 3 --retry-connrefused --max-time 15 "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
         # Accept both Docker v2 and OCI manifest media types - kaniko pushes OCI-format
         # manifests, and requesting only the Docker v2 type 404s even though the manifest exists.
-        digest="$(curl -fsSL -D - -o /dev/null \
+        digest="$(curl -fsSL -D - -o /dev/null --retry 3 --retry-connrefused --max-time 15 \
           -H "Authorization: Bearer ${token}" \
           -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
           "https://${registry}/v2/${repo}/manifests/${tag}" \
@@ -188,9 +189,9 @@ spec:
             sig_b64="$(jq -r '.dsseEnvelope.signatures[0].sig' <<<"${line}")"
           else
             if [[ -z "${att_token}" ]]; then
-              att_token="$(curl -fsSL "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
+              att_token="$(curl -fsSL --retry 3 --retry-connrefused --max-time 15 "https://${registry}/token?service=${registry}&scope=repository:${repo}:pull" | jq -r '.token')"
             fi
-            att_manifest="$(curl -fsSL -H "Authorization: Bearer ${att_token}" \
+            att_manifest="$(curl -fsSL --retry 3 --retry-connrefused --max-time 15 -H "Authorization: Bearer ${att_token}" \
               -H "Accept: application/vnd.oci.image.manifest.v1+json" \
               "https://${registry}/v2/${repo}/manifests/sha256-${digest#sha256:}.att")"
             cert_pem="$(jq -r '.layers[0].annotations["dev.sigstore.cosign/certificate"]' <<<"${att_manifest}")"

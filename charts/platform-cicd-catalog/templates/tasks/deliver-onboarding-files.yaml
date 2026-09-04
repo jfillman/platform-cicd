@@ -93,6 +93,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         owner="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
         repo="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
@@ -109,7 +110,7 @@ spec:
         token="$(github_app_installation_token "${owner}" "${repo}")"
         workdir="$(mktemp -d)"
         clone_url="https://x-access-token:${token}@github.com/${owner}/${repo}.git"
-        git clone --quiet "${clone_url}" "${workdir}/repo"
+        with_retry 3 -- git clone --quiet "${clone_url}" "${workdir}/repo"
         cd "${workdir}/repo"
         mkdir -p .tekton
 
@@ -499,21 +500,45 @@ spec:
         if git status --porcelain | grep -q .; then
           git config user.name "platform-cicd onboarding automation"
           git config user.email "onboarding@platform-cicd.invalid"
-          branch_name="onboarding-resync-$(date +%s)"
+          # Static, not timestamped: unlike bump-manifest-pr.yaml/open-release-pr.yaml
+          # (one branch per specific revision, safe to skip entirely on retry), there's
+          # no natural revision to key this branch on - it's regenerated fresh from
+          # whatever cicd.yaml/the platform's templates look like right now, which can
+          # differ on every trigger. A timestamped branch meant every trigger opened a
+          # brand new PR even when an earlier resync PR was still sitting open unmerged
+          # - duplicate PRs piling up, not just a retry-safety gap. A single static
+          # branch, force-pushed with fresh content each run, keeps at most one open
+          # onboarding-resync PR per repo that simply gets updated in place.
+          branch_name="onboarding-resync"
           git checkout -b "${branch_name}"
           git add .tekton/
           git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton boilerplate from the platform catalog\n\nRegenerated onboarding-resync.yaml plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml'"'"'s pipelines: - see docs/onboarding.md. No developer action needed beyond merging.')"
-          git push --quiet "${clone_url}" "${branch_name}"
-          pr_body="$(jq -n \
-            --arg title "Onboarding: re-sync .tekton boilerplate" \
-            --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding templates, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
-            --arg head "${branch_name}" --arg base "main" \
-            '{title: $title, body: $body, head: $head, base: $base}')"
-          curl --fail --silent --show-error \
-            -X POST -H "Authorization: Bearer ${token}" \
-            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${owner}/${repo}/pulls" -d "${pr_body}" > /dev/null
-          echo "app repo: opened onboarding-resync PR"
+          # --force: the only way this exact branch name already exists remotely is a
+          # still-open resync PR from an earlier trigger - this run's freshly
+          # regenerated content should replace it outright, not be rejected as a
+          # non-fast-forward push.
+          with_retry 3 -- git push --quiet --force "${clone_url}" "${branch_name}"
+          # Check for an already-open PR from this branch before creating - the force-
+          # push above already updated it in place if one exists, and GitHub's create-PR
+          # call 422s on "A pull request already exists for owner:branch_name" anyway.
+          existing_pr_url="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
+            -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${owner}/${repo}/pulls?head=${owner}:${branch_name}&state=open" \
+            | jq -r '.[0].html_url // empty')"
+          if [[ -n "${existing_pr_url}" ]]; then
+            echo "app repo: onboarding-resync PR already open - updated it with the latest content: ${existing_pr_url}"
+          else
+            pr_body="$(jq -n \
+              --arg title "Onboarding: re-sync .tekton boilerplate" \
+              --arg body "Regenerated onboarding-resync.yaml from the platform catalog's onboarding templates, plus one .tekton/flow-<name>.yaml per git-rooted flow declared under cicd.yaml's pipelines: (push/pull_request/tag/branch.created) - see docs/onboarding.md. Fires automatically whenever cicd.yaml changes, or the platform's own onboarding templates change and this Application's files went stale." \
+              --arg head "${branch_name}" --arg base "main" \
+              '{title: $title, body: $body, head: $head, base: $base}')"
+            curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
+              -X POST -H "Authorization: Bearer ${token}" \
+              -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${owner}/${repo}/pulls" -d "${pr_body}" > /dev/null
+            echo "app repo: opened onboarding-resync PR"
+          fi
         else
           echo "app repo: .tekton/ already up to date, nothing to deliver"
         fi
@@ -546,6 +571,7 @@ spec:
           exit 0
         fi
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         owner="$(echo "${GITOPS_REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
         repo="$(echo "${GITOPS_REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
@@ -553,7 +579,7 @@ spec:
         token="$(github_app_installation_token "${owner}" "${repo}")"
         workdir="$(mktemp -d)"
         clone_url="https://x-access-token:${token}@github.com/${owner}/${repo}.git"
-        git clone --quiet "${clone_url}" "${workdir}/repo"
+        with_retry 3 -- git clone --quiet "${clone_url}" "${workdir}/repo"
         cd "${workdir}/repo"
         mkdir -p .tekton
 
@@ -568,21 +594,40 @@ spec:
         if git status --porcelain | grep -q .; then
           git config user.name "platform-cicd onboarding automation"
           git config user.email "onboarding@platform-cicd.invalid"
-          branch="onboarding-resync-$(date +%s)"
+          # Static, not timestamped - same reasoning as deliver-app-repo-files' own
+          # branch_name above: no natural revision to key this on, and a timestamped
+          # name meant every trigger opened a brand new PR even with an earlier resync
+          # PR still open unmerged. A single static branch, force-pushed fresh each run,
+          # keeps at most one open onboarding-resync PR per repo.
+          branch="onboarding-resync"
           git checkout -b "${branch}"
           git add .tekton/
           git commit --quiet -m "$(printf 'Onboarding: re-sync .tekton governance-check boilerplate\n\nRegenerated from the platform catalog'"'"'s onboarding templates - see docs/onboarding.md. No developer action needed beyond merging.')"
-          git push --quiet "${clone_url}" "${branch}"
-          pr_body="$(jq -n \
-            --arg title "Onboarding: re-sync governance-check boilerplate" \
-            --arg body "Regenerated the 5 governance-check .tekton files from the platform catalog's onboarding templates - see docs/onboarding.md." \
-            --arg head "${branch}" --arg base "main" \
-            '{title: $title, body: $body, head: $head, base: $base}')"
-          curl --fail --silent --show-error \
-            -X POST -H "Authorization: Bearer ${token}" \
-            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${owner}/${repo}/pulls" -d "${pr_body}" > /dev/null
-          echo "gitops repo: opened onboarding-resync PR"
+          # --force: the only way this exact branch name already exists remotely is a
+          # still-open resync PR from an earlier trigger - replace its content outright
+          # rather than being rejected as a non-fast-forward push.
+          with_retry 3 -- git push --quiet --force "${clone_url}" "${branch}"
+          # Check for an already-open PR from this branch before creating - the force-
+          # push above already updated it in place if one exists, and GitHub's create-PR
+          # call 422s on "A pull request already exists for owner:branch" anyway.
+          existing_pr_url="$(curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
+            -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=open" \
+            | jq -r '.[0].html_url // empty')"
+          if [[ -n "${existing_pr_url}" ]]; then
+            echo "gitops repo: onboarding-resync PR already open - updated it with the latest content: ${existing_pr_url}"
+          else
+            pr_body="$(jq -n \
+              --arg title "Onboarding: re-sync governance-check boilerplate" \
+              --arg body "Regenerated the 5 governance-check .tekton files from the platform catalog's onboarding templates - see docs/onboarding.md." \
+              --arg head "${branch}" --arg base "main" \
+              '{title: $title, body: $body, head: $head, base: $base}')"
+            curl --fail --silent --show-error --retry 3 --retry-connrefused --max-time 15 \
+              -X POST -H "Authorization: Bearer ${token}" \
+              -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${owner}/${repo}/pulls" -d "${pr_body}" > /dev/null
+            echo "gitops repo: opened onboarding-resync PR"
+          fi
         else
           echo "gitops repo: .tekton/ already up to date, nothing to deliver"
         fi

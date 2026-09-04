@@ -72,6 +72,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         gitops_owner="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
         gitops_repo="$(echo "${REPO_URL}" | sed -E 's#https?://github\.com/[^/]+/([^/.]+).*#\1#')"
@@ -79,7 +80,7 @@ spec:
         gitops_clone_url="https://x-access-token:${gitops_token}@github.com/${gitops_owner}/${gitops_repo}.git"
 
         workdir="$(mktemp -d)"
-        git clone --quiet "${gitops_clone_url}" "${workdir}/gitops"
+        with_retry 3 -- git clone --quiet "${gitops_clone_url}" "${workdir}/gitops"
         cd "${workdir}/gitops"
         git checkout --quiet "${REVISION}"
 

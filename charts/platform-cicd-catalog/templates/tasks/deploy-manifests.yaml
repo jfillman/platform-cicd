@@ -97,13 +97,14 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
         source "${PLATFORM_LIB}/github-app.sh"
+        source "${PLATFORM_LIB}/retry.sh"
 
         owner="$(echo "${GIT_URL}" | sed -E 's#https?://github\.com/([^/]+)/.*#\1#')"
         token="$(github_app_installation_token "${owner}" "${APP_NAME}")"
 
         workdir="$(mktemp -d)"
         clone_url="https://x-access-token:${token}@github.com/${owner}/${APP_NAME}.git"
-        git clone --quiet "${clone_url}" "${workdir}/repo"
+        with_retry 3 -- git clone --quiet "${clone_url}" "${workdir}/repo"
         cd "${workdir}/repo"
 
         manifest="platform/envs/${ENV}.yaml"
@@ -117,7 +118,7 @@ spec:
         git config user.name "platform-cicd deploy automation"
         git config user.email "deploy@platform-cicd.invalid"
         git commit --quiet -am "Deploy ${APP_NAME} to ${ENV}: ${IMAGE_REF}"
-        git push --quiet "${clone_url}" main
+        with_retry 3 -- git push --quiet "${clone_url}" main
 
         NAMESPACE="${APP_TYPE}-${APP_NAME}-${ENV}"
         echo "pushed ${manifest} - waiting for argocd-apps' ${APP_NAME}-${ENV} Application to sync and the Rollout to become Healthy"

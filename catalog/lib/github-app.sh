@@ -32,7 +32,7 @@ github_app_installation_token() {
   # yet (see docs/admin/release.md step 3) looked like an unrelated JSON bug instead of
   # a clear "go install the App there" pointer.
   local raw http_code body
-  raw="$(curl --silent --show-error --max-time 15 -w '\n%{http_code}' \
+  raw="$(curl --silent --show-error --max-time 15 --retry 3 --retry-connrefused -w '\n%{http_code}' \
     -X POST "${GITHUB_TOKEN_BROKER_URL}" \
     -H "Authorization: Bearer ${sa_token}" \
     -H "Content-Type: application/json" \

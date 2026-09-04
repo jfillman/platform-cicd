@@ -101,6 +101,38 @@ second endpoint, `/github-installation-token`, that:
 
 `catalog/lib/github-app.sh` wraps this call for `open-release-pr.yaml`.
 
+### Resilience to transient GitHub errors (2026-09-03)
+
+A GitHub API 503 during `gitops-image-bump` surfaced two gaps, both now fixed across
+every catalog Task that talks to `api.github.com`, a container registry, or the token
+broker:
+
+1. **No retry on transient failures.** Every such `curl` call now carries
+   `--retry 3 --retry-connrefused --max-time 15` (the convention `cdevents.sh` already
+   used for the CDEvents broker), so a 503/502/504/connection-refused/timeout is retried
+   with backoff instead of failing the Task outright. `git clone`/`git push` against
+   `github.com` (curl's flags don't reach those) get the same treatment via a small
+   `with_retry` wrapper in `catalog/lib/retry.sh`.
+2. **Retries weren't actually safe.** `bump-manifest-pr.yaml` and `open-release-pr.yaml`
+   both named their PR branch `<prefix>-<revision>-$(date +%s)` - so even though each
+   Task's own `pr-url` result already claimed "(or already-open, on retry)", a retried
+   run (Tekton task retry, or a re-triggered PipelineRun) always looked like a brand new
+   change and opened a duplicate PR. Both branch names are now deterministic
+   (`<prefix>-<revision>`, no timestamp), and both Tasks check for an already-open PR
+   from that exact branch before doing any work, reusing it instead of duplicating it.
+
+   `deliver-onboarding-files.yaml`'s two onboarding-resync branches had the same
+   timestamped-branch pattern, but a different fix: there's no single "revision" to key
+   an onboarding-resync branch on (it regenerates whatever cicd.yaml/the platform's own
+   templates currently look like, which can differ on every trigger), so skip-if-open
+   isn't right - a genuinely new template change would go silently uncommitted forever
+   behind a stale open PR. Instead both branches are now static
+   (`onboarding-resync`, not timestamped), force-pushed with fresh content on every
+   trigger, and only the PR-*creation* call is guarded against an already-open PR
+   (GitHub's own create-PR call 422s on a duplicate head branch anyway) - so a repo has
+   at most one open onboarding-resync PR at a time, updated in place rather than
+   accumulating duplicates.
+
 ## Onboarding an Application's release stage (per app)
 
 **2026-08-16: superseded for any app onboarded through `idp`** (Crossplane-based,
