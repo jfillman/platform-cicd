@@ -28,7 +28,11 @@
 # anything those gates inspect). outcomeRelayURL is looked up live from platform-cicd's
 # own cluster-registry ConfigMap via a narrow get-only Role; this Task still never calls
 # the upper cluster's API directly, preserving the "only a reviewed git commit crosses
-# from dev to an upper cluster" boundary.
+# from dev to an upper cluster" boundary. releaseTracking.relayHostAliasIP rides in the
+# same commit (from this Task's own pod's downward-API status.hostIP, added 2026-09-04) -
+# idp-application's hook Job needs it as a literal hostAliases IP, since a pod's CoreDNS
+# never sees the host machine's /etc/hosts that makes outcomeRelayURL's dev.kiac.local
+# hostname resolvable everywhere else. See idp/docs/local-clusters.md.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -140,6 +144,15 @@ spec:
           # equivalent of $(context.pipelineRun.namespace), which does not resolve here.
           # Same gotcha comment-pr-check-result.yaml already documents.
           value: $(context.taskRun.namespace)
+        - name: RELAY_HOST_ALIAS_IP
+          # This Task's own pod runs on the dev cluster, same one hosting
+          # argocd-outcome-relay - status.hostIP is that node's current address, exactly
+          # what an upper-env cluster's hook Job needs in its hostAliases to resolve
+          # registry_relay_url's dev.kiac.local hostname (a pod's CoreDNS never sees the
+          # host machine's /etc/hosts - see idp/docs/local-clusters.md). Resolved fresh
+          # via the downward API on every release, not re-derived from /etc/hosts or any
+          # DNS lookup this pod couldn't make itself either.
+          valueFrom: { fieldRef: { fieldPath: status.hostIP } }
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -235,6 +248,7 @@ spec:
           .rollout.image.repository = \"${image_repo}\" |
           .rollout.image.tag = \"${image_tag}\" |
           .releaseTracking.relayUrl = \"${registry_relay_url}\" |
+          .releaseTracking.relayHostAliasIP = \"${RELAY_HOST_ALIAS_IP}\" |
           .releaseTracking.cluster = \"${CLUSTER}\" |
           .releaseTracking.appNamespace = \"${APP_NAMESPACE}\" |
           .releaseTracking.gitUrl = \"${GIT_URL}\" |
