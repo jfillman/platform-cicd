@@ -138,8 +138,32 @@ spec:
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
 
+    # runAfter deliberately doesn't include build-image: sast-scan reads source, not the
+    # built image, so it only needs clone-repo and runs concurrently with unit-test/
+    # build-source. Shares the same `source` workspace those tasks touch - safe because
+    # Semgrep's default rulesets already exclude node_modules/vendor dependency dirs, so
+    # a concurrent `npm ci` doesn't change what gets scanned.
+    - name: sast-scan
+      runAfter: [start-build-stage-span]
+      when:
+        - { input: $(tasks.validate-config.results.sast), operator: in, values: ["true"] }
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: sast-scan }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      workspaces:
+        - { name: source, workspace: source }
+      params:
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
+        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: git-url, value: $(params.git-url) }
+        - { name: git-revision, value: $(params.git-revision) }
     - name: unit-test
-      runAfter: [validate-config, start-build-stage-span]
+      runAfter: [start-build-stage-span]
       taskRef:
         resolver: cluster
         params:
@@ -161,7 +185,7 @@ spec:
     # both (real or skipped) before kaniko builds+pushes, so nothing publishes unless
     # tests pass - the compile step is just no longer serialized behind tests.
     - name: build-source
-      runAfter: [validate-config, start-build-stage-span]
+      runAfter: [start-build-stage-span]
       when:
         - { input: $(tasks.validate-config.results.has-build-script), operator: in, values: ["true"] }
       taskRef:
@@ -184,7 +208,7 @@ spec:
     # wouldn't block the image push, since nothing downstream depended on it. When sast is
     # disabled, sast-scan's when: clause skips it, which Tekton treats as satisfied.
     - name: build-image
-      runAfter: [build-source, unit-test, sast-scan, start-build-stage-span]
+      runAfter: [build-source, unit-test, sast-scan]
       taskRef:
         resolver: cluster
         params:
@@ -202,30 +226,6 @@ spec:
         - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
         - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
 
-    # runAfter deliberately doesn't include build-image: sast-scan reads source, not the
-    # built image, so it only needs clone-repo and runs concurrently with unit-test/
-    # build-source. Shares the same `source` workspace those tasks touch - safe because
-    # Semgrep's default rulesets already exclude node_modules/vendor dependency dirs, so
-    # a concurrent `npm ci` doesn't change what gets scanned.
-    - name: sast-scan
-      runAfter: [clone-repo, start-build-stage-span]
-      when:
-        - { input: $(tasks.validate-config.results.sast), operator: in, values: ["true"] }
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: sast-scan }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      workspaces:
-        - { name: source, workspace: source }
-      params:
-        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
-        - { name: stage-span-id, value: $(tasks.start-build-stage-span.results.span-id) }
-        - { name: config-json, value: $(tasks.validate-config.results.config-json) }
-        - { name: app-name, value: $(params.app-name) }
-        - { name: git-url, value: $(params.git-url) }
-        - { name: git-revision, value: $(params.git-revision) }
 
     # Unlike sast-scan, runAfter stays build-image - there's no image to scan until
     # kaniko has pushed one. A failing scan can't unpublish the already-pushed dev image,

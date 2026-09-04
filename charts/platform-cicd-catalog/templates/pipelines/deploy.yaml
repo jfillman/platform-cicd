@@ -104,20 +104,6 @@ spec:
       # (the normal case), or generates new root span data when they arrive empty
       # (git-rooted deploy) - see start-flow-root-span.yaml.
 
-    - name: resolve-image-ref
-      runAfter: [start-flow]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: resolve-image-ref }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: image-ref, value: $(params.image-ref) }
-        - { name: image-repo, value: $(params.image-repo) }
-        - { name: git-tag, value: $(params.git-tag) }
-        - { name: git-revision, value: $(params.git-revision) }
-
     # Deep CDEvents coverage (see docs/chaining.md): a generic
     # pipelinerun.started signal, independent of deploy's own domain-specific
     # service.deployed event below. References start-flow results (either generated
@@ -139,6 +125,43 @@ spec:
         - { name: flow-start-time, value: $(tasks.start-flow.results.start-time) }
         - { name: namespace, value: $(params.app-namespace) }
         - { name: pipeline-run-name, value: $(context.pipelineRun.name) }
+    - name: start-deploy-stage-span
+      runAfter: [start-flow]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: start-stage-span }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
+    - name: resolve-image-ref
+      runAfter: [start-deploy-stage-span]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: resolve-image-ref }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: image-ref, value: $(params.image-ref) }
+        - { name: image-repo, value: $(params.image-repo) }
+        - { name: git-tag, value: $(params.git-tag) }
+        - { name: git-revision, value: $(params.git-revision) }
+    - name: deploy
+      runAfter: [resolve-image-ref]
+      taskRef:
+        resolver: cluster
+        params:
+          - { name: kind, value: task }
+          - { name: name, value: deploy-manifests }
+          - { name: namespace, value: {{ .Release.Namespace }} }
+      params:
+        - { name: image-ref, value: $(tasks.resolve-image-ref.results.image-ref) }
+        - { name: env, value: $(params.env) }
+        - { name: app-name, value: $(params.app-name) }
+        - { name: app-type, value: $(params.app-type) }
+        - { name: git-url, value: $(params.git-url) }
 
     # Never when-gated/skipped and has no result-dependency on clone-repo - see this
     # Task's own header for why that's load-bearing (notify below must always be able
@@ -156,32 +179,6 @@ spec:
         - { name: config-json, value: $(params.config-json) }
         - { name: git-url, value: $(params.git-url) }
         - { name: git-revision, value: $(params.git-revision) }
-
-    - name: start-deploy-stage-span
-      runAfter: [start-flow]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: start-stage-span }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: flow-traceparent, value: $(tasks.start-flow.results.traceparent) }
-
-    - name: deploy
-      runAfter: [start-deploy-stage-span, resolve-image-ref]
-      taskRef:
-        resolver: cluster
-        params:
-          - { name: kind, value: task }
-          - { name: name, value: deploy-manifests }
-          - { name: namespace, value: {{ .Release.Namespace }} }
-      params:
-        - { name: image-ref, value: $(tasks.resolve-image-ref.results.image-ref) }
-        - { name: env, value: $(params.env) }
-        - { name: app-name, value: $(params.app-name) }
-        - { name: app-type, value: $(params.app-type) }
-        - { name: git-url, value: $(params.git-url) }
 
   finally:
     - name: end-deploy-stage-span
