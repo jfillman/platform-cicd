@@ -36,7 +36,12 @@
 #    there's no platform/<name>.yaml but ./integration-test.sh exists, run that
 #    against the freshly built image, in the Application's own agent-image (unlike the
 #    Testkube step above, which runs in the shared toolboxImage since it only needs
-#    kubectl/yq, never the app's own runtime).
+#    kubectl/yq/testkube CLI, never the app's own runtime).
+#
+# Triggering/polling uses the official `testkube` CLI (added to the toolbox image
+# 2026-09-05), not a hand-crafted TestWorkflowExecution CR + raw REST polling - see the
+# execute-testworkflow step's own comment for why that switch alone didn't fix the
+# false-"aborted" bug it was hoped to, and what actually works around it.
 #
 # Skips cleanly, not a failure, if neither exists or cicd.yaml's `test.enabled` is
 # false. This Task's contract (take image-ref, produce pass/fail) hasn't changed since
@@ -141,34 +146,45 @@ spec:
           | sed "s/__APP_SECRETS_NAME__/${SECRET_NAME}/g" \
           | kubectl -n testkube apply -f -
 
-        echo "triggering execution"
-        EXECUTION_NAME="$(kubectl -n testkube create -o jsonpath='{.metadata.name}' -f - <<EOF
-        apiVersion: testworkflows.testkube.io/v1
-        kind: TestWorkflowExecution
-        metadata:
-          generateName: ${WORKFLOW_NAME}-
-        spec:
-          testWorkflow:
-            name: ${WORKFLOW_NAME}
-        EOF
-        )"
-        echo "TestWorkflowExecution/${EXECUTION_NAME} started, polling for a terminal status"
+        # --client direct talks straight to the in-cluster Service over plain HTTP, no
+        # RBAC or auth needed in standalone/CE mode (confirmed live 2026-09-05) - the
+        # alternative "cluster" client mode proxies through the k8s API server's
+        # services/proxy subresource instead, which this Task's ServiceAccount was
+        # never granted and doesn't need.
+        TK="testkube --client direct --api-uri http://testkube-api-server.testkube.svc.cluster.local:8088 --namespace testkube"
 
-        # NOT `kubectl get testworkflowexecution ... -o jsonpath='{.status.latestExecution...}'`
-        # - live-verified 2026-08-24 that the TestWorkflowExecution CR's own .status
-        # subresource never populates in standalone/CE mode even though the run
-        # genuinely completes (RBAC on that subresource is fine; this looks like a
-        # standalone-mode gap in status propagation back onto the CR, not anything this
-        # Task controls). The API server's own REST endpoint reflects the real result
-        # immediately, confirmed against a real passed execution - poll that instead.
-        # api-server's Service resolves in-cluster with no auth required in standalone
-        # mode. Matched by runningContext.actor.name (the CR name above), not
-        # workflow-name + page position, so this can't pick up a stale prior run's
-        # result for the same workflow.
+        echo "triggering execution via testkube CLI"
+        # NOT `${TK} run tw ... -f` (follow/watch) - live-verified 2026-09-05 that -f's
+        # log-streaming path spams "failed to create fsnotify watcher: too many open
+        # files" dozens of times per run in this toolbox image and adds nothing we don't
+        # already get by polling `get twe` below. Trigger and poll are kept as separate
+        # calls, same shape as the old kubectl+curl version.
+        EXECUTION_ID="$(${TK} run tw "${WORKFLOW_NAME}" -o json | jq -r '.id')"
+        echo "TestWorkflowExecution ${EXECUTION_ID} started, polling for a terminal status"
+
+        # Live-verified 2026-09-05 this is a genuine, near-deterministic testkube
+        # 2.12.2/2.13.1 bug (10 of 11 real executions hit it), NOT the node-capacity
+        # theory from earlier incidents (reproduced with the node at 12% CPU / 48% mem)
+        # and NOT fixed by triggering via the CLI instead of a hand-crafted
+        # TestWorkflowExecution CR (reproduced identically via `testkube run tw -f`
+        # too, same "Job has been aborted" message). testkube's own watch declares the
+        # execution "aborted" the instant a step's container reports terminated/
+        # Completed but the pod's Ready/ContainersReady conditions (which, for a
+        # restartPolicy:Never pod, go permanently False on successful exit - not a
+        # readiness-probe symptom) and the parent Job's `status.active` haven't yet
+        # been rolled by the native Job controller - a race against Job-status
+        # reconciliation, not container runtime, so a longer-running step (tested with
+        # an explicit `sleep 10` step) hits it identically. The saved execution record
+        # still carries the real per-step result underneath: `result.initialization`
+        # is what falsely reports "aborted" while `result.steps.<ref>.status` shows
+        # the step's true outcome ("passed" in every reproduction) - so a truly aborted
+        # run (a real OOMKill, eviction, or manual abort) is distinguishable from this
+        # false one by checking whether every step still says "passed" underneath.
         STATUS=""
+        RESULT_JSON=""
         for i in $(seq 1 60); do
-          STATUS="$(curl -fsS "http://testkube-api-server.testkube.svc.cluster.local:8088/v1/test-workflows/${WORKFLOW_NAME}/executions" \
-            | jq -r --arg name "${EXECUTION_NAME}" '.results[]? | select(.runningContext.actor.name == $name) | .result.status // empty' || true)"
+          RESULT_JSON="$(${TK} get twe "${EXECUTION_ID}" -o json)"
+          STATUS="$(jq -r '.result.status // empty' <<< "${RESULT_JSON}")"
           case "${STATUS}" in
             passed|failed|aborted) break ;;
           esac
@@ -184,10 +200,17 @@ spec:
         # means "remove this key", confirmed against the live object.
         kubectl -n testkube patch secret "${SECRET_NAME}" --type merge -p '{"data":null}' || true
 
-        echo "TestWorkflowExecution/${EXECUTION_NAME} finished with status: ${STATUS:-timeout waiting 10m}"
+        if [[ "${STATUS}" == "aborted" ]]; then
+          STEP_STATUSES="$(jq -r '.result.steps // {} | to_entries[].value.status' <<< "${RESULT_JSON}" | sort -u)"
+          if [[ -n "${STEP_STATUSES}" && "${STEP_STATUSES}" == "passed" ]]; then
+            echo "TestWorkflowExecution ${EXECUTION_ID} reported aborted, but every real step passed - treating as passed (see the comment above this loop for the known testkube race this works around)"
+            STATUS="passed"
+          fi
+        fi
+
+        echo "TestWorkflowExecution ${EXECUTION_ID} finished with status: ${STATUS:-timeout waiting 10m}"
         if [[ "${STATUS}" != "passed" ]]; then
-          curl -fsS "http://testkube-api-server.testkube.svc.cluster.local:8088/v1/test-workflows/${WORKFLOW_NAME}/executions" \
-            | jq -r --arg name "${EXECUTION_NAME}" '.results[]? | select(.runningContext.actor.name == $name)' >&2 || true
+          echo "${RESULT_JSON}" >&2
           exit 1
         fi
 

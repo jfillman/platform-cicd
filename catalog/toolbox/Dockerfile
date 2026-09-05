@@ -43,6 +43,7 @@ ARG GITSIGN_VERSION=0.17.0
 ARG EC_VERSION=0.9.88
 ARG COSIGN_VERSION=3.1.2
 ARG TRIVY_VERSION=0.73.0
+ARG TESTKUBE_VERSION=2.13.1
 
 RUN apk add --no-cache bash curl jq git openssl ca-certificates util-linux coreutils libxml2-utils
 
@@ -77,7 +78,14 @@ RUN set -euo pipefail; \
       "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" \
     && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
     && chmod +x /usr/local/bin/trivy \
-    && rm /tmp/trivy.tar.gz
+    && rm /tmp/trivy.tar.gz \
+    && case "$(uname -m)" in x86_64) TK_ARCH=x86_64 ;; aarch64|arm64) TK_ARCH=arm64 ;; esac \
+    && curl -fsSL -o /tmp/testkube.tar.gz \
+      "https://github.com/kubeshop/testkube/releases/download/${TESTKUBE_VERSION}/testkube_${TESTKUBE_VERSION}_Linux_${TK_ARCH}.tar.gz" \
+    && tar -xzf /tmp/testkube.tar.gz -C /tmp kubectl-testkube \
+    && mv /tmp/kubectl-testkube /usr/local/bin/testkube \
+    && chmod +x /usr/local/bin/testkube \
+    && rm /tmp/testkube.tar.gz
 
 COPY --from=yajsv-build /go/bin/yajsv /usr/local/bin/yajsv
 
