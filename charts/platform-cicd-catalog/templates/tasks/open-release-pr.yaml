@@ -309,7 +309,7 @@ spec:
         pr_body_text="$(printf '**App**: %s\n**Env**: %s\n**Repo**: [%s](%s)\n**Commit**: [`%s`](%s/commit/%s)\n**Image**: `%s`\n\nMerging this PR triggers ArgoCD to sync it to %s. See docs/release.md.%s' \
           "${APP_NAME}" "${ENV}" "${repo_short}" "${GIT_URL}" "${commit_short}" "${GIT_URL}" "${GIT_REVISION}" "${IMAGE_REF}" "${ENV}" "${governance_text}")"
         pr_body="$(jq -n \
-          --arg title "Release: ${APP_NAME} @ ${GIT_REVISION}" \
+          --arg title "Release: ${APP_NAME} to ${ENV} @ ${image_tag}" \
           --arg body "${pr_body_text}" \
           --arg head "${branch}" \
           --arg base "main" \
