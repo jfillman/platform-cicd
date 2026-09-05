@@ -416,6 +416,7 @@ spec:
         metadata:
           generateName: ${flow_name}-
           labels:
+            platform.io/app: "${APP_NAME}"
             platform.io/flow: "${flow_name}"
             platform.io/stage: "${root_stage}"
             platform.io/step-index: "0"
