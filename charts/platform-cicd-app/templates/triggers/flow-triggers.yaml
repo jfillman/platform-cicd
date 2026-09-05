@@ -67,8 +67,10 @@ That alone wasn't sufficient: two steps in the same flow sharing a stage name (e
 its own next-step trigger AND any sibling step's trigger - a narrower version of the
 same infinite-loop failure mode. Fixed by tightening the source match to the exact
 previous step: `<flowName>-<prevIndex>-<prevStage>-`, except when the previous step is
-the flow's git-rooted root (index 0), whose PipelineRuns carry no index/stage segment
-(just `generateName: ${flow_name}-`) - that case keeps the looser flow-only prefix.
+the flow's git-rooted root (index 0), which keeps the looser flow-only prefix
+(`generateName: ${flow_name}-0-${root_stage}-`, i.e. `startsWith("<flowName>-")` rather
+than the full `<flowName>-0-<rootStage>-`) since there's only ever one root step per
+flow, so no sibling to disambiguate from.
 */ -}}
 {{- $prevStepIsGitRoot := and (eq $prevIndex 0) (eq $triggerSource "git") -}}
 {{- $sourcePrefix := printf "%s-%d-%s-" $flowName $prevIndex $prevStage -}}

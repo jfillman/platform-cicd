@@ -404,17 +404,18 @@ spec:
           # block scalar - Helm strips that common indent when rendering, so don't add any
           # extra stripping here (a bare `sed 's/^        //'` previously flattened
           # volumeClaimTemplate.spec by double-stripping).
-          # generateName is keyed by flow_name, not root_stage - PaC requires every
-          # PipelineRun under .tekton/ to have a unique generateName across the whole repo.
-          # Two flows can share a root stage (e.g. a "ci" push flow and a "pr-check"
-          # pull_request flow both rooted at build), which would collide on generateName
-          # and make PaC create nothing at all. flow_name (a cicd.yaml map key) is
-          # guaranteed unique.
+          # generateName is keyed by flow_name-0-root_stage, matching flow-triggers.yaml's
+          # <flowName>-<index>-<stageName> convention for chained steps (this function only
+          # ever generates a flow's first step, hence the hardcoded "0"). flow_name (a
+          # cicd.yaml map key) is still the leading segment - PaC requires every PipelineRun
+          # under .tekton/ to have a unique generateName across the whole repo, and two flows
+          # can share a root stage (e.g. a "ci" push flow and a "pr-check" pull_request flow
+          # both rooted at build), which would collide on generateName otherwise.
           cat <<YAMLEOF
         apiVersion: tekton.dev/v1
         kind: PipelineRun
         metadata:
-          generateName: ${flow_name}-
+          generateName: ${flow_name}-0-${root_stage}-
           labels:
             platform.io/app: "${APP_NAME}"
             platform.io/flow: "${flow_name}"
