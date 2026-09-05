@@ -20,6 +20,8 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: provenance
+  labels:
+    platform.io/app: "<APP_NAME>"
   annotations:
     # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
     # and why has() guards the pull_request field.

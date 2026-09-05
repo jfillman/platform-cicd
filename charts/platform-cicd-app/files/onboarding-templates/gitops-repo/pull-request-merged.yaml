@@ -13,6 +13,8 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: bypass-check
+  labels:
+    platform.io/app: "<APP_NAME>"
   annotations:
     pipelinesascode.tekton.dev/on-event: "[pull_request]"
     pipelinesascode.tekton.dev/on-cel-expression: 'has(body.action) && body.action == "closed"'

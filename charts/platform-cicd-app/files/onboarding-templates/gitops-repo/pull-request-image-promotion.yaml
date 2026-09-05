@@ -15,12 +15,14 @@
 # timeout ever changes, bump both wait-for-release-guardrails' timeout-seconds default
 # and this file's `tasks`/`pipeline` values to stay ahead of it.
 #
-# No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
+# No <APP_NAMESPACE> substitution or workspace needed (an <APP_NAME> substitution now exists, for the platform.io/app label below) - same reasons as
 # pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: image-promotion
+  labels:
+    platform.io/app: "<APP_NAME>"
   annotations:
     # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
     # and why has() guards the pull_request field.

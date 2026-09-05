@@ -2,7 +2,7 @@
 # explanation. References the dedicated sbom-check Pipeline, which resolves the promoted
 # image and generates+attests a real SBOM for it.
 #
-# No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - mirrors
+# No <APP_NAMESPACE> substitution or workspace needed (an <APP_NAME> substitution now exists, for the platform.io/app label below) - mirrors
 # pull-request-image-scan.yaml. pr-number feeds the finally-block PR comment.
 #
 # timeouts.tasks/finally split - see pull-request-sast.yaml's own header for why
@@ -11,6 +11,8 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: sbom
+  labels:
+    platform.io/app: "<APP_NAME>"
   annotations:
     # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
     # and why has() guards the pull_request field.

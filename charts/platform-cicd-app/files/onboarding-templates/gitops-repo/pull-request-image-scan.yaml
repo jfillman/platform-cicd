@@ -2,7 +2,7 @@
 # explanation. References the dedicated image-scan-check Pipeline, which resolves the
 # promoted image from the gitops PR's staging manifest and runs a real Trivy scan.
 #
-# No <APP_NAMESPACE>/<APP_NAME> substitution or workspace needed - same reasons as
+# No <APP_NAMESPACE> substitution or workspace needed (an <APP_NAME> substitution now exists, for the platform.io/app label below) - same reasons as
 # pull-request-sast.yaml. pr-number feeds the finally-block PR comment.
 #
 # timeouts.tasks/finally split - see pull-request-sast.yaml's own header for why
@@ -16,6 +16,8 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: image-scan
+  labels:
+    platform.io/app: "<APP_NAME>"
   annotations:
     # See pull-request-sast.yaml for why this is on-cel-expression (release-branch-only)
     # and why has() guards the pull_request field.
