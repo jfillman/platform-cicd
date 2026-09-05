@@ -177,7 +177,16 @@ spec:
         # PipelineRun after a transient GitHub error) must compute the same branch name
         # as the run it's retrying, or it can never find that run's still-open PR and
         # just opens a duplicate release PR every time instead.
-        branch="release-${GIT_REVISION:0:8}"
+        #
+        # ${ENV} is part of the branch name (not just ${GIT_REVISION}) because a single
+        # revision can release to MULTIPLE upper envs (e.g. cicd.yaml's release steps for
+        # both staging and prod off the same push) - without it, both envs computed the
+        # same branch name, so whichever release step ran second found the first env's PR
+        # already open on that branch and reused its URL instead of opening (or pushing
+        # to) its own, silently never promoting its own env. Real bug, live-confirmed on
+        # checkout-api (both staging and prod releases landed on one PR touching only
+        # whichever env ran first), fixed 2026-09-04.
+        branch="release-${ENV}-${GIT_REVISION:0:8}"
 
         # Check for an already-open PR from this exact branch before doing any work -
         # this Task's own result description has always claimed "(or already-open, on

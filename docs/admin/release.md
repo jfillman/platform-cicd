@@ -117,9 +117,16 @@ broker:
    both named their PR branch `<prefix>-<revision>-$(date +%s)` - so even though each
    Task's own `pr-url` result already claimed "(or already-open, on retry)", a retried
    run (Tekton task retry, or a re-triggered PipelineRun) always looked like a brand new
-   change and opened a duplicate PR. Both branch names are now deterministic
-   (`<prefix>-<revision>`, no timestamp), and both Tasks check for an already-open PR
-   from that exact branch before doing any work, reusing it instead of duplicating it.
+   change and opened a duplicate PR. Both branch names are now deterministic and drop the
+   timestamp: `bump-manifest-pr.yaml` uses `image-bump-<app-name>-<revision>`,
+   `open-release-pr.yaml` uses `release-<env>-<revision>` (`<env>` included because a
+   single revision can release to multiple upper envs off the same push - e.g. cicd.yaml
+   declaring both a `staging` and a `prod` release step - and without it every env
+   collapsed onto the same branch name, so whichever release step ran second just found
+   the first env's PR "already open" and silently reused its URL instead of promoting its
+   own env; real bug, live-confirmed on checkout-api, fixed 2026-09-04). Both Tasks check
+   for an already-open PR from their exact branch before doing any work, reusing it
+   instead of duplicating it.
 
    `deliver-onboarding-files.yaml`'s two onboarding-resync branches had the same
    timestamped-branch pattern, but a different fix: there's no single "revision" to key
