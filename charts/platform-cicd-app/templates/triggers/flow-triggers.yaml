@@ -183,6 +183,19 @@ spec:
       metadata:
         name: $(tt.params.pipeline-run-name)
         labels:
+          # platform.io/app (2026-09-05): matches the same label the Rollout/Deployment
+          # this app's own ApplicationEnvironment renders already carries
+          # (idp-application chart) - added so a Backstage Kubernetes-plugin entity can
+          # use a single `platform.io/app=<name>` selector (no namespace pin) to surface
+          # BOTH its deployed workload across every env namespace AND its own
+          # event-chained PipelineRuns in this CI namespace. Was missing entirely before
+          # this fix - $.Values.platformIdentity.appName was already threaded through as
+          # a Pipeline *param* (app-name, below) but never applied as a label on the
+          # PipelineRun itself. Doesn't cover this flow's git-rooted first step or the
+          # gitops-repo governance/scan/promotion PipelineRuns (PaC-created directly from
+          # .tekton/*.yaml, a separate template path - see TektonCICD's own composition)
+          # - those still need the same label added separately.
+          platform.io/app: {{ $.Values.platformIdentity.appName }}
           platform.io/flow: {{ $flowName }}
           platform.io/stage: {{ $stageName }}
           platform.io/step-index: {{ $index | quote }}
