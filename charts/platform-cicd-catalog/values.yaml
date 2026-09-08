@@ -7,6 +7,10 @@
 # system:serviceaccounts instead of the cluster-wide default every Application already relies on.
 
 rbac:
+  # Which RBAC group gets read access to this catalog's Tasks/Pipelines/StepActions
+  # (templates/rbac/). Defaults to the cluster-wide system:serviceaccounts group every
+  # Application's pipelines already run as - narrow this for a canary install that
+  # shouldn't be resolvable by every tenant's PipelineRun yet.
   readOnlyGroup: system:serviceaccounts
 
 # The shared toolbox image (catalog/toolbox/Dockerfile) every bash-based catalog step
