@@ -1,5 +1,14 @@
 # platform-cicd
 
+> **Deprecated.** This repo was renamed and superseded by
+> [`glidepath`](https://github.com/jfillman/glidepath) on 2026-09-08 (full
+> history preserved there via a clone-and-push rename). All new work happens
+> in `glidepath` — this repo is kept only for reference and should not
+> receive further commits. (Confirmed 2026-09-15: real fixes had drifted in
+> here after the rename anyway, including from a Claude Code session that
+> mistakenly worked in this repo before catching the mismatch; they've been
+> ported to `glidepath`.)
+
 A CI/CD platform for Kubernetes, built on Tekton + Pipelines-as-Code. Installable
 standalone on any cluster, or as the CI/CD component of a larger internal developer
 platform.
